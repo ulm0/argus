@@ -1,0 +1,32 @@
+[Unit]
+Description=Argus Edge Dashcam Manager
+After=network.target multi-user.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=__GADGET_DIR__
+ExecStart=/usr/local/bin/argus run --config __GADGET_DIR__/config.yaml
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+TimeoutStopSec=15
+
+# Memory limits (tuned for Pi Zero 2 W)
+MemoryMax=250M
+MemoryHigh=200M
+
+# OOM protection (critical service)
+OOMScoreAdjust=-500
+
+# Mount namespace shared for system-wide visibility
+MountFlags=shared
+ReadWritePaths=__GADGET_DIR__ __MNT_DIR__ /run/samba /tmp /sys/kernel/config
+
+# Watchdog integration
+WatchdogSec=30
+
+[Install]
+WantedBy=multi-user.target

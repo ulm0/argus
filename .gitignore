@@ -1,0 +1,17 @@
+# Build artifacts
+bin/
+cmd/argus/web/out/*
+!cmd/argus/web/out/.gitkeep
+web/out/
+web/.next/
+coverage.out
+coverage.html
+
+# Disk images
+*.img
+
+# OS files
+.DS_Store
+
+# Playwright MCP browser automation
+.playwright-mcp/

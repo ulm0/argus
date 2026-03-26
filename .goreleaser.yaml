@@ -1,0 +1,91 @@
+version: 2
+
+project_name: argus
+
+# Build the Next.js frontend before compiling Go so web/out/ is populated for embed.
+before:
+  hooks:
+    - sh -c "cd web && pnpm install --frozen-lockfile && pnpm run build"
+
+builds:
+  - id: argus
+    main: ./cmd/argus
+    binary: argus
+    goos:
+      - linux
+    goarch:
+      - arm64
+      - arm
+      - amd64
+    goarm:
+      - "6"
+      - "7"
+    ignore:
+      # arm6 only makes sense for armv6 (Pi Zero 1); skip arm6/amd64 combination
+      - goos: linux
+        goarch: amd64
+        goarm: "6"
+      - goos: linux
+        goarch: amd64
+        goarm: "7"
+      - goos: linux
+        goarch: arm64
+        goarm: "6"
+      - goos: linux
+        goarch: arm64
+        goarm: "7"
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X github.com/ulm0/argus/cmd/argus/cmd.Version={{.Version}}
+    flags:
+      - -trimpath
+
+archives:
+  - id: argus
+    ids:
+      - argus
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
+    formats:
+      - tar.gz
+    files:
+      - config.yaml
+      - readme.md
+      - templates/argus.service
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore\\(deps\\):"
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: "New Features"
+      regexp: "^feat"
+      order: 0
+    - title: "Bug Fixes"
+      regexp: "^fix"
+      order: 1
+    - title: "Other Changes"
+      order: 999
+
+release:
+  github:
+    owner: ulm0
+    name: argus
+  draft: false
+  prerelease: auto
+  name_template: "v{{ .Version }}"
+
+snapshot:
+  version_template: "{{ .Tag }}-next"

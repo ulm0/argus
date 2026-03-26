@@ -1,0 +1,74 @@
+//go:build linux
+
+package mount
+
+import (
+	"os"
+	"syscall"
+
+	"github.com/ulm0/argus/internal/logger"
+)
+
+func (m *Manager) mountImpl(source, target, fsType string, readOnly bool) error {
+	flags := uintptr(syscall.MS_NOATIME)
+	if readOnly {
+		flags |= syscall.MS_RDONLY
+	}
+
+	options := ""
+	switch fsType {
+	case "exfat":
+		options = "iocharset=utf8"
+	case "vfat":
+		options = "iocharset=utf8,shortname=mixed"
+	}
+
+	return inPID1Namespace(func() error {
+		return syscall.Mount(source, target, fsType, flags, options)
+	})
+}
+
+func (m *Manager) unmountImpl(target string, lazy bool) error {
+	flags := 0
+	if lazy {
+		flags = syscall.MNT_DETACH
+	}
+	return inPID1Namespace(func() error {
+		return syscall.Unmount(target, flags)
+	})
+}
+
+func syncFS() {
+	syscall.Sync()
+}
+
+func inPID1Namespace(fn func() error) error {
+	nsFd, err := os.Open("/proc/1/ns/mnt")
+	if err != nil {
+		return fn()
+	}
+	defer nsFd.Close()
+
+	selfNsFd, err := os.Open("/proc/self/ns/mnt")
+	if err != nil {
+		return fn()
+	}
+	defer selfNsFd.Close()
+
+	if err := setns(int(nsFd.Fd()), 0); err != nil {
+		logger.L.WithError(err).Warn("setns failed, running in current namespace")
+		return fn()
+	}
+
+	result := fn()
+	_ = setns(int(selfNsFd.Fd()), 0)
+	return result
+}
+
+func setns(fd int, nstype int) error {
+	_, _, errno := syscall.RawSyscall(308, uintptr(fd), uintptr(nstype), 0)
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
