@@ -12,9 +12,10 @@ func getDiskUsage(path string) PartitionUsage {
 		return PartitionUsage{}
 	}
 
-	total := int64(stat.Blocks) * stat.Bsize
-	free := int64(stat.Bavail) * stat.Bsize
-	used := total - int64(stat.Bfree)*stat.Bsize
+	bsize := int64(stat.Bsize)
+	total := int64(stat.Blocks) * bsize
+	free := int64(stat.Bavail) * bsize
+	used := total - int64(stat.Bfree)*bsize
 
 	var percent float64
 	if total > 0 {

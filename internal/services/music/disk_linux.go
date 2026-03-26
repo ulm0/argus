@@ -11,5 +11,5 @@ func getDiskUsed(path string) int64 {
 	if err := syscall.Statfs(path, &stat); err != nil {
 		return 0
 	}
-	return (int64(stat.Blocks) - int64(stat.Bfree)) * stat.Bsize
+	return (int64(stat.Blocks) - int64(stat.Bfree)) * int64(stat.Bsize)
 }
