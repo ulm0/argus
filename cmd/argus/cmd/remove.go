@@ -217,6 +217,8 @@ func removeSwap() {
 		_ = os.Remove(swapFile)
 		_ = runCmd("sed", "-i", `\|`+swapFile+`|d`, "/etc/fstab")
 	}
+	// Restore the OS default swap manager that was disabled during setup.
+	_ = runCmd("systemctl", "enable", "--now", "dphys-swapfile")
 	removeLog("Swap cleaned")
 }
 

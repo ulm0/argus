@@ -503,6 +503,11 @@ func setupConfigureSwap() error {
 	setupLog("Configuring swap...")
 	swapFile := "/var/argus-fsck.swap"
 
+	// Disable the OS default swap to avoid duplicate swap files on the same device.
+	// dphys-swapfile creates /var/swap (100MB) which would coexist pointlessly with ours.
+	_ = runCmd("systemctl", "disable", "--now", "dphys-swapfile")
+	_ = runCmd("dphys-swapfile", "swapoff")
+
 	if _, err := os.Stat(swapFile); os.IsNotExist(err) {
 		if err := runCmd("fallocate", "-l", "1G", swapFile); err != nil {
 			return fmt.Errorf("fallocate: %w", err)
