@@ -39,6 +39,9 @@ The binary is self-contained — no other files are required at download time. R
 
 ```bash
 curl -fsSL https://github.com/ulm0/argus/releases/latest/download/argus_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/;s/armv7l/armv7/;s/armv6l/armv6').tar.gz | sudo tar -xz -C /usr/local/bin argus
+
+argus generate
+
 sudo argus setup
 ```
 
