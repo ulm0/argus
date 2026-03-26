@@ -25,6 +25,7 @@ func main() {
 
 	root.AddCommand(
 		cmd.NewRunCmd(&webContent),
+		cmd.NewGenerateCmd(),
 		cmd.NewSetupCmd(),
 		cmd.NewRemoveCmd(),
 		cmd.NewUpgradeCmd(),

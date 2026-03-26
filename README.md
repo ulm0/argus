@@ -26,6 +26,7 @@ Makefile          Build orchestration
 
 ```
 argus run [--config path]                   Start the web server
+argus generate [--output path] [--force]   Generate initial config.yaml (edit then run `sudo argus setup`)
 argus setup [--dir path] [--cam-size 50G]   Install on a Raspberry Pi (requires root)
 argus upgrade [--yes]                       Upgrade to the latest release (requires root)
 argus remove [--yes] [--keep-images]        Uninstall from the system (requires root)
