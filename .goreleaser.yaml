@@ -52,7 +52,7 @@ archives:
       - tar.gz
     files:
       - config.yaml
-      - readme.md
+      - README.md
       - templates/argus.service
 
 checksum:
