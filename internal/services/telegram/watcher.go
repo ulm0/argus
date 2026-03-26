@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ulm0/argus/internal/config"
@@ -15,10 +16,11 @@ import (
 // On Linux with inotify (via fsnotify), this would be event-driven.
 // For portability, we use a polling approach that checks for new directories.
 type SentryWatcher struct {
-	cfg       *config.Config
-	callback  func(SentryEvent)
-	seen      map[string]bool
-	stopCh    chan struct{}
+	cfg      *config.Config
+	callback func(SentryEvent)
+	seen     map[string]bool
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 func NewSentryWatcher(cfg *config.Config, callback func(SentryEvent)) *SentryWatcher {
@@ -45,14 +47,14 @@ func (w *SentryWatcher) Start(ctx context.Context) {
 		case <-w.stopCh:
 			return
 		case <-ticker.C:
-			w.checkForNewEvents()
+			w.checkForNewEvents(ctx)
 		}
 	}
 }
 
-// Stop halts the watcher.
+// Stop halts the watcher. Safe to call multiple times.
 func (w *SentryWatcher) Stop() {
-	close(w.stopCh)
+	w.stopOnce.Do(func() { close(w.stopCh) })
 }
 
 func (w *SentryWatcher) sentryPath() string {
@@ -86,7 +88,7 @@ func (w *SentryWatcher) seedExistingEvents() {
 	logger.L.WithField("count", len(w.seen)).Debug("Telegram watcher: seeded existing sentry events")
 }
 
-func (w *SentryWatcher) checkForNewEvents() {
+func (w *SentryWatcher) checkForNewEvents(ctx context.Context) {
 	sentryDir := w.sentryPath()
 	if sentryDir == "" {
 		return
@@ -109,21 +111,31 @@ func (w *SentryWatcher) checkForNewEvents() {
 
 		w.seen[name] = true
 
-		// Wait a moment for the event to be fully written
-		time.Sleep(5 * time.Second)
-
-		eventDir := filepath.Join(sentryDir, name)
-		videos := w.findVideos(eventDir)
-
-		if len(videos) > 0 {
-			event := SentryEvent{
-				EventDir:  eventDir,
-				EventName: name,
-				Timestamp: time.Now(),
-				Videos:    videos,
+		// Process each new event concurrently so that multiple events detected in
+		// the same tick don't serialize their 5-second "write-settle" wait.
+		go func(eventName string) {
+			// Wait for the event to be fully written, honouring shutdown signals.
+			select {
+			case <-time.After(5 * time.Second):
+			case <-ctx.Done():
+				return
+			case <-w.stopCh:
+				return
 			}
-			w.callback(event)
-		}
+
+			eventDir := filepath.Join(sentryDir, eventName)
+			videos := w.findVideos(eventDir)
+
+			if len(videos) > 0 {
+				event := SentryEvent{
+					EventDir:  eventDir,
+					EventName: eventName,
+					Timestamp: time.Now(),
+					Videos:    videos,
+				}
+				w.callback(event)
+			}
+		}(name)
 	}
 }
 

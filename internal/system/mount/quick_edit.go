@@ -1,6 +1,7 @@
 package mount
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,16 +38,18 @@ func NewQuickEditor(cfg *config.Config, g *gadget.Manager, l *loop.Manager, m *M
 }
 
 // QuickEditPart2 provides temporary RW access to partition 2 (LightShow).
-func (q *QuickEditor) QuickEditPart2(callback func(rwPath string) error, timeout time.Duration) error {
+// The callback receives a context that is cancelled when timeout is reached.
+func (q *QuickEditor) QuickEditPart2(callback func(ctx context.Context, rwPath string) error, timeout time.Duration) error {
 	return q.quickEdit("part2", 1, q.cfg.ImgLightshow, callback, timeout)
 }
 
 // QuickEditPart3 provides temporary RW access to partition 3 (Music).
-func (q *QuickEditor) QuickEditPart3(callback func(rwPath string) error, timeout time.Duration) error {
+// The callback receives a context that is cancelled when timeout is reached.
+func (q *QuickEditor) QuickEditPart3(callback func(ctx context.Context, rwPath string) error, timeout time.Duration) error {
 	return q.quickEdit("part3", 2, q.cfg.ImgMusicPath, callback, timeout)
 }
 
-func (q *QuickEditor) quickEdit(partition string, lunNumber int, imgPath string, callback func(rwPath string) error, timeout time.Duration) error {
+func (q *QuickEditor) quickEdit(partition string, lunNumber int, imgPath string, callback func(ctx context.Context, rwPath string) error, timeout time.Duration) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -112,17 +115,21 @@ func (q *QuickEditor) quickEdit(partition string, lunNumber int, imgPath string,
 		return fmt.Errorf("mount RW: %w", err)
 	}
 
-	// 5. Execute callback with timeout
+	// 5. Execute callback with timeout; cancel context to signal the callback on timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
 	done := make(chan error, 1)
 	go func() {
-		done <- callback(rwPath)
+		done <- callback(ctx, rwPath)
 	}()
 
 	var callbackErr error
 	select {
 	case callbackErr = <-done:
-	case <-time.After(timeout):
+	case <-ctx.Done():
 		callbackErr = fmt.Errorf("quick edit timed out after %s", timeout)
+		logger.L.WithField("partition", partition).Warn("quick_edit: callback timed out, proceeding with cleanup")
 	}
 
 	// 6. Cleanup: sync, unmount, detach, restore

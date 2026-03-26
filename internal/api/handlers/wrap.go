@@ -62,7 +62,12 @@ func (h *WrapHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := filepath.Join(mountPath, wrap.WrapsFolder, filename)
+	base := filepath.Join(mountPath, wrap.WrapsFolder)
+	filePath := filepath.Join(base, filepath.Clean(filename))
+	if !strings.HasPrefix(filePath, base+string(filepath.Separator)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid filename"})
+		return
+	}
 	if _, err := os.Stat(filePath); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
 		return
@@ -81,7 +86,12 @@ func (h *WrapHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := filepath.Join(mountPath, wrap.WrapsFolder, filename)
+	base := filepath.Join(mountPath, wrap.WrapsFolder)
+	filePath := filepath.Join(base, filepath.Clean(filename))
+	if !strings.HasPrefix(filePath, base+string(filepath.Separator)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid filename"})
+		return
+	}
 	if _, err := os.Stat(filePath); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
 		return

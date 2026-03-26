@@ -53,8 +53,12 @@ func (m *Manager) Start(timeoutSec int) error {
 
 	// Read back actual timeout
 	var actual int32
-	syscall.Syscall(syscall.SYS_IOCTL, fd.Fd(), wdiocGetTimeout,
+	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, fd.Fd(), wdiocGetTimeout,
 		uintptr(unsafe.Pointer(&actual)))
+	if errno != 0 {
+		logger.L.WithField("errno", errno).Warn("watchdog get timeout failed; using requested value")
+		actual = t
+	}
 	logger.L.WithField("timeout_sec", actual).Info("watchdog started")
 
 	// Keepalive at half the timeout interval

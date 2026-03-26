@@ -115,8 +115,8 @@ func (s *Service) SwitchToEdit() error {
 
 	// Clear LUN backing files so the host releases the images
 	if gadgetMgr.IsPresent() {
-		for i := range s.buildLUNConfigs() {
-			_ = gadgetMgr.ClearLUN(i)
+		for _, lun := range s.buildLUNConfigs() {
+			_ = gadgetMgr.ClearLUN(lun.Number)
 		}
 		time.Sleep(200 * time.Millisecond)
 		if err := gadgetMgr.Unbind(); err != nil {

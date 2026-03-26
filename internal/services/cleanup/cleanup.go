@@ -88,14 +88,23 @@ func (s *Service) loadPolicies() {
 	json.Unmarshal(data, &s.policies)
 }
 
-// SavePolicies persists cleanup policies to disk.
+// SavePolicies persists cleanup policies to disk atomically.
+// In-memory state is only updated after a successful disk write.
 func (s *Service) SavePolicies(policies map[string]FolderPolicy) error {
-	s.policies = policies
 	data, err := json.MarshalIndent(policies, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.configFile, data, 0644)
+	tmp := s.configFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, s.configFile); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	s.policies = policies
+	return nil
 }
 
 // GetPolicies returns the current cleanup policies.
@@ -237,7 +246,7 @@ func (s *Service) ExecuteCleanup(plan *CleanupPlan, dryRun bool) CleanupReport {
 				continue
 			}
 
-			if err := os.RemoveAll(f.Path); err != nil {
+			if err := os.Remove(f.Path); err != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("delete %s: %v", f.Name, err))
 			} else {
 				report.DeletedCount++

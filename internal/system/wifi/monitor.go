@@ -206,10 +206,14 @@ func (m *Monitor) GetRSSI() int {
 }
 
 // ScanNetworks scans for available WiFi networks.
-func (m *Monitor) ScanNetworks(rescan bool) ([]Network, error) {
+func (m *Monitor) ScanNetworks(ctx context.Context, rescan bool) ([]Network, error) {
 	if rescan {
 		exec.Command("sudo", "-n", "nmcli", "dev", "wifi", "rescan").Run()
-		time.Sleep(2 * time.Second)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
 	}
 
 	out, err := exec.Command("sudo", "-n", "nmcli", "-t", "-f", "SSID,SIGNAL,SECURITY", "dev", "wifi", "list").Output()

@@ -130,7 +130,12 @@ func (s *Service) UploadZip(zipData []byte, mountPath string) (int, error) {
 			continue
 		}
 
-		io.Copy(dst, src)
+		if _, err := io.Copy(dst, src); err != nil {
+			dst.Close()
+			src.Close()
+			os.Remove(destPath)
+			continue
+		}
 		dst.Close()
 		src.Close()
 		count++

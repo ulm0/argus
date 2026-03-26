@@ -121,7 +121,11 @@ func (s *Service) UploadWrap(data []byte, filename, mountPath string) error {
 
 // DeleteWrap removes a wrap PNG file.
 func (s *Service) DeleteWrap(filename, mountPath string) error {
-	filePath := filepath.Join(mountPath, WrapsFolder, filename)
+	wrapsDir := filepath.Join(mountPath, WrapsFolder)
+	filePath := filepath.Join(wrapsDir, filename)
+	if !strings.HasPrefix(filePath, wrapsDir+string(filepath.Separator)) {
+		return fmt.Errorf("invalid wrap filename: path traversal detected")
+	}
 	return os.Remove(filePath)
 }
 

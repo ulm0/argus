@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strings"
 
 	"github.com/gorilla/mux"
 
@@ -62,7 +63,12 @@ func (h *ChimeHandler) PlayActive(w http.ResponseWriter, r *http.Request) {
 // Play serves a specific chime file for playback.
 func (h *ChimeHandler) Play(w http.ResponseWriter, r *http.Request) {
 	filename := mux.Vars(r)["filename"]
-	chimePath := filepath.Join(h.chimesDir(), filepath.Clean(filename))
+	base := h.chimesDir()
+	chimePath := filepath.Join(base, filepath.Clean(filename))
+	if !strings.HasPrefix(chimePath, base+string(filepath.Separator)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid filename"})
+		return
+	}
 	w.Header().Set("Content-Type", "audio/wav")
 	http.ServeFile(w, r, chimePath)
 }
@@ -70,7 +76,12 @@ func (h *ChimeHandler) Play(w http.ResponseWriter, r *http.Request) {
 // Download serves a chime file as a download attachment.
 func (h *ChimeHandler) Download(w http.ResponseWriter, r *http.Request) {
 	filename := mux.Vars(r)["filename"]
-	chimePath := filepath.Join(h.chimesDir(), filepath.Clean(filename))
+	base := h.chimesDir()
+	chimePath := filepath.Join(base, filepath.Clean(filename))
+	if !strings.HasPrefix(chimePath, base+string(filepath.Separator)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid filename"})
+		return
+	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	http.ServeFile(w, r, chimePath)
 }

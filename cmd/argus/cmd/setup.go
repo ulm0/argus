@@ -261,13 +261,10 @@ func setupInstallDeps() error {
 		"watchdog", "exfat-fuse", "exfatprogs",
 		"dosfstools", "network-manager",
 	}
-	args := append([]string{"-get", "install", "-y", "-qq"}, packages...)
-	// apt-get is apt-get; the binary is just apt-get
 	aptArgs := append([]string{"install", "-y", "-qq"}, packages...)
 	if err := runCmd("apt-get", "update", "-qq"); err != nil {
 		return fmt.Errorf("apt-get update: %w", err)
 	}
-	_ = args
 	if err := runCmd("apt-get", aptArgs...); err != nil {
 		return fmt.Errorf("apt-get install: %w", err)
 	}
@@ -604,6 +601,10 @@ func setupCopyBinary() error {
 		return fmt.Errorf("copy binary: %w", err)
 	}
 
+	if err := dst.Sync(); err != nil {
+		return fmt.Errorf("sync binary: %w", err)
+	}
+
 	setupLog("Binary installed at %s", binDest)
 	return nil
 }
@@ -632,8 +633,10 @@ func appendLineIfMissing(filePath, line string) error {
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if strings.Contains(string(data), line) {
-		return nil
+	for _, l := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(l) == line {
+			return nil
+		}
 	}
 	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {

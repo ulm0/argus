@@ -32,11 +32,12 @@ type SentryEvent struct {
 }
 
 type Service struct {
-	cfg       *config.Config
-	mu        sync.Mutex
-	queue     []SentryEvent
-	stopCh    chan struct{}
-	watcher   *SentryWatcher
+	cfg      *config.Config
+	mu       sync.Mutex
+	queue    []SentryEvent
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	watcher  *SentryWatcher
 }
 
 func NewService(cfg *config.Config) *Service {
@@ -63,12 +64,14 @@ func (s *Service) Start(ctx context.Context) {
 	logger.L.Info("Telegram alerting started")
 }
 
-// Stop halts the Telegram service.
+// Stop halts the Telegram service. Safe to call multiple times.
 func (s *Service) Stop() {
-	close(s.stopCh)
-	if s.watcher != nil {
-		s.watcher.Stop()
-	}
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+		if s.watcher != nil {
+			s.watcher.Stop()
+		}
+	})
 }
 
 // GetStatus returns the current Telegram service status.
@@ -202,8 +205,13 @@ func (s *Service) sendMessage(text string) error {
 		"parse_mode": "Markdown",
 	}
 
-	data, _ := json.Marshal(payload)
-	resp, err := http.Post(url, "application/json", bytes.NewReader(data))
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("send message: %w", err)
 	}
@@ -256,10 +264,13 @@ func (s *Service) sendVideo(videoPath, caption string) error {
 	}
 	defer f.Close()
 
-	io.Copy(part, f)
+	if _, err := io.Copy(part, f); err != nil {
+		return fmt.Errorf("copy video: %w", err)
+	}
 	writer.Close()
 
-	resp, err := http.Post(url, writer.FormDataContentType(), &buf)
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Post(url, writer.FormDataContentType(), &buf)
 	if err != nil {
 		return err
 	}

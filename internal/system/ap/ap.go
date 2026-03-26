@@ -45,8 +45,8 @@ type Manager struct {
 	mu        sync.Mutex
 	active    bool
 	forceMode ForceMode
-	hostapdPID int
-	dnsmasqPID int
+	hostapdCmd *exec.Cmd
+	dnsmasqCmd *exec.Cmd
 }
 
 func NewManager(cfg *config.Config) *Manager {
@@ -163,7 +163,9 @@ func (m *Manager) startAPLocked() error {
 	if err := hostapdCmd.Start(); err != nil {
 		return fmt.Errorf("start hostapd: %w", err)
 	}
-	m.hostapdPID = hostapdCmd.Process.Pid
+	m.hostapdCmd = hostapdCmd
+	// hostapd is daemonized (-B), reap the launcher process in a goroutine.
+	go hostapdCmd.Wait() //nolint:errcheck
 
 	// Write and start dnsmasq
 	dnsmasqConf := filepath.Join(runtimeDir, "dnsmasq.conf")
@@ -175,7 +177,13 @@ func (m *Manager) startAPLocked() error {
 	if err := dnsmasqCmd.Start(); err != nil {
 		return fmt.Errorf("start dnsmasq: %w", err)
 	}
-	m.dnsmasqPID = dnsmasqCmd.Process.Pid
+	m.dnsmasqCmd = dnsmasqCmd
+	// dnsmasq runs in foreground; reap it in a goroutine so resources are freed.
+	go func() {
+		if err := dnsmasqCmd.Wait(); err != nil {
+			logger.L.WithError(err).Debug("dnsmasq exited")
+		}
+	}()
 
 	m.active = true
 	m.recordAPStart()
@@ -188,9 +196,20 @@ func (m *Manager) stopAPLocked() error {
 		return nil
 	}
 
-	// Kill hostapd and dnsmasq
-	exec.Command("pkill", "-f", "hostapd.*argus").Run()
-	exec.Command("pkill", "-f", "dnsmasq.*argus").Run()
+	// Kill hostapd and dnsmasq via stored process handles when available,
+	// falling back to pkill for externally-spawned processes.
+	if m.hostapdCmd != nil && m.hostapdCmd.Process != nil {
+		m.hostapdCmd.Process.Kill()
+		m.hostapdCmd = nil
+	} else {
+		exec.Command("pkill", "-f", "hostapd.*argus").Run()
+	}
+	if m.dnsmasqCmd != nil && m.dnsmasqCmd.Process != nil {
+		m.dnsmasqCmd.Process.Kill()
+		m.dnsmasqCmd = nil
+	} else {
+		exec.Command("pkill", "-f", "dnsmasq.*argus").Run()
+	}
 	time.Sleep(500 * time.Millisecond)
 
 	// Remove virtual interface
@@ -221,6 +240,9 @@ func (m *Manager) GetAPConfig() APConfig {
 
 // UpdateAPConfig updates SSID and passphrase in config.yaml and reloads.
 func (m *Manager) UpdateAPConfig(ssid, passphrase string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	m.cfg.OfflineAP.SSID = ssid
 	m.cfg.OfflineAP.Passphrase = passphrase
 
@@ -229,10 +251,8 @@ func (m *Manager) UpdateAPConfig(ssid, passphrase string) error {
 	}
 
 	if m.active {
-		m.mu.Lock()
 		m.stopAPLocked()
 		m.startAPLocked()
-		m.mu.Unlock()
 	}
 
 	return nil

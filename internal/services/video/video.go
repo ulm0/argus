@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ulm0/argus/internal/config"
+	"github.com/ulm0/argus/internal/logger"
 )
 
 var sessionPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})-(.+)\.\w+$`)
@@ -262,7 +263,10 @@ func (s *Service) ThumbnailHash(videoPath string) string {
 
 // DeleteEvent removes all files in an event directory.
 func (s *Service) DeleteEvent(folderPath, eventName string) error {
-	eventDir := filepath.Join(folderPath, eventName)
+	eventDir := filepath.Join(folderPath, filepath.Clean(eventName))
+	if !strings.HasPrefix(eventDir, folderPath+string(filepath.Separator)) {
+		return fmt.Errorf("invalid event name: path traversal detected")
+	}
 	return os.RemoveAll(eventDir)
 }
 
@@ -347,13 +351,23 @@ func (s *Service) parseEvent(eventDir, name string) Event {
 
 // CreateEventZip creates a ZIP archive of all videos in an event.
 func (s *Service) CreateEventZip(folderPath, eventName string) (string, error) {
-	eventDir := filepath.Join(folderPath, eventName)
-	zipPath := filepath.Join(os.TempDir(), eventName+".zip")
+	eventDir := filepath.Join(folderPath, filepath.Clean(eventName))
+	if !strings.HasPrefix(eventDir, folderPath+string(filepath.Separator)) {
+		return "", fmt.Errorf("invalid event name: path traversal detected")
+	}
 
 	entries, err := os.ReadDir(eventDir)
 	if err != nil {
 		return "", err
 	}
+
+	// Use a randomly-named temp file to avoid name-collision races.
+	tmpFile, err := os.CreateTemp("", "argus-event-*.zip")
+	if err != nil {
+		return "", fmt.Errorf("create temp zip: %w", err)
+	}
+	zipPath := tmpFile.Name()
+	tmpFile.Close()
 
 	args := []string{"-j", zipPath}
 	for _, e := range entries {
@@ -363,6 +377,7 @@ func (s *Service) CreateEventZip(folderPath, eventName string) (string, error) {
 	}
 
 	if err := exec.Command("zip", args...).Run(); err != nil {
+		os.Remove(zipPath)
 		return "", err
 	}
 	return zipPath, nil
@@ -442,7 +457,9 @@ func (s *Service) ReadSEIData(w http.ResponseWriter, r *http.Request, videoPath 
 	}
 	defer f.Close()
 
-	io.Copy(w, f)
+	if _, err := io.Copy(w, f); err != nil {
+		logger.L.WithError(err).Warn("ReadSEIData: stream interrupted")
+	}
 }
 
 // GetMP4Duration extracts the duration from an MP4 file's moov/mvhd box.
@@ -453,12 +470,25 @@ func GetMP4Duration(path string) (time.Duration, error) {
 	}
 	defer f.Close()
 
-	// Simple MP4 box traversal to find moov/mvhd
-	var totalSize int64
-	fInfo, _ := f.Stat()
-	fileSize := fInfo.Size()
+	fInfo, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
 
-	for totalSize < fileSize {
+	return scanBoxes(f, 0, fInfo.Size())
+}
+
+// scanBoxes walks MP4 boxes in the byte range [start, start+length) looking for mvhd.
+// It descends into moov boxes automatically.
+func scanBoxes(f *os.File, start, length int64) (time.Duration, error) {
+	pos := start
+	end := start + length
+
+	for pos < end {
+		if _, err := f.Seek(pos, io.SeekStart); err != nil {
+			return 0, fmt.Errorf("seek: %w", err)
+		}
+
 		header := make([]byte, 8)
 		if _, err := io.ReadFull(f, header); err != nil {
 			break
@@ -471,39 +501,38 @@ func GetMP4Duration(path string) (time.Duration, error) {
 			break
 		}
 
-		if boxType == "moov" {
-			continue // dive into moov
-		}
-
-		if boxType == "mvhd" {
-			mvhd := make([]byte, boxSize-8)
-			if _, err := io.ReadFull(f, mvhd); err != nil {
-				break
+		switch boxType {
+		case "moov":
+			// Descend into moov: its children start right after the 8-byte header.
+			if dur, err := scanBoxes(f, pos+8, boxSize-8); err == nil {
+				return dur, nil
+			}
+		case "mvhd":
+			payload := make([]byte, boxSize-8)
+			if _, err := io.ReadFull(f, payload); err != nil {
+				return 0, fmt.Errorf("read mvhd: %w", err)
 			}
 
-			version := mvhd[0]
+			version := payload[0]
 			var timescale uint32
 			var duration uint64
 
 			if version == 0 {
-				timescale = binary.BigEndian.Uint32(mvhd[12:16])
-				duration = uint64(binary.BigEndian.Uint32(mvhd[16:20]))
+				timescale = binary.BigEndian.Uint32(payload[12:16])
+				duration = uint64(binary.BigEndian.Uint32(payload[16:20]))
 			} else {
-				timescale = binary.BigEndian.Uint32(mvhd[20:24])
-				duration = binary.BigEndian.Uint64(mvhd[24:32])
+				timescale = binary.BigEndian.Uint32(payload[20:24])
+				duration = binary.BigEndian.Uint64(payload[24:32])
 			}
 
 			if timescale == 0 {
 				return 0, fmt.Errorf("invalid timescale")
 			}
 
-			dur := time.Duration(duration) * time.Second / time.Duration(timescale)
-			return dur, nil
+			return time.Duration(duration) * time.Second / time.Duration(timescale), nil
 		}
 
-		// Skip this box
-		f.Seek(totalSize+boxSize, io.SeekStart)
-		totalSize += boxSize
+		pos += boxSize
 	}
 
 	return 0, fmt.Errorf("mvhd box not found")

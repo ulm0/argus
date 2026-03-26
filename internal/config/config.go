@@ -124,8 +124,8 @@ type UpdateConfig struct {
 const defaultSecretKey = "CHANGE-THIS-TO-A-RANDOM-SECRET-KEY-ON-FIRST-INSTALL"
 
 var (
-	globalCfg  *Config
-	globalOnce sync.Once
+	globalCfg *Config
+	globalMu  sync.Mutex
 )
 
 func Load(path string) (*Config, error) {
@@ -148,17 +148,22 @@ func Load(path string) (*Config, error) {
 
 // Get returns the global singleton config. Must call InitGlobal first.
 func Get() *Config {
+	globalMu.Lock()
+	defer globalMu.Unlock()
 	return globalCfg
 }
 
 // InitGlobal loads config and sets the global singleton.
+// It is safe to call multiple times; subsequent calls replace the config under a mutex.
 func InitGlobal(path string) error {
-	var err error
-	globalOnce = sync.Once{}
-	globalOnce.Do(func() {
-		globalCfg, err = Load(path)
-	})
-	return err
+	cfg, err := Load(path)
+	if err != nil {
+		return err
+	}
+	globalMu.Lock()
+	globalCfg = cfg
+	globalMu.Unlock()
+	return nil
 }
 
 func (c *Config) setDefaults() {
@@ -262,13 +267,21 @@ func (c *Config) CameraAngles() []string {
 	}
 }
 
-// Save writes the current config back to its YAML file.
+// Save writes the current config back to its YAML file atomically.
 func (c *Config) Save() error {
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
 	}
-	return os.WriteFile(c.ConfigFilePath, data, 0644)
+	tmp := c.ConfigFilePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return fmt.Errorf("write config temp: %w", err)
+	}
+	if err := os.Rename(tmp, c.ConfigFilePath); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("rename config: %w", err)
+	}
+	return nil
 }
 
 func generateRandomKey() string {

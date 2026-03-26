@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -98,7 +99,10 @@ func CheckLatest(currentVersion string) (*Release, error) {
 	latest := strings.TrimPrefix(gr.TagName, "v")
 	current := strings.TrimPrefix(currentVersion, "v")
 
-	if latest == current || current == "dev" {
+	if current == "dev" {
+		return nil, nil
+	}
+	if compareSemver(latest, current) <= 0 {
 		return nil, nil
 	}
 
@@ -242,7 +246,38 @@ func copyFile(src, dst string, mode os.FileMode) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
+	if _, err = io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+// compareSemver compares two semver strings (e.g. "1.2.3").
+// Returns 1 if a > b, -1 if a < b, 0 if equal.
+// Non-numeric segments are treated as 0.
+func compareSemver(a, b string) int {
+	partsA := strings.SplitN(a, ".", 3)
+	partsB := strings.SplitN(b, ".", 3)
+	for len(partsA) < 3 {
+		partsA = append(partsA, "0")
+	}
+	for len(partsB) < 3 {
+		partsB = append(partsB, "0")
+	}
+	for i := 0; i < 3; i++ {
+		na, _ := strconv.Atoi(partsA[i])
+		nb, _ := strconv.Atoi(partsB[i])
+		if na > nb {
+			return 1
+		}
+		if na < nb {
+			return -1
+		}
+	}
+	return 0
 }

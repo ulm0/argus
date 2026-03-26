@@ -4,6 +4,7 @@ package mount
 
 import (
 	"os"
+	"runtime"
 	"syscall"
 
 	"github.com/ulm0/argus/internal/logger"
@@ -43,6 +44,12 @@ func syncFS() {
 }
 
 func inPID1Namespace(fn func() error) error {
+	// LockOSThread ensures the Go scheduler does not move this goroutine to a
+	// different OS thread between the two setns calls, which would leave the
+	// original thread permanently in PID 1's mount namespace.
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	nsFd, err := os.Open("/proc/1/ns/mnt")
 	if err != nil {
 		return fn()
@@ -61,7 +68,11 @@ func inPID1Namespace(fn func() error) error {
 	}
 
 	result := fn()
-	_ = setns(int(selfNsFd.Fd()), 0)
+
+	if err := setns(int(selfNsFd.Fd()), 0); err != nil {
+		logger.L.WithError(err).Error("failed to restore mount namespace")
+	}
+
 	return result
 }
 

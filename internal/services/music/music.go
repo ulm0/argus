@@ -63,22 +63,7 @@ func (s *Service) ListFiles(mountPath, relPath string) (*ListResult, error) {
 		CurrentPath: relPath,
 	}
 
-	// Get disk usage via statvfs
-	var stat struct {
-		Bsize  uint64
-		Blocks uint64
-		Bfree  uint64
-		Bavail uint64
-	}
-	// Fallback: use os.Stat approach
-	filepath.Walk(musicDir, func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() {
-			result.UsedBytes += info.Size()
-		}
-		return nil
-	})
-
-	_ = stat // suppress unused warning; real statvfs done via syscall on Linux
+	result.UsedBytes = getDiskUsed(musicDir)
 
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".") {
@@ -191,7 +176,12 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 			os.Remove(tmpPath)
 			return false, fmt.Errorf("open chunk %d: %w", i, err)
 		}
-		io.Copy(assembled, chunk)
+		if _, err := io.Copy(assembled, chunk); err != nil {
+			chunk.Close()
+			assembled.Close()
+			os.Remove(tmpPath)
+			return false, fmt.Errorf("assemble chunk %d: %w", i, err)
+		}
 		chunk.Close()
 	}
 

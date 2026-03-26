@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"io/fs"
@@ -9,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/ulm0/argus/internal/api"
@@ -56,7 +58,11 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 			go func() {
 				sig := <-sigCh
 				logger.L.WithField("signal", sig).Info("received signal, shutting down")
-				server.Close()
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if err := server.Shutdown(ctx); err != nil {
+					logger.L.WithError(err).Warn("graceful shutdown timed out")
+				}
 			}()
 
 			logger.L.WithField("addr", addr).Info("listening")

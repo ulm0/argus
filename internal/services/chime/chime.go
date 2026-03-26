@@ -50,46 +50,81 @@ func (s *Service) ValidateTeslaWAV(path string) (bool, string) {
 		return false, fmt.Sprintf("file too large: %d bytes (max %d)", info.Size(), s.cfg.Web.MaxLockChimeSize)
 	}
 
-	// Read WAV header
-	header := make([]byte, 44)
-	if _, err := io.ReadFull(f, header); err != nil {
+	// Read RIFF/WAVE container header (12 bytes).
+	riff := make([]byte, 12)
+	if _, err := io.ReadFull(f, riff); err != nil {
 		return false, "cannot read WAV header"
 	}
-
-	if string(header[0:4]) != "RIFF" || string(header[8:12]) != "WAVE" {
+	if string(riff[0:4]) != "RIFF" || string(riff[8:12]) != "WAVE" {
 		return false, "not a valid WAV file"
 	}
 
-	audioFormat := binary.LittleEndian.Uint16(header[20:22])
+	// Scan chunks to find "fmt " regardless of ordering or extra metadata chunks.
+	var fmtData []byte
+	var dataSize uint32
+	chunkHdr := make([]byte, 8)
+	for {
+		if _, err := io.ReadFull(f, chunkHdr); err != nil {
+			break
+		}
+		chunkID := string(chunkHdr[0:4])
+		chunkSize := binary.LittleEndian.Uint32(chunkHdr[4:8])
+
+		if chunkID == "fmt " {
+			fmtData = make([]byte, chunkSize)
+			if _, err := io.ReadFull(f, fmtData); err != nil {
+				return false, "cannot read fmt chunk"
+			}
+		} else if chunkID == "data" {
+			dataSize = chunkSize
+			break
+		} else {
+			// Skip unknown chunk; chunks are padded to even size.
+			skip := int64(chunkSize)
+			if chunkSize%2 != 0 {
+				skip++
+			}
+			if _, err := f.Seek(skip, io.SeekCurrent); err != nil {
+				break
+			}
+		}
+	}
+
+	if len(fmtData) < 16 {
+		return false, "fmt chunk missing or too short"
+	}
+
+	audioFormat := binary.LittleEndian.Uint16(fmtData[0:2])
 	if audioFormat != 1 { // PCM
 		return false, fmt.Sprintf("not PCM format (format=%d)", audioFormat)
 	}
 
-	channels := binary.LittleEndian.Uint16(header[22:24])
+	channels := binary.LittleEndian.Uint16(fmtData[2:4])
 	if channels != 1 && channels != 2 {
 		return false, fmt.Sprintf("invalid channels: %d (need 1 or 2)", channels)
 	}
 
-	sampleRate := binary.LittleEndian.Uint32(header[24:28])
+	sampleRate := binary.LittleEndian.Uint32(fmtData[4:8])
 	if sampleRate != 44100 && sampleRate != 48000 {
 		return false, fmt.Sprintf("invalid sample rate: %d (need 44100 or 48000)", sampleRate)
 	}
 
-	bitsPerSample := binary.LittleEndian.Uint16(header[34:36])
+	bitsPerSample := binary.LittleEndian.Uint16(fmtData[14:16])
 	if bitsPerSample != 16 {
 		return false, fmt.Sprintf("invalid bit depth: %d (need 16)", bitsPerSample)
 	}
 
-	// Check duration
-	dataSize := binary.LittleEndian.Uint32(header[40:44])
-	bytesPerSec := sampleRate * uint32(channels) * uint32(bitsPerSample/8)
-	if bytesPerSec > 0 {
-		duration := float64(dataSize) / float64(bytesPerSec)
-		if duration > s.cfg.Web.MaxLockChimeDur {
-			return false, fmt.Sprintf("too long: %.1fs (max %.1fs)", duration, s.cfg.Web.MaxLockChimeDur)
-		}
-		if duration < s.cfg.Web.MinLockChimeDur {
-			return false, fmt.Sprintf("too short: %.1fs (min %.1fs)", duration, s.cfg.Web.MinLockChimeDur)
+	// Check duration using the data chunk size found during scanning.
+	if dataSize > 0 {
+		bytesPerSec := sampleRate * uint32(channels) * uint32(bitsPerSample/8)
+		if bytesPerSec > 0 {
+			duration := float64(dataSize) / float64(bytesPerSec)
+			if duration > s.cfg.Web.MaxLockChimeDur {
+				return false, fmt.Sprintf("too long: %.1fs (max %.1fs)", duration, s.cfg.Web.MaxLockChimeDur)
+			}
+			if duration < s.cfg.Web.MinLockChimeDur {
+				return false, fmt.Sprintf("too short: %.1fs (min %.1fs)", duration, s.cfg.Web.MinLockChimeDur)
+			}
 		}
 	}
 
@@ -216,7 +251,11 @@ func (s *Service) ReplaceLockChime(sourcePath, destPath string) error {
 
 // SetActiveChime copies a chime from the library to LockChime.wav.
 func (s *Service) SetActiveChime(chimeFilename, mountPath string) error {
-	srcPath := filepath.Join(mountPath, s.cfg.Web.ChimesFolder, chimeFilename)
+	chimesDir := filepath.Join(mountPath, s.cfg.Web.ChimesFolder)
+	srcPath := filepath.Join(chimesDir, chimeFilename)
+	if !strings.HasPrefix(srcPath, chimesDir+string(filepath.Separator)) {
+		return fmt.Errorf("invalid chime filename: path traversal detected")
+	}
 	destPath := filepath.Join(mountPath, s.cfg.Web.LockChimeFilename)
 	return s.ReplaceLockChime(srcPath, destPath)
 }
@@ -228,55 +267,66 @@ func (s *Service) UploadChime(data []byte, filename, mountPath string, normalize
 
 	destPath := filepath.Join(chimesDir, filename)
 
-	// Write to temp
+	// Write raw upload to temp file.
 	tmpPath := destPath + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return fmt.Errorf("write temp: %w", err)
 	}
 
+	// cleanup tracks the current intermediate file so we can remove it on error.
+	cleanup := func(path string) { os.Remove(path) }
+
 	ext := strings.ToLower(filepath.Ext(filename))
 
-	// Convert MP3 to WAV if needed
+	// Convert MP3 to WAV if needed.
 	if ext == ".mp3" {
 		wavPath := strings.TrimSuffix(tmpPath, ext) + ".wav"
 		if err := s.ReencodeForTesla(tmpPath, wavPath); err != nil {
-			os.Remove(tmpPath)
+			cleanup(tmpPath)
 			return err
 		}
-		os.Remove(tmpPath)
+		cleanup(tmpPath)
 		tmpPath = wavPath
 		destPath = strings.TrimSuffix(destPath, ext) + ".wav"
 	}
 
-	// Re-encode if not valid Tesla WAV
+	// Re-encode if not valid Tesla WAV.
 	if valid, _ := s.ValidateTeslaWAV(tmpPath); !valid {
 		reencPath := tmpPath + ".reenc.wav"
 		if err := s.ReencodeForTesla(tmpPath, reencPath); err != nil {
-			os.Remove(tmpPath)
+			cleanup(tmpPath)
 			return err
 		}
-		os.Remove(tmpPath)
+		cleanup(tmpPath)
 		tmpPath = reencPath
 	}
 
-	// Normalize if requested
+	// Normalize if requested.
 	if normalize && targetLUFS != 0 {
 		normPath, err := s.NormalizeAudio(tmpPath, targetLUFS)
 		if err != nil {
 			logger.L.WithError(err).Warn("normalization failed")
 		} else {
-			os.Remove(tmpPath)
+			cleanup(tmpPath)
 			tmpPath = normPath
 		}
 	}
 
-	// Final rename
-	return os.Rename(tmpPath, destPath)
+	// Final rename; if it fails, remove the remaining temp file.
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		cleanup(tmpPath)
+		return err
+	}
+	return nil
 }
 
 // DeleteChime removes a chime file from the library.
 func (s *Service) DeleteChime(filename, mountPath string) error {
-	chimePath := filepath.Join(mountPath, s.cfg.Web.ChimesFolder, filename)
+	chimesDir := filepath.Join(mountPath, s.cfg.Web.ChimesFolder)
+	chimePath := filepath.Join(chimesDir, filename)
+	if !strings.HasPrefix(chimePath, chimesDir+string(filepath.Separator)) {
+		return fmt.Errorf("invalid chime filename: path traversal detected")
+	}
 	return os.Remove(chimePath)
 }
 
@@ -285,6 +335,12 @@ func (s *Service) RenameChime(oldName, newName, mountPath string) error {
 	chimesDir := filepath.Join(mountPath, s.cfg.Web.ChimesFolder)
 	oldPath := filepath.Join(chimesDir, oldName)
 	newPath := filepath.Join(chimesDir, newName)
+	if !strings.HasPrefix(oldPath, chimesDir+string(filepath.Separator)) {
+		return fmt.Errorf("invalid chime filename: path traversal detected")
+	}
+	if !strings.HasPrefix(newPath, chimesDir+string(filepath.Separator)) {
+		return fmt.Errorf("invalid chime filename: path traversal detected")
+	}
 	if err := os.Rename(oldPath, newPath); err != nil {
 		return err
 	}
@@ -373,7 +429,12 @@ func (s *Scheduler) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.filePath, data, 0644)
+	// Write atomically via temp file + rename to prevent corruption on power loss.
+	tmp := s.filePath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.filePath)
 }
 
 func (s *Scheduler) AddSchedule(sched Schedule) (string, error) {
@@ -464,7 +525,9 @@ func (s *Scheduler) RecordExecution(id string) {
 			break
 		}
 	}
-	s.save()
+	if err := s.save(); err != nil {
+		logger.L.WithError(err).Warn("failed to persist schedule execution record")
+	}
 }
 
 // Chime Groups
@@ -509,7 +572,11 @@ func (gm *GroupManager) loadGroups() {
 
 func (gm *GroupManager) saveGroups() error {
 	data, _ := json.MarshalIndent(gm.groups, "", "  ")
-	return os.WriteFile(gm.groupsFile, data, 0644)
+	tmp := gm.groupsFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, gm.groupsFile)
 }
 
 func (gm *GroupManager) loadRandomConfig() {
@@ -519,7 +586,11 @@ func (gm *GroupManager) loadRandomConfig() {
 
 func (gm *GroupManager) saveRandomConfig() error {
 	data, _ := json.MarshalIndent(gm.randomConfig, "", "  ")
-	return os.WriteFile(gm.randomFile, data, 0644)
+	tmp := gm.randomFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, gm.randomFile)
 }
 
 func (gm *GroupManager) ListGroups() []ChimeGroup {
@@ -655,7 +726,9 @@ func (gm *GroupManager) SelectRandomChime(avoidChime string) string {
 
 			selected := candidates[rand.Intn(len(candidates))]
 			gm.randomConfig.LastUsed = selected
-			gm.saveRandomConfig()
+			if err := gm.saveRandomConfig(); err != nil {
+				logger.L.WithError(err).Warn("failed to persist random chime selection")
+			}
 			return selected
 		}
 	}

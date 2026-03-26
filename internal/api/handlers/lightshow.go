@@ -58,7 +58,12 @@ func (h *LightshowHandler) Play(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := filepath.Join(mountPath, h.cfg.Web.LightshowFolder, filename)
+	base := filepath.Join(mountPath, h.cfg.Web.LightshowFolder)
+	filePath := filepath.Join(base, filepath.Clean(filename))
+	if !strings.HasPrefix(filePath, base+string(filepath.Separator)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid filename"})
+		return
+	}
 	if _, err := os.Stat(filePath); err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "file not found"})
 		return
@@ -74,6 +79,12 @@ func (h *LightshowHandler) Download(w http.ResponseWriter, r *http.Request) {
 	mountPath := h.resolveMountPath(partition)
 	if mountPath == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid partition"})
+		return
+	}
+
+	// Reject baseName values that could escape the lightshow directory.
+	if strings.ContainsAny(baseName, "/\\") || baseName == ".." {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid baseName"})
 		return
 	}
 

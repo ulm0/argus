@@ -42,6 +42,7 @@ type Runner struct {
 	cfg         *config.Config
 	mu          sync.Mutex
 	running     bool
+	currentCmd  *exec.Cmd
 	cancelFn    func()
 	current     *CheckResult
 	history     []CheckResult
@@ -81,25 +82,21 @@ func (r *Runner) Start(partitions []string) error {
 
 	r.running = true
 
-	type cancelCtx struct {
-		cancelled bool
-		mu        sync.Mutex
-	}
-	ctx := &cancelCtx{}
-
-	r.cancelFn = func() {
-		ctx.mu.Lock()
-		ctx.cancelled = true
-		ctx.mu.Unlock()
-	}
+	cancelled := make(chan struct{})
+	r.cancelFn = sync.OnceFunc(func() { close(cancelled) })
 
 	go func() {
 		for _, part := range partitions {
-			ctx.mu.Lock()
-			cancelled := ctx.cancelled
-			ctx.mu.Unlock()
-			if cancelled {
-				break
+			select {
+			case <-cancelled:
+				r.mu.Lock()
+				r.running = false
+				r.current = nil
+				r.cancelFn = nil
+				r.currentCmd = nil
+				r.mu.Unlock()
+				return
+			default:
 			}
 
 			result := CheckResult{
@@ -120,7 +117,17 @@ func (r *Runner) Start(partitions []string) error {
 				result.ExitCode = -1
 			} else {
 				cmd := exec.Command("fsck.fat", "-n", "-v", imgPath)
+
+				r.mu.Lock()
+				r.currentCmd = cmd
+				r.mu.Unlock()
+
 				output, err := cmd.CombinedOutput()
+
+				r.mu.Lock()
+				r.currentCmd = nil
+				r.mu.Unlock()
+
 				result.Output = string(output)
 				result.FinishedAt = time.Now()
 
@@ -148,13 +155,14 @@ func (r *Runner) Start(partitions []string) error {
 		r.running = false
 		r.current = nil
 		r.cancelFn = nil
+		r.currentCmd = nil
 		r.mu.Unlock()
 	}()
 
 	return nil
 }
 
-// Cancel stops the current fsck operation.
+// Cancel stops the current fsck operation, killing the running process if active.
 func (r *Runner) Cancel() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -165,6 +173,9 @@ func (r *Runner) Cancel() error {
 
 	if r.cancelFn != nil {
 		r.cancelFn()
+	}
+	if r.currentCmd != nil && r.currentCmd.Process != nil {
+		r.currentCmd.Process.Kill()
 	}
 	r.running = false
 	r.current = nil

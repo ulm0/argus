@@ -108,7 +108,8 @@ func (r *Runner) GetLastCheck(partition int) *HistoryEntry {
 
 	for i := len(r.history) - 1; i >= 0; i-- {
 		if r.history[i].Partition == partition {
-			return &r.history[i]
+			entry := r.history[i]
+			return &entry
 		}
 	}
 	return nil
@@ -193,7 +194,11 @@ func (r *Runner) getImagePath(partition int) string {
 func (r *Runner) saveStatus() {
 	path := filepath.Join(r.cfg.GadgetDir, "fsck_status.json")
 	data, _ := json.Marshal(r.status)
-	os.WriteFile(path, data, 0644)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return
+	}
+	os.Rename(tmp, path)
 }
 
 func (r *Runner) loadHistory() {
@@ -208,5 +213,9 @@ func (r *Runner) loadHistory() {
 func (r *Runner) saveHistory() {
 	path := filepath.Join(r.cfg.GadgetDir, "fsck_history.json")
 	data, _ := json.Marshal(r.history)
-	os.WriteFile(path, data, 0644)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return
+	}
+	os.Rename(tmp, path)
 }

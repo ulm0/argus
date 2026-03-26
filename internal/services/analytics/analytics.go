@@ -201,20 +201,6 @@ func (s *Service) GetCompleteAnalytics() CompleteAnalytics {
 	}
 }
 
-func getDiskUsage(path string) PartitionUsage {
-	var used int64
-	filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() {
-			used += info.Size()
-		}
-		return nil
-	})
-	// This is approximate; real implementation uses syscall.Statfs on Linux
-	return PartitionUsage{
-		UsedBytes: used,
-	}
-}
-
 func countAndSizeVideos(dir string) (int, int64) {
 	count := 0
 	var size int64
