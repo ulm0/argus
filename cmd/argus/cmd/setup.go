@@ -501,12 +501,7 @@ func setupConfigureBoot() error {
 
 func setupConfigureSwap() error {
 	setupLog("Configuring swap...")
-	swapDir := "/var/swap"
-	swapFile := filepath.Join(swapDir, "fsck.swap")
-
-	if err := os.MkdirAll(swapDir, 0700); err != nil {
-		return fmt.Errorf("mkdir swap dir: %w", err)
-	}
+	swapFile := "/var/argus-fsck.swap"
 
 	if _, err := os.Stat(swapFile); os.IsNotExist(err) {
 		if err := runCmd("fallocate", "-l", "1G", swapFile); err != nil {

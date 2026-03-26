@@ -211,7 +211,7 @@ func removeSystemConfigs() {
 }
 
 func removeSwap() {
-	swapFile := "/var/swap/fsck.swap"
+	swapFile := "/var/argus-fsck.swap"
 	if _, err := os.Stat(swapFile); err == nil {
 		_ = runCmd("swapoff", swapFile)
 		_ = os.Remove(swapFile)
