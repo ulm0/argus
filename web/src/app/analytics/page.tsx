@@ -115,7 +115,12 @@ export default function AnalyticsPage() {
   }
 
   const health = dashboard.storage_health;
-  const style = HEALTH_STYLES[health.status] || HEALTH_STYLES.healthy;
+  const style = HEALTH_STYLES[health?.status] || HEALTH_STYLES.healthy;
+  const alerts = health?.alerts ?? [];
+  const recommendations = health?.recommendations ?? [];
+  const partitionUsage = dashboard.partition_usage ?? [];
+  const videoStatistics = dashboard.video_statistics ?? [];
+  const folderBreakdown = dashboard.folder_breakdown ?? [];
 
   return (
     <div className="w-full space-y-6 p-6 lg:p-8">
@@ -131,21 +136,21 @@ export default function AnalyticsPage() {
       <section className={`rounded p-6 shadow-sm ${style.bg}`}>
         <div className="flex items-center gap-3">
           <span className={`h-3 w-3 rounded-full ${style.dot}`} />
-          <h2 className={`text-lg font-bold capitalize ${style.text}`}>{health.status}</h2>
-          <span className={`ml-auto text-sm ${style.text}`}>Score: {health.score}/100</span>
+          <h2 className={`text-lg font-bold capitalize ${style.text}`}>{health?.status}</h2>
+          <span className={`ml-auto text-sm ${style.text}`}>Score: {health?.score}/100</span>
         </div>
-        {health.alerts.length > 0 && (
+        {alerts.length > 0 && (
           <ul className="mt-3 space-y-1">
-            {health.alerts.map((a, i) => (
+            {alerts.map((a, i) => (
               <li key={i} className={`text-xs ${style.text} opacity-80`}>&bull; {a}</li>
             ))}
           </ul>
         )}
-        {health.recommendations.length > 0 && (
+        {recommendations.length > 0 && (
           <div className="mt-3">
             <p className={`text-xs font-semibold ${style.text}`}>Recommendations:</p>
             <ul className="mt-1 space-y-0.5">
-              {health.recommendations.map((r, i) => (
+              {recommendations.map((r, i) => (
                 <li key={i} className={`text-xs ${style.text} opacity-70`}>&rarr; {r}</li>
               ))}
             </ul>
@@ -172,7 +177,7 @@ export default function AnalyticsPage() {
       <section className="rounded bg-[var(--color-bg-card)] p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">Partition Usage</h2>
         <div className="mt-4 space-y-4">
-          {dashboard.partition_usage?.map((p: PartitionUsage) => (
+          {partitionUsage.map((p: PartitionUsage) => (
             <div key={p.name}>
               <div className="flex items-center justify-between text-sm">
                 <span className="font-medium text-[var(--color-text-primary)]">{p.label || p.name}</span>
@@ -188,7 +193,7 @@ export default function AnalyticsPage() {
       </section>
 
       {/* Video Stats */}
-      {dashboard.video_statistics && dashboard.video_statistics.length > 0 && (
+      {videoStatistics.length > 0 && (
         <section className="rounded bg-[var(--color-bg-card)] p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">Video Statistics</h2>
           <div className="mt-4 overflow-x-auto">
@@ -201,7 +206,7 @@ export default function AnalyticsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--color-border)]">
-                {dashboard.video_statistics.map((vs: VideoStats) => (
+                {videoStatistics.map((vs: VideoStats) => (
                   <tr key={vs.folder}>
                     <td className="py-2 pr-4 font-medium text-[var(--color-text-primary)]">{vs.folder}</td>
                     <td className="py-2 pr-4 text-right tabular-nums text-[var(--color-text-secondary)]">{vs.count}</td>
@@ -215,11 +220,11 @@ export default function AnalyticsPage() {
       )}
 
       {/* Folder Breakdown */}
-      {dashboard.folder_breakdown && dashboard.folder_breakdown.length > 0 && (
+      {folderBreakdown.length > 0 && (
         <section className="rounded bg-[var(--color-bg-card)] p-6 shadow-sm">
           <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">Folder Breakdown</h2>
           <div className="mt-4 space-y-2">
-            {dashboard.folder_breakdown.map((fb) => (
+            {folderBreakdown.map((fb) => (
               <div key={fb.name}>
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-[var(--color-text-primary)]">{fb.name}</span>

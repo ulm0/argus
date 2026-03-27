@@ -3,8 +3,10 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/ulm0/argus/internal/config"
+	"github.com/ulm0/argus/internal/logger"
 )
 
 // ConfigHandler exposes config read and partial-update endpoints.
@@ -28,6 +30,7 @@ type configResponse struct {
 	Web      webConfigPublic      `json:"web"`
 	Telegram telegramConfigPublic `json:"telegram"`
 	Update   updateConfigPublic   `json:"update"`
+	LogLevel string               `json:"log_level"`
 
 	// Read-only info (not patchable)
 	Storage storageInfo `json:"storage"`
@@ -141,6 +144,7 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 			CheckOnStartup: cfg.Update.CheckOnStartup,
 			Channel:        cfg.Update.Channel,
 		},
+		LogLevel: cfg.LogLevel,
 		Storage: storageInfo{
 			CamName:          cfg.DiskImages.CamName,
 			CamLabel:         cfg.DiskImages.CamLabel,
@@ -166,6 +170,7 @@ type patchRequest struct {
 	Web      *webPatch      `json:"web,omitempty"`
 	Telegram *telegramPatch `json:"telegram,omitempty"`
 	Update   *updatePatch   `json:"update,omitempty"`
+	LogLevel *string        `json:"log_level,omitempty"`
 }
 
 type networkPatch struct {
@@ -334,6 +339,15 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		if p.Channel != nil {
 			cfg.Update.Channel = *p.Channel
 		}
+	}
+
+	if req.LogLevel != nil {
+		lvl := strings.TrimSpace(strings.ToLower(*req.LogLevel))
+		if !logger.SetLevelFromString(lvl) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid log_level: " + *req.LogLevel})
+			return
+		}
+		cfg.LogLevel = lvl
 	}
 
 	if err := cfg.Save(); err != nil {

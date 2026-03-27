@@ -491,6 +491,7 @@ export interface ConfigResponse {
   web: WebConfigPublic;
   telegram: TelegramConfigPublic;
   update: UpdateConfigPublic;
+  log_level: string;
   storage: StorageInfo;
 }
 

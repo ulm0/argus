@@ -34,6 +34,11 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 				return fmt.Errorf("failed to load config from %s: %w", resolved, err)
 			}
 			cfg := config.Get()
+
+			if !logger.SetLevelFromString(cfg.LogLevel) {
+				logger.L.WithField("value", cfg.LogLevel).Warn("invalid log_level in config, falling back to debug")
+			}
+
 			logger.L.WithField("gadget_dir", cfg.GadgetDir).WithField("port", cfg.Network.WebPort).Info("Argus starting")
 
 			handlers.SetVersionProvider(func() string { return Version })

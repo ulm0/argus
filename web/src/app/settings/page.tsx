@@ -58,6 +58,9 @@ export default function SettingsPage() {
   const [webMaxUpload, setWebMaxUpload] = useState(0);
   const [webMaxChunk, setWebMaxChunk] = useState(0);
 
+  // Editable states — Log Level
+  const [logLevel, setLogLevel] = useState("debug");
+
   // Editable states — Update
   const [updateAuto, setUpdateAuto] = useState(false);
   const [updateCheckOnStartup, setUpdateCheckOnStartup] = useState(true);
@@ -79,6 +82,7 @@ export default function SettingsPage() {
     try {
       const data = await api.getConfig();
       setCfg(data);
+      setLogLevel(data.log_level || "debug");
       setWebMaxChimeSize(data.web.max_lock_chime_size);
       setWebMaxChimeDur(data.web.max_lock_chime_duration);
       setWebMinChimeDur(data.web.min_lock_chime_duration);
@@ -159,6 +163,43 @@ export default function SettingsPage() {
           View and edit application configuration. Storage settings are set once at setup and
           cannot be changed here.
         </p>
+      </div>
+
+      {/* ── Log Level ──────────────────────────── */}
+      <div className={cardCls}>
+        <SectionHeader
+          title="Logging"
+          description="Set the application log verbosity. Changes take effect immediately."
+        />
+        <div className="max-w-xs">
+          <label className={fieldLabel} htmlFor="log-level">
+            Log level
+          </label>
+          <select
+            id="log-level"
+            value={logLevel}
+            onChange={(e) => setLogLevel(e.target.value)}
+            className={inputCls}
+          >
+            <option value="trace">Trace</option>
+            <option value="debug">Debug</option>
+            <option value="info">Info</option>
+            <option value="warning">Warning</option>
+            <option value="error">Error</option>
+            <option value="fatal">Fatal</option>
+          </select>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            className={btnPrimaryCls}
+            disabled={saving === "log_level"}
+            onClick={() =>
+              saveSection("log_level", { log_level: logLevel })
+            }
+          >
+            {saving === "log_level" ? "Saving…" : "Save"}
+          </button>
+        </div>
       </div>
 
       {/* ── Storage (read-only) ─────────────────── */}

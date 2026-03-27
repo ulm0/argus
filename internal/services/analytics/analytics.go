@@ -127,8 +127,10 @@ func (s *Service) GetStorageHealth() HealthStatus {
 	usages := s.GetPartitionUsage()
 
 	health := HealthStatus{
-		Status: "healthy",
-		Score:  100,
+		Status:          "healthy",
+		Score:           100,
+		Alerts:          []string{},
+		Recommendations: []string{},
 	}
 
 	for _, u := range usages {
@@ -165,7 +167,7 @@ func (s *Service) GetCompleteAnalytics() CompleteAnalytics {
 	videoStats := s.GetVideoStatistics()
 	health := s.GetStorageHealth()
 
-	var breakdowns []FolderBreakdown
+	breakdowns := []FolderBreakdown{}
 	for _, vs := range videoStats {
 		priority := "low"
 		if vs.Folder == "SentryClips" || vs.Folder == "SavedClips" {
@@ -190,6 +192,13 @@ func (s *Service) GetCompleteAnalytics() CompleteAnalytics {
 			estimate["minutes_remaining"] = minutesLeft
 			estimate["hours_remaining"] = minutesLeft / 60
 		}
+	}
+
+	if usages == nil {
+		usages = []PartitionUsage{}
+	}
+	if videoStats == nil {
+		videoStats = []VideoStats{}
 	}
 
 	return CompleteAnalytics{

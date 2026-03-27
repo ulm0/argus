@@ -21,6 +21,7 @@ type Config struct {
 	Web          WebConfig          `yaml:"web"`
 	Telegram     TelegramConfig     `yaml:"telegram"`
 	Update       UpdateConfig       `yaml:"update"`
+	LogLevel     string             `yaml:"log_level"`
 
 	// Computed paths (not from YAML)
 	GadgetDir      string `yaml:"-"`
@@ -224,6 +225,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.Update.Channel == "" {
 		c.Update.Channel = "stable"
+	}
+	if c.LogLevel == "" {
+		c.LogLevel = "debug"
 	}
 }
 

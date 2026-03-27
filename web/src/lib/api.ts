@@ -533,6 +533,7 @@ type ConfigPatch = {
   web?: Partial<WebConfigPublic>;
   telegram?: Partial<TelegramConfigPublic>;
   update?: Partial<UpdateConfigPublic>;
+  log_level?: string;
 };
 
 export function patchConfig(patch: ConfigPatch): Promise<StatusResponse> {

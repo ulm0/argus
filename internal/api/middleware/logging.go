@@ -17,6 +17,14 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// Flush implements http.Flusher by delegating to the underlying ResponseWriter
+// when it supports flushing. This is required for SSE streaming endpoints.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // Logging is HTTP middleware that logs each request's method, path, status and duration.
 func Logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
