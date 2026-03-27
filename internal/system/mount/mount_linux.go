@@ -3,12 +3,29 @@
 package mount
 
 import (
+	"fmt"
 	"os"
 	"runtime"
 	"syscall"
 
 	"github.com/ulm0/argus/internal/logger"
 )
+
+func (m *Manager) mountLoopReadOnlyUserImpl(source, target, fsType string, uid, gid int) error {
+	flags := uintptr(syscall.MS_RDONLY | syscall.MS_NOATIME)
+	opts := fmt.Sprintf("uid=%d,gid=%d,umask=022", uid, gid)
+	switch fsType {
+	case "exfat":
+		opts += ",iocharset=utf8"
+	case "vfat":
+		opts += ",iocharset=utf8,shortname=mixed"
+	default:
+		opts = "ro"
+	}
+	return inPID1Namespace(func() error {
+		return syscall.Mount(source, target, fsType, flags, opts)
+	})
+}
 
 func (m *Manager) mountImpl(source, target, fsType string, readOnly bool) error {
 	flags := uintptr(syscall.MS_NOATIME)

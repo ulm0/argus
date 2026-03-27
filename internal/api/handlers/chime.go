@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 
 	"github.com/ulm0/argus/internal/config"
 	"github.com/ulm0/argus/internal/services/chime"
+	partutil "github.com/ulm0/argus/internal/services/partition"
 )
 
 type ChimeHandler struct {
@@ -26,8 +28,13 @@ func NewChimeHandler(cfg *config.Config) *ChimeHandler {
 	}
 }
 
+// Lock chimes live on the LightShow partition (part2), same as TeslaUSB.
 func (h *ChimeHandler) mountPath() string {
-	return h.cfg.MountPath("part1", false)
+	p := partutil.AccessiblePath(h.cfg, "part2")
+	if info, err := os.Stat(p); err == nil && info.IsDir() {
+		return p
+	}
+	return ""
 }
 
 func (h *ChimeHandler) chimesDir() string {

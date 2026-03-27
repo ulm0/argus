@@ -3,15 +3,19 @@ package mode
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ulm0/argus/internal/config"
+	"github.com/ulm0/argus/internal/logger"
 	"github.com/ulm0/argus/internal/system/gadget"
 	"github.com/ulm0/argus/internal/system/loop"
 	"github.com/ulm0/argus/internal/system/mount"
+	"github.com/ulm0/argus/internal/system/samba"
 )
 
 type ModeInfo struct {
@@ -55,16 +59,28 @@ func (s *Service) CurrentMode() ModeInfo {
 }
 
 // SwitchToPresent puts the USB gadget into "present" mode:
-// unmounts all edit-mode partitions, assigns disk images to LUNs, and binds the gadget to UDC.
+// unmounts all edit-mode partitions, assigns disk images to LUNs, binds the gadget to UDC,
+// and mounts local read-only views (TeslaUSB parity).
 func (s *Service) SwitchToPresent() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.prepareSystemForPresent(); err != nil {
+		return fmt.Errorf("prepare present: %w", err)
+	}
 
 	mntMgr := mount.NewManager()
 	loopMgr := loop.NewManager()
 	gadgetMgr := gadget.NewManager()
 
-	// Unmount all RW partitions and detach loop devices
+	for _, part := range s.cfg.USBPartitions() {
+		roPath := s.cfg.MountPath(part, true)
+		if mntMgr.IsMounted(roPath) {
+			if err := mntMgr.SafeUnmountDir(roPath); err != nil {
+				return fmt.Errorf("unmount %s: %w", roPath, err)
+			}
+		}
+	}
 	for _, part := range s.cfg.USBPartitions() {
 		rwPath := s.cfg.MountPath(part, false)
 		if mntMgr.IsMounted(rwPath) {
@@ -75,45 +91,50 @@ func (s *Service) SwitchToPresent() error {
 	}
 	mntMgr.Sync()
 
-	// Detach loop devices for each image
 	for _, imgPath := range s.enabledImagePaths() {
 		_ = loopMgr.DetachAllForFile(imgPath)
 	}
 
-	// Build LUN configs for each enabled partition
 	luns := s.buildLUNConfigs()
+	serial, err := gadget.LoadOrCreateSerial(s.cfg.GadgetDir)
+	if err != nil {
+		return fmt.Errorf("usb serial: %w", err)
+	}
 
-	// Create gadget structure if not present, then update LUN files
-	if !gadgetMgr.IsPresent() {
-		if err := gadgetMgr.Create(luns); err != nil {
-			return fmt.Errorf("gadget create: %w", err)
+	if _, err := os.Stat(gadgetMgr.GadgetDir()); err == nil {
+		if err := gadgetMgr.Remove(); err != nil {
+			logger.L.WithError(err).Warn("gadget remove before recreate")
 		}
-		if err := gadgetMgr.Bind(); err != nil {
-			return fmt.Errorf("gadget bind: %w", err)
-		}
-	} else {
-		// Already bound — just update LUN backing files
-		for _, lun := range luns {
-			if err := gadgetMgr.SetLUNFile(lun.Number, lun.File); err != nil {
-				return fmt.Errorf("set lun %d: %w", lun.Number, err)
-			}
-		}
+	}
+
+	if err := gadgetMgr.Create(luns, serial); err != nil {
+		return fmt.Errorf("gadget create: %w", err)
+	}
+	if err := gadgetMgr.Bind(); err != nil {
+		return fmt.Errorf("gadget bind: %w", err)
+	}
+
+	if err := s.mountPresentReadOnlyLocal(mntMgr, loopMgr); err != nil {
+		return err
 	}
 
 	return s.writeStateFile("present")
 }
 
 // SwitchToEdit puts the system into "edit" mode:
-// unbinds the gadget, clears LUN files, and mounts disk images as loop devices RW.
+// unbinds the gadget, clears LUN files, unmounts present-mode RO mounts, and mounts RW for Samba.
 func (s *Service) SwitchToEdit() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.waitQuickEditLocks(quickEditLockTimeout); err != nil {
+		return fmt.Errorf("prepare edit: %w", err)
+	}
 
 	gadgetMgr := gadget.NewManager()
 	loopMgr := loop.NewManager()
 	mntMgr := mount.NewManager()
 
-	// Clear LUN backing files so the host releases the images
 	if gadgetMgr.IsPresent() {
 		for _, lun := range s.buildLUNConfigs() {
 			_ = gadgetMgr.ClearLUN(lun.Number)
@@ -125,7 +146,19 @@ func (s *Service) SwitchToEdit() error {
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// Mount each enabled disk image RW via loop
+	for _, part := range s.cfg.USBPartitions() {
+		roPath := s.cfg.MountPath(part, true)
+		if mntMgr.IsMounted(roPath) {
+			if err := mntMgr.SafeUnmountDir(roPath); err != nil {
+				return fmt.Errorf("unmount RO %s: %w", roPath, err)
+			}
+		}
+	}
+	mntMgr.Sync()
+	for _, imgPath := range s.enabledImagePaths() {
+		_ = loopMgr.DetachAllForFile(imgPath)
+	}
+
 	pairs := s.enabledPartitionImagePairs()
 	for _, pi := range pairs {
 		mntPoint := s.cfg.MountPath(pi.part, false)
@@ -151,23 +184,80 @@ func (s *Service) SwitchToEdit() error {
 		}
 	}
 
+	sm := samba.NewManager(s.cfg)
+	if err := sm.RestartSambaServices(); err != nil {
+		logger.L.WithError(err).Warn("restart Samba after edit mode")
+	}
+
 	return s.writeStateFile("edit")
 }
 
 // buildLUNConfigs returns the LUN slice for the currently enabled partitions.
+// LUN0 TeslaCam is RW; Lightshow and Music LUNs are RO (TeslaUSB parity).
 func (s *Service) buildLUNConfigs() []gadget.LUNConfig {
 	var luns []gadget.LUNConfig
 	idx := 0
 	luns = append(luns, gadget.LUNConfig{Number: idx, File: s.cfg.ImgCamPath, ReadOnly: false, Removable: true})
 	idx++
 	if s.cfg.DiskImages.Part2Enabled {
-		luns = append(luns, gadget.LUNConfig{Number: idx, File: s.cfg.ImgLightshow, ReadOnly: false, Removable: true})
+		luns = append(luns, gadget.LUNConfig{Number: idx, File: s.cfg.ImgLightshow, ReadOnly: true, Removable: true})
 		idx++
 	}
 	if s.cfg.DiskImages.MusicEnabled {
-		luns = append(luns, gadget.LUNConfig{Number: idx, File: s.cfg.ImgMusicPath, ReadOnly: false, Removable: true})
+		luns = append(luns, gadget.LUNConfig{Number: idx, File: s.cfg.ImgMusicPath, ReadOnly: true, Removable: true})
 	}
 	return luns
+}
+
+func targetUserUIDGID(cfg *config.Config) (uid, gid int, err error) {
+	u, err := user.Lookup(cfg.Installation.TargetUser)
+	if err != nil {
+		return 0, 0, err
+	}
+	uid, err = strconv.Atoi(u.Uid)
+	if err != nil {
+		return 0, 0, err
+	}
+	gid, err = strconv.Atoi(u.Gid)
+	if err != nil {
+		return 0, 0, err
+	}
+	return uid, gid, nil
+}
+
+func (s *Service) mountPresentReadOnlyLocal(mntMgr *mount.Manager, loopMgr *loop.Manager) error {
+	uid, gid, err := targetUserUIDGID(s.cfg)
+	if err != nil {
+		logger.L.WithError(err).Warn("target user UID/GID; using 0 for RO mounts")
+	}
+
+	for _, pi := range s.enabledPartitionImagePairs() {
+		roPath := s.cfg.MountPath(pi.part, true)
+		if mntMgr.IsMounted(roPath) {
+			continue
+		}
+		loopDev, err := loopMgr.Create(pi.imgPath, true)
+		if err != nil {
+			return fmt.Errorf("loop RO %s: %w", pi.part, err)
+		}
+		fsType, err := mntMgr.DetectFSType(loopDev)
+		if err != nil || fsType == "" {
+			fsType = "vfat"
+		}
+		switch fsType {
+		case "vfat", "exfat":
+			if err := mntMgr.MountLoopReadOnlyUser(loopDev, roPath, fsType, uid, gid); err != nil {
+				_ = loopMgr.Detach(loopDev)
+				return fmt.Errorf("mount RO %s: %w", pi.part, err)
+			}
+		default:
+			if err := mntMgr.Mount(loopDev, roPath, fsType, true); err != nil {
+				_ = loopMgr.Detach(loopDev)
+				return fmt.Errorf("mount RO %s: %w", pi.part, err)
+			}
+		}
+	}
+	return nil
 }
 
 // enabledImagePaths returns image file paths for all currently enabled partitions.

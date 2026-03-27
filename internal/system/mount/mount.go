@@ -32,6 +32,18 @@ func (m *Manager) Mount(source, target, fsType string, readOnly bool) error {
 	return m.mountImpl(source, target, fsType, readOnly)
 }
 
+// MountLoopReadOnlyUser mounts a loop device read-only with uid/gid for vfat/exfat (TeslaUSB-style local browsing).
+func (m *Manager) MountLoopReadOnlyUser(source, target, fsType string, uid, gid int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := os.MkdirAll(target, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", target, err)
+	}
+
+	return m.mountLoopReadOnlyUserImpl(source, target, fsType, uid, gid)
+}
+
 // Unmount unmounts a path in the PID 1 mount namespace with retries.
 func (m *Manager) Unmount(target string, maxRetries int) error {
 	m.mu.Lock()

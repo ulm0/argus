@@ -37,6 +37,12 @@ type Config struct {
 type InstallationConfig struct {
 	TargetUser string `yaml:"target_user"`
 	MountDir   string `yaml:"mount_dir"`
+	// BootPresentOnStart runs SwitchToPresent once at process start (replaces TeslaUSB present_usb_on_boot.service).
+	BootPresentOnStart bool `yaml:"boot_present_on_start"`
+	// BootCleanupOnStart runs cleanup against TeslaCam before presenting when cleanup_config.json has boot_cleanup policies.
+	BootCleanupOnStart bool `yaml:"boot_cleanup_on_start"`
+	// BootRandomChimeOnStart picks a random chime from the configured group before presenting (TeslaUSB parity).
+	BootRandomChimeOnStart bool `yaml:"boot_random_chime_on_start"`
 }
 
 type DiskImagesConfig struct {

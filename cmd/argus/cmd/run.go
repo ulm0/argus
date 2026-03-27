@@ -15,9 +15,15 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/ulm0/argus/internal/api"
 	"github.com/ulm0/argus/internal/api/handlers"
+	"github.com/ulm0/argus/internal/boot"
 	"github.com/ulm0/argus/internal/config"
 	"github.com/ulm0/argus/internal/logger"
+	"github.com/ulm0/argus/internal/services/chime"
+	"github.com/ulm0/argus/internal/services/mode"
 	"github.com/ulm0/argus/internal/services/telegram"
+	"github.com/ulm0/argus/internal/system/ap"
+	"github.com/ulm0/argus/internal/system/network"
+	"github.com/ulm0/argus/internal/system/wifi"
 	"github.com/ulm0/argus/internal/updater"
 )
 
@@ -49,7 +55,42 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 				return fmt.Errorf("failed to access embedded web content: %w", err)
 			}
 
-			router := api.NewRouter(cfg, webFS)
+			network.NewOptimizer().Apply()
+
+			runCtx, runCancel := context.WithCancel(context.Background())
+			defer runCancel()
+
+			tgSvc := telegram.NewService(cfg)
+			tgSvc.Start(runCtx)
+
+			modeSvc := mode.NewService(cfg)
+			chSvc := chime.NewService(cfg)
+			boot.RunStartupSequence(runCtx, cfg, modeSvc, chSvc)
+
+			if cfg.OfflineAP.Enabled {
+				wifiMon := wifi.NewMonitor(cfg)
+				apMgr := ap.NewManager(cfg)
+				wifiMon.SetCallbacks(
+					func() { _ = apMgr.StartAP() },
+					func() { _ = apMgr.StopAP() },
+				)
+				wifiMon.Start(runCtx)
+			}
+
+			go func() {
+				t := time.NewTicker(1 * time.Minute)
+				defer t.Stop()
+				for {
+					select {
+					case <-runCtx.Done():
+						return
+					case <-t.C:
+						chSvc.RunSchedulerTick(runCtx)
+					}
+				}
+			}()
+
+			router := api.NewRouter(cfg, webFS, tgSvc)
 
 			addr := fmt.Sprintf(":%d", cfg.Network.WebPort)
 			server := &http.Server{
@@ -63,6 +104,8 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 			go func() {
 				sig := <-sigCh
 				logger.L.WithField("signal", sig).Info("received signal, shutting down")
+				runCancel()
+				tgSvc.Stop()
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				if err := server.Shutdown(ctx); err != nil {

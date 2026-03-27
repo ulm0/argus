@@ -9,6 +9,7 @@ import (
 
 	"github.com/ulm0/argus/internal/config"
 	"github.com/ulm0/argus/internal/services/music"
+	partutil "github.com/ulm0/argus/internal/services/partition"
 )
 
 type MusicHandler struct {
@@ -217,11 +218,9 @@ func (h *MusicHandler) resolveMusicMount() string {
 	if !h.cfg.DiskImages.MusicEnabled {
 		return ""
 	}
-	for _, ro := range []bool{true, false} {
-		path := h.cfg.MountPath("part3", ro)
-		if info, err := os.Stat(path); err == nil && info.IsDir() {
-			return path
-		}
+	p := partutil.AccessiblePath(h.cfg, "part3")
+	if info, err := os.Stat(p); err == nil && info.IsDir() {
+		return p
 	}
 	return ""
 }

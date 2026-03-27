@@ -13,10 +13,15 @@ type TelegramHandler struct {
 	telegramSvc *telegram.Service
 }
 
-func NewTelegramHandler(cfg *config.Config) *TelegramHandler {
+// NewTelegramHandler wires the HTTP API to a Telegram service. If svc is nil, a new service is created
+// (tests); production run passes the same instance started in run.go so Sentry watching is active.
+func NewTelegramHandler(cfg *config.Config, svc *telegram.Service) *TelegramHandler {
+	if svc == nil {
+		svc = telegram.NewService(cfg)
+	}
 	return &TelegramHandler{
 		cfg:         cfg,
-		telegramSvc: telegram.NewService(cfg),
+		telegramSvc: svc,
 	}
 }
 

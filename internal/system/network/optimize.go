@@ -25,6 +25,18 @@ func (o *Optimizer) Apply() {
 	o.enableRTSCTS("wlan0")
 	o.applyTCPTuning()
 	o.setRegulatoryDomain("US")
+	o.setMMCReadAheadKB(2048)
+}
+
+// setMMCReadAheadKB sets read-ahead for the SD card block device when present (TeslaUSB optimize_network.sh).
+func (o *Optimizer) setMMCReadAheadKB(kb int) {
+	p := "/sys/block/mmcblk0/queue/read_ahead_kb"
+	if _, err := os.Stat(p); err != nil {
+		return
+	}
+	if err := os.WriteFile(p, []byte(fmt.Sprintf("%d", kb)), 0644); err != nil {
+		logger.L.WithError(err).Warn("set mmc read_ahead_kb failed")
+	}
 }
 
 func (o *Optimizer) setCPUGovernor(governor string) {

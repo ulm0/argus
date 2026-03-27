@@ -15,6 +15,7 @@ disk_images:
   lightshow_name: usb_lightshow.img
   cam_label: CAM
   lightshow_label: LIGHTSHOW
+  part2_enabled: true
   music_enabled: false
   boot_fsck_enabled: true
 setup:
@@ -182,7 +183,7 @@ func TestComputedPaths(t *testing.T) {
 		t.Fatalf("Load() error: %v", err)
 	}
 
-	gadgetDir := filepath.Dir(filepath.Dir(path))
+	gadgetDir := filepath.Dir(path)
 
 	if cfg.GadgetDir != gadgetDir {
 		t.Errorf("GadgetDir = %q, want %q", cfg.GadgetDir, gadgetDir)
@@ -237,6 +238,7 @@ installation:
 disk_images:
   cam_name: usb_cam.img
   lightshow_name: usb_lightshow.img
+  part2_enabled: true
   music_enabled: true
 network:
   samba_password: pw

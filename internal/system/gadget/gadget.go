@@ -20,7 +20,7 @@ const (
 	usbProduct    = "0x0104" // Multifunction Composite Gadget
 	manufacturer  = "Argus"
 	productName   = "Argus Mass Storage"
-	serialNumber  = "000000000001"
+	maxPowerMA    = "500" // Same as TeslaUSB (mA)
 )
 
 type Manager struct {
@@ -42,12 +42,17 @@ func NewManager() *Manager {
 }
 
 // Create sets up the USB gadget configfs structure without binding to UDC.
-func (m *Manager) Create(luns []LUNConfig) error {
+// serial is written to the USB string descriptor (e.g. from LoadOrCreateSerial).
+func (m *Manager) Create(luns []LUNConfig, serial string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if err := ensureConfigFS(); err != nil {
 		return fmt.Errorf("configfs: %w", err)
+	}
+
+	if strings.TrimSpace(serial) == "" {
+		serial = "0000000000000"
 	}
 
 	// usb_gadget is created by kernel/libcomposite, not by userspace.
@@ -80,7 +85,7 @@ func (m *Manager) Create(luns []LUNConfig) error {
 	strWrites := map[string]string{
 		"manufacturer": manufacturer,
 		"product":      productName,
-		"serialnumber": serialNumber,
+		"serialnumber": serial,
 	}
 	for name, val := range strWrites {
 		if err := writeFilePath(filepath.Join(strDir, name), val); err != nil {
@@ -112,7 +117,7 @@ func (m *Manager) Create(luns []LUNConfig) error {
 	if err := writeFilePath(filepath.Join(cfgDir, "strings", "0x409", "configuration"), "Mass Storage Config"); err != nil {
 		return fmt.Errorf("write config string: %w", err)
 	}
-	if err := writeFilePath(filepath.Join(cfgDir, "MaxPower"), "250"); err != nil {
+	if err := writeFilePath(filepath.Join(cfgDir, "MaxPower"), maxPowerMA); err != nil {
 		return fmt.Errorf("write MaxPower: %w", err)
 	}
 
@@ -145,6 +150,7 @@ func (m *Manager) configureLUN(funcDir string, lun LUNConfig) error {
 	writes := map[string]string{
 		"ro":        ro,
 		"removable": removable,
+		"cdrom":     "0",
 		"nofua":     "1",
 	}
 	for name, val := range writes {
@@ -192,38 +198,83 @@ func (m *Manager) Rebind(delay time.Duration) error {
 	return m.Bind()
 }
 
-// Remove tears down the entire gadget configuration.
+// Remove tears down the entire gadget configuration (TeslaUSB-style ordering).
 func (m *Manager) Remove() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Unbind first
+	if _, err := os.Stat(m.gadgetDir); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+
+	// Unbind UDC first
 	_ = writeFilePath(filepath.Join(m.gadgetDir, "UDC"), "")
+	time.Sleep(300 * time.Millisecond)
+
+	funcDir := filepath.Join(m.gadgetDir, "functions", "mass_storage.usb0")
+	entries, _ := filepath.Glob(filepath.Join(funcDir, "lun.*"))
+	for _, lunDir := range entries {
+		fi, err := os.Stat(lunDir)
+		if err != nil || !fi.IsDir() {
+			continue
+		}
+		filePath := filepath.Join(lunDir, "file")
+		if _, err := os.Stat(filePath); err == nil {
+			_ = writeFilePath(filePath, "")
+		}
+	}
 	time.Sleep(100 * time.Millisecond)
 
-	// Remove config symlinks
 	cfgDir := filepath.Join(m.gadgetDir, "configs", "c.1")
-	entries, _ := os.ReadDir(cfgDir)
-	for _, e := range entries {
+	cfgEntries, _ := os.ReadDir(cfgDir)
+	for _, e := range cfgEntries {
 		if e.Type()&os.ModeSymlink != 0 {
-			os.Remove(filepath.Join(cfgDir, e.Name()))
+			_ = os.Remove(filepath.Join(cfgDir, e.Name()))
 		}
 	}
 
-	// Remove dirs in reverse order
-	dirsToRemove := []string{
-		filepath.Join(cfgDir, "strings", "0x409"),
-		cfgDir,
-		filepath.Join(m.gadgetDir, "functions", "mass_storage.usb0"),
-		filepath.Join(m.gadgetDir, "strings", "0x409"),
-		m.gadgetDir,
+	_ = os.Remove(filepath.Join(cfgDir, "strings", "0x409", "configuration"))
+	_ = os.Remove(filepath.Join(cfgDir, "strings", "0x409"))
+	_ = os.Remove(filepath.Join(cfgDir, "strings"))
+	_ = os.Remove(filepath.Join(cfgDir, "MaxPower"))
+	_ = os.Remove(cfgDir)
+
+	for _, lunDir := range entries {
+		fi, err := os.Stat(lunDir)
+		if err != nil || !fi.IsDir() {
+			continue
+		}
+		_ = os.Remove(filepath.Join(lunDir, "cdrom"))
+		_ = os.Remove(filepath.Join(lunDir, "file"))
+		_ = os.Remove(filepath.Join(lunDir, "nofua"))
+		_ = os.Remove(filepath.Join(lunDir, "removable"))
+		_ = os.Remove(filepath.Join(lunDir, "ro"))
+		_ = os.Remove(lunDir)
 	}
-	for _, d := range dirsToRemove {
-		os.Remove(d)
-	}
+	_ = os.Remove(filepath.Join(funcDir, "stall"))
+	_ = os.Remove(funcDir)
+
+	strDir := filepath.Join(m.gadgetDir, "strings", "0x409")
+	_ = os.Remove(filepath.Join(strDir, "manufacturer"))
+	_ = os.Remove(filepath.Join(strDir, "product"))
+	_ = os.Remove(filepath.Join(strDir, "serialnumber"))
+	_ = os.Remove(strDir)
+	_ = os.Remove(filepath.Join(m.gadgetDir, "strings"))
+
+	_ = os.Remove(filepath.Join(m.gadgetDir, "bcdDevice"))
+	_ = os.Remove(filepath.Join(m.gadgetDir, "bcdUSB"))
+	_ = os.Remove(filepath.Join(m.gadgetDir, "idProduct"))
+	_ = os.Remove(filepath.Join(m.gadgetDir, "idVendor"))
+	_ = os.Remove(filepath.Join(m.gadgetDir, "UDC"))
+	_ = os.Remove(m.gadgetDir)
 
 	return nil
 }
+
+// GadgetDir returns the configfs path for this gadget.
+func (m *Manager) GadgetDir() string { return m.gadgetDir }
 
 // SetLUNFile updates the backing file for a LUN (e.g., to clear or restore it).
 func (m *Manager) SetLUNFile(lunNumber int, filePath string) error {

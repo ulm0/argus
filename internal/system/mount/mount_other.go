@@ -7,6 +7,10 @@ import (
 	"os/exec"
 )
 
+func (m *Manager) mountLoopReadOnlyUserImpl(source, target, fsType string, uid, gid int) error {
+	return fmt.Errorf("mount not supported on this platform (Linux only)")
+}
+
 func (m *Manager) mountImpl(source, target, fsType string, readOnly bool) error {
 	return fmt.Errorf("mount not supported on this platform (Linux only)")
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/ulm0/argus/internal/config"
+	partutil "github.com/ulm0/argus/internal/services/partition"
 	"github.com/ulm0/argus/internal/services/wrap"
 )
 
@@ -203,11 +204,9 @@ func (h *WrapHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *WrapHandler) resolveWrapMount(partition string) string {
-	for _, ro := range []bool{true, false} {
-		path := h.cfg.MountPath(partition, ro)
-		if info, err := os.Stat(path); err == nil && info.IsDir() {
-			return path
-		}
+	p := partutil.AccessiblePath(h.cfg, partition)
+	if info, err := os.Stat(p); err == nil && info.IsDir() {
+		return p
 	}
 	return ""
 }

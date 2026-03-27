@@ -23,6 +23,9 @@ import (
 const defaultConfigYAML = `installation:
   target_user: pi # replaced at runtime by the detected non-root user
   mount_dir: /mnt/gadget
+  boot_present_on_start: false
+  boot_cleanup_on_start: false
+  boot_random_chime_on_start: false
 
 disk_images:
   cam_name: usb_cam.img
@@ -163,17 +166,19 @@ Must be run as root (sudo).`,
 			if err := setupInstallService(installDir, templates); err != nil {
 				return err
 			}
+			setupMaskUsbGadgetServices()
+			setupCleanupForeignGadgets()
 			setupMaskDesktopServices()
 
-		fmt.Println()
-		setupLog("Setup complete!")
-		fmt.Printf("\n  Config:  %s\n", cfgPath)
-		fmt.Printf("  Data:    %s\n", installDir)
-		fmt.Printf("  Binary:  /usr/local/bin/argus\n")
-		fmt.Printf("  Service: argus.service\n\n")
-		fmt.Println("  Edit config.yaml to set your Samba password, WiFi AP credentials, etc.")
-		fmt.Println()
-		setupReboot()
+			fmt.Println()
+			setupLog("Setup complete!")
+			fmt.Printf("\n  Config:  %s\n", cfgPath)
+			fmt.Printf("  Data:    %s\n", installDir)
+			fmt.Printf("  Binary:  /usr/local/bin/argus\n")
+			fmt.Printf("  Service: argus.service\n\n")
+			fmt.Println("  Edit config.yaml to set your Samba password, WiFi AP credentials, etc.")
+			fmt.Println()
+			setupReboot()
 			return nil
 		},
 	}
@@ -479,8 +484,11 @@ func setupConfigureBoot() error {
 	setupLog("Configuring boot parameters...")
 	bootConfig := "/boot/firmware/config.txt"
 
+	if err := ensureLineInConfigTxtAllSection(bootConfig, "dtoverlay=dwc2"); err != nil {
+		setupWarn("boot config [all] dtoverlay=dwc2: %v", err)
+	}
+
 	params := []string{
-		"dtoverlay=dwc2",
 		"dtparam=watchdog=on",
 		"gpu_mem=16",
 	}
@@ -619,6 +627,37 @@ func setupCopyBinary() error {
 	setupLog("Binary installed at %s", binDest)
 	return nil
 }
+func setupMaskUsbGadgetServices() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	for _, svc := range []string{"rpi-usb-gadget.service", "usb-gadget.service"} {
+		runCmdSilent("systemctl", "stop", svc)
+		runCmdSilent("systemctl", "mask", svc)
+	}
+	setupLog("Masked conflicting USB gadget systemd units (best-effort)")
+}
+
+// setupCleanupForeignGadgets removes stale gadget trees under configfs except "argus" (TeslaUSB/setup_usb parity).
+func setupCleanupForeignGadgets() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	base := "/sys/kernel/config/usb_gadget"
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.Name() == "argus" {
+			continue
+		}
+		path := filepath.Join(base, e.Name())
+		setupLog("Removing foreign USB gadget %q (best-effort)", e.Name())
+		_ = os.RemoveAll(path)
+	}
+}
+
 func setupMaskDesktopServices() {
 	for _, svc := range []string{"pipewire", "pipewire-pulse", "wireplumber", "colord"} {
 		runCmdSilent("systemctl", "--user", "mask", svc+".service")
@@ -669,6 +708,44 @@ func runCmdSilent(name string, args ...string) {
 
 func createSparseFile(path, size string) error {
 	return runCmd("truncate", "-s", size, path)
+}
+
+// ensureLineInConfigTxtAllSection inserts a line under the [all] section in config.txt (creates [all] if absent).
+func ensureLineInConfigTxtAllSection(filePath, line string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	raw := strings.ReplaceAll(string(data), "\r\n", "\n")
+	lines := strings.Split(raw, "\n")
+	allIdx := -1
+	for i, l := range lines {
+		if strings.EqualFold(strings.TrimSpace(l), "[all]") {
+			allIdx = i
+			break
+		}
+	}
+	if allIdx == -1 {
+		if len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) != "" {
+			lines = append(lines, "")
+		}
+		lines = append(lines, "[all]", line)
+		return os.WriteFile(filePath, []byte(strings.Join(lines, "\n")+"\n"), 0644)
+	}
+	for i := allIdx + 1; i < len(lines); i++ {
+		l := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(l, "[") && strings.HasSuffix(l, "]") {
+			break
+		}
+		if l == line {
+			return nil
+		}
+	}
+	out := make([]string, 0, len(lines)+1)
+	out = append(out, lines[:allIdx+1]...)
+	out = append(out, line)
+	out = append(out, lines[allIdx+1:]...)
+	return os.WriteFile(filePath, []byte(strings.Join(out, "\n")+"\n"), 0644)
 }
 
 func appendLineIfMissing(filePath, line string) error {
