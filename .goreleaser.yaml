@@ -5,7 +5,7 @@ project_name: argus
 # Build the Next.js frontend before compiling Go so web/out/ is populated for embed.
 before:
   hooks:
-    - sh -c "cd web && pnpm install --frozen-lockfile && pnpm run build"
+    - sh -c "cd web && pnpm install --frozen-lockfile && pnpm run build && rm -rf ../cmd/argus/web/out && cp -r out ../cmd/argus/web/out"
 
 builds:
   - id: argus

@@ -193,52 +193,58 @@ func NewRouter(cfg *config.Config, webFS fs.FS) http.Handler {
 	api.HandleFunc("/logs", logsH.Stream).Methods("GET")
 
 	// Serve embedded Next.js static files for all non-API routes.
-	// http.FileServer redirects /index.html → / (canonical clean-URL behaviour),
-	// which would loop if we naively set r.URL.Path = "/index.html". Instead we
-	// serve the root and SPA-fallback cases directly via fs.Open + http.ServeContent
-	// so FileServer never sees a request for index.html itself.
+	//
+	// Next.js is built with trailingSlash:true, so every page is exported as a
+	// directory containing index.html:
+	//   /          → index.html
+	//   /analytics → analytics/index.html
+	//   /videos    → videos/index.html
+	//
+	// http.FileServer has a built-in redirect: a request for /foo/index.html is
+	// 301'd to /foo/.  We avoid triggering that by never forwarding bare index.html
+	// requests to FileServer; instead we open and stream the file ourselves via
+	// serveFile, which bypasses the redirect.
 	fileServer := http.FileServer(http.FS(webFS))
-	r.HandleFunc("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
-	})
 	r.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/")
 
-		// Redirect /index.html → / so the canonical URL is always clean.
+		// Redirect /index.html → / so browsers always use the clean URL.
 		if path == "index.html" {
 			http.Redirect(w, r, "/", http.StatusMovedPermanently)
 			return
 		}
 
+		// Root: serve index.html directly.
 		if path == "" {
-			serveIndexHTML(w, r, webFS)
+			serveFile(w, r, webFS, "index.html")
 			return
 		}
 
-		// Check if the exact path exists in the FS.
-		if _, err := fs.Stat(webFS, path); err == nil {
+		// Exact asset match (JS, CSS, images, _next/…): let FileServer handle it.
+		if info, err := fs.Stat(webFS, path); err == nil && !info.IsDir() {
 			fileServer.ServeHTTP(w, r)
 			return
 		}
 
-		// Try appending .html for Next.js page files (e.g. /about → about.html).
-		if _, err := fs.Stat(webFS, path+".html"); err == nil {
-			r.URL.Path = "/" + path + ".html"
-			fileServer.ServeHTTP(w, r)
+		// Directory route (e.g. /analytics or /analytics/): serve its index.html
+		// directly to avoid the FileServer redirect loop on directory/index.html.
+		clean := strings.TrimSuffix(path, "/")
+		if _, err := fs.Stat(webFS, clean+"/index.html"); err == nil {
+			serveFile(w, r, webFS, clean+"/index.html")
 			return
 		}
 
-		// SPA fallback: serve index.html for client-side routes.
-		serveIndexHTML(w, r, webFS)
+		// Fallback: serve the root index.html for any unknown path.
+		serveFile(w, r, webFS, "index.html")
 	})
 
 	return r
 }
 
-// serveIndexHTML opens index.html from the embedded FS and writes it directly,
-// bypassing http.FileServer to avoid its /index.html → / redirect loop.
-func serveIndexHTML(w http.ResponseWriter, r *http.Request, webFS fs.FS) {
-	f, err := webFS.Open("index.html")
+// serveFile streams a single file from the embedded FS without going through
+// http.FileServer, preventing its /dir/index.html → /dir/ redirect loop.
+func serveFile(w http.ResponseWriter, r *http.Request, webFS fs.FS, name string) {
+	f, err := webFS.Open(name)
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -251,6 +257,5 @@ func serveIndexHTML(w http.ResponseWriter, r *http.Request, webFS fs.FS) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	http.ServeContent(w, r, "index.html", stat.ModTime(), f.(io.ReadSeeker))
+	http.ServeContent(w, r, name, stat.ModTime(), f.(io.ReadSeeker))
 }
