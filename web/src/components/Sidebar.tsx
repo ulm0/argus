@@ -162,6 +162,7 @@ export default function Sidebar() {
   const [currentVersion, setCurrentVersion] = useState("dev");
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [updateChipFrame, setUpdateChipFrame] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -170,6 +171,19 @@ export default function Sidebar() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!(updateAvailable && latestVersion && latestVersion !== currentVersion)) {
+      setUpdateChipFrame(0);
+      return;
+    }
+
+    const id = setInterval(() => {
+      setUpdateChipFrame((prev) => (prev + 1) % 2);
+    }, 2600);
+
+    return () => clearInterval(id);
+  }, [updateAvailable, latestVersion, currentVersion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -208,18 +222,26 @@ export default function Sidebar() {
   const navContent = (
     <div className="flex h-full flex-col">
       {/* Logo */}
-      <div className="flex h-16 items-center justify-center px-4">
-        <div className="flex flex-wrap items-center justify-center gap-2">
+      <div className="flex min-h-16 flex-col items-center justify-center gap-1 px-4 py-2">
+        <div className="flex items-center justify-center gap-1.5">
           <span className="text-[17px] font-semibold tracking-wide text-white">Argus</span>
-          <span className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-medium text-white">
+          <span className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-2 py-0.5 text-[11px] font-medium leading-4 text-white">
             {currentVersion}
           </span>
-          {updateAvailable && latestVersion && latestVersion !== currentVersion && (
-            <span className="inline-flex items-center rounded-full bg-[#005aff] px-2.5 py-1 text-xs font-semibold text-white">
-              New {latestVersion}
-            </span>
-          )}
         </div>
+        {updateAvailable && latestVersion && latestVersion !== currentVersion && (
+          <span className="inline-flex items-center rounded-full bg-[#005aff] px-2 py-0.5 text-[11px] font-semibold leading-4 text-white">
+            <span className="relative inline-block w-[110px] overflow-hidden text-center align-middle">
+              <span
+                className="inline-flex w-[220px] transition-transform duration-500 ease-in-out"
+                style={{ transform: `translateX(-${updateChipFrame * 110}px)` }}
+              >
+                <span className="inline-flex w-[110px] items-center justify-center">New {latestVersion}</span>
+                <span className="inline-flex w-[110px] items-center justify-center">Update available</span>
+              </span>
+            </span>
+          </span>
+        )}
       </div>
 
       {/* Nav links */}
