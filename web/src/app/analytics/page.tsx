@@ -28,6 +28,12 @@ function formatDate(ts: string): string {
   }
 }
 
+function formatCpuCapacity(mhz?: number): string {
+  if (!mhz || mhz <= 0) return "N/A";
+  if (mhz >= 1000) return `${(mhz / 1000).toFixed(1)} GHz`;
+  return `${mhz.toFixed(0)} MHz`;
+}
+
 const HEALTH_STYLES: Record<string, { bg: string; text: string; dot: string }> = {
   healthy: { bg: "bg-[var(--color-success-bg)]", text: "text-[var(--color-success)]", dot: "bg-[var(--color-success)]" },
   caution: { bg: "bg-[var(--color-warning-bg)]", text: "text-[var(--color-warning)]", dot: "bg-[var(--color-warning)]" },
@@ -152,20 +158,22 @@ export default function AnalyticsPage() {
             <div className="rounded bg-[var(--color-bg-card-nested)] p-4">
               <p className="text-xs text-[var(--color-text-muted)]">CPU Capacity</p>
               <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">
-                {systemMetrics.cpu.capacity_mhz ? `${systemMetrics.cpu.capacity_mhz.toFixed(0)} MHz` : "N/A"}
+                {formatCpuCapacity(systemMetrics.cpu.capacity_mhz)}
               </p>
               <p className="mt-1 text-xs text-[var(--color-text-muted)]">
                 Temp: {systemMetrics.cpu.temp_c ? `${systemMetrics.cpu.temp_c.toFixed(1)} °C` : "N/A"}
               </p>
             </div>
 
-            <div className="rounded bg-[var(--color-bg-card-nested)] p-4">
-              <p className="text-xs text-[var(--color-text-muted)]">Power Draw</p>
-              <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">
-                {systemMetrics.power.watts ? `${systemMetrics.power.watts.toFixed(2)} W` : "N/A"}
-              </p>
-              <p className="mt-1 text-xs text-[var(--color-text-muted)]">Device sensor dependent</p>
-            </div>
+            {systemMetrics.power.watts !== undefined && (
+              <div className="rounded bg-[var(--color-bg-card-nested)] p-4">
+                <p className="text-xs text-[var(--color-text-muted)]">Power Draw</p>
+                <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">
+                  {systemMetrics.power.watts.toFixed(2)} W
+                </p>
+                <p className="mt-1 text-xs text-[var(--color-text-muted)]">Device sensor dependent</p>
+              </div>
+            )}
 
             <div className="rounded bg-[var(--color-bg-card-nested)] p-4 sm:col-span-2 lg:col-span-3">
               <p className="text-xs text-[var(--color-text-muted)]">RAM</p>
