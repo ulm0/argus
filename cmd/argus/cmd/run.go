@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -23,6 +24,7 @@ import (
 	"github.com/ulm0/argus/internal/services/telegram"
 	"github.com/ulm0/argus/internal/system/ap"
 	"github.com/ulm0/argus/internal/system/network"
+	"github.com/ulm0/argus/internal/system/watchdog"
 	"github.com/ulm0/argus/internal/system/wifi"
 	"github.com/ulm0/argus/internal/updater"
 )
@@ -56,6 +58,9 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 			}
 
 			network.NewOptimizer().Apply()
+			if cfg.System.ReapplySysctlOnStart {
+				applyStartupSysctl()
+			}
 
 			runCtx, runCancel := context.WithCancel(context.Background())
 			defer runCancel()
@@ -65,7 +70,11 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 
 			modeSvc := mode.NewService(cfg)
 			chSvc := chime.NewService(cfg)
-			boot.RunStartupSequence(runCtx, cfg, modeSvc, chSvc)
+			if cfg.Installation.BootBlockUntilReady {
+				boot.RunStartupSequence(runCtx, cfg, modeSvc, chSvc)
+			} else {
+				go boot.RunStartupSequence(runCtx, cfg, modeSvc, chSvc)
+			}
 
 			if cfg.OfflineAP.Enabled {
 				wifiMon := wifi.NewMonitor(cfg)
@@ -101,11 +110,22 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+			var wdMgr *watchdog.Manager
+			if cfg.System.WatchdogEnabled {
+				wdMgr = watchdog.NewManager()
+				if err := wdMgr.Start(cfg.System.WatchdogTimeoutSec); err != nil {
+					logger.L.WithError(err).Warn("watchdog start failed")
+				}
+			}
+
 			go func() {
 				sig := <-sigCh
 				logger.L.WithField("signal", sig).Info("received signal, shutting down")
 				runCancel()
 				tgSvc.Stop()
+				if wdMgr != nil {
+					wdMgr.Stop()
+				}
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				if err := server.Shutdown(ctx); err != nil {
@@ -195,5 +215,15 @@ func checkForUpdate(cfg *config.Config) {
 		if err := updater.Install(release); err != nil {
 			logger.L.WithError(err).Error("auto-update failed")
 		}
+	}
+}
+
+func applyStartupSysctl() {
+	path := "/etc/sysctl.d/99-argus.conf"
+	if _, err := os.Stat(path); err != nil {
+		return
+	}
+	if out, err := exec.Command("sysctl", "-p", path).CombinedOutput(); err != nil {
+		logger.L.WithError(err).WithField("output", string(out)).Warn("reapply sysctl failed")
 	}
 }

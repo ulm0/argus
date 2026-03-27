@@ -16,8 +16,8 @@ import (
 	"github.com/ulm0/argus/internal/system/mount"
 )
 
-// RunSchedulerTick evaluates enabled weekly schedules once (call every minute from run).
-// Matches TeslaUSB check_chime_schedule.py at a minimal level: weekly + time-of-day.
+// RunSchedulerTick evaluates enabled schedules once (call every minute from run).
+// Supports weekly/date/holiday/recurring schedule types.
 func (s *Service) RunSchedulerTick(ctx context.Context) {
 	lockFiles := []string{
 		filepath.Join(s.cfg.GadgetDir, ".quick_edit_part2.lock"),
@@ -36,14 +36,13 @@ func (s *Service) RunSchedulerTick(ctx context.Context) {
 	now := time.Now()
 	for i := range schedules {
 		sch := &schedules[i]
-		if !sch.Enabled || sch.Type != ScheduleWeekly {
+		if !sch.Enabled {
 			continue
 		}
-		if !weeklyMatchesNow(sch, now) {
+		if !scheduleMatchesNow(sch, now) {
 			continue
 		}
-		if sch.LastRun != nil && sch.LastRun.Year() == now.Year() && sch.LastRun.YearDay() == now.YearDay() &&
-			sch.LastRun.Hour() == now.Hour() && sch.LastRun.Minute() == now.Minute() {
+		if alreadyRanThisMinute(sch, now) {
 			continue
 		}
 
@@ -68,6 +67,31 @@ func (s *Service) RunSchedulerTick(ctx context.Context) {
 	}
 }
 
+func alreadyRanThisMinute(sch *Schedule, t time.Time) bool {
+	if sch.LastRun == nil {
+		return false
+	}
+	return sch.LastRun.Year() == t.Year() &&
+		sch.LastRun.YearDay() == t.YearDay() &&
+		sch.LastRun.Hour() == t.Hour() &&
+		sch.LastRun.Minute() == t.Minute()
+}
+
+func scheduleMatchesNow(sch *Schedule, t time.Time) bool {
+	switch sch.Type {
+	case ScheduleWeekly:
+		return weeklyMatchesNow(sch, t)
+	case ScheduleDate:
+		return dateMatchesNow(sch, t)
+	case ScheduleHoliday:
+		return holidayMatchesNow(sch, t)
+	case ScheduleRecurring:
+		return recurringMatchesNow(sch, t)
+	default:
+		return false
+	}
+}
+
 func weeklyMatchesNow(sch *Schedule, t time.Time) bool {
 	h, m, ok := parseHHMM(sch.Time)
 	if !ok {
@@ -87,6 +111,108 @@ func weeklyMatchesNow(sch *Schedule, t time.Time) bool {
 		}
 	}
 	return false
+}
+
+func dateMatchesNow(sch *Schedule, t time.Time) bool {
+	h, m, ok := parseHHMM(sch.Time)
+	if !ok {
+		return false
+	}
+	if t.Hour() != h || t.Minute() != m {
+		return false
+	}
+	return t.Month() == time.Month(sch.Month) && t.Day() == sch.Day
+}
+
+func holidayMatchesNow(sch *Schedule, t time.Time) bool {
+	h, m, ok := parseHHMM(sch.Time)
+	if !ok {
+		return false
+	}
+	if t.Hour() != h || t.Minute() != m {
+		return false
+	}
+	month, day, ok := holidayDate(strings.TrimSpace(strings.ToLower(sch.Holiday)), t.Year())
+	if !ok {
+		return false
+	}
+	return t.Month() == month && t.Day() == day
+}
+
+func recurringMatchesNow(sch *Schedule, t time.Time) bool {
+	interval := parseRecurringInterval(sch.Interval)
+	if interval <= 0 {
+		return false
+	}
+	if sch.LastRun == nil {
+		return true
+	}
+	return t.Sub(*sch.LastRun) >= interval
+}
+
+func parseRecurringInterval(raw string) time.Duration {
+	v := strings.TrimSpace(strings.ToLower(raw))
+	if v == "" {
+		return 0
+	}
+	v = strings.ReplaceAll(v, "mins", "m")
+	v = strings.ReplaceAll(v, "min", "m")
+	v = strings.ReplaceAll(v, "hours", "h")
+	v = strings.ReplaceAll(v, "hour", "h")
+	v = strings.ReplaceAll(v, " ", "")
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0
+	}
+	return d
+}
+
+func holidayDate(name string, year int) (time.Month, int, bool) {
+	switch name {
+	case "newyear", "newyears", "new_year", "new_years":
+		return time.January, 1, true
+	case "valentines", "valentinesday", "valentine", "valentine_day":
+		return time.February, 14, true
+	case "halloween":
+		return time.October, 31, true
+	case "christmas", "christmasday":
+		return time.December, 25, true
+	case "thanksgiving":
+		d := nthWeekdayOfMonth(year, time.November, time.Thursday, 4)
+		return d.Month(), d.Day(), true
+	case "easter":
+		d := easterSunday(year)
+		return d.Month(), d.Day(), true
+	default:
+		return 0, 0, false
+	}
+}
+
+func nthWeekdayOfMonth(year int, month time.Month, weekday time.Weekday, n int) time.Time {
+	d := time.Date(year, month, 1, 0, 0, 0, 0, time.Local)
+	for d.Weekday() != weekday {
+		d = d.AddDate(0, 0, 1)
+	}
+	return d.AddDate(0, 0, 7*(n-1))
+}
+
+// easterSunday computes Gregorian Easter date for the provided year.
+func easterSunday(year int) time.Time {
+	a := year % 19
+	b := year / 100
+	c := year % 100
+	d := b / 4
+	e := b % 4
+	f := (b + 8) / 25
+	g := (b - f + 1) / 3
+	h := (19*a + b - d - g + 15) % 30
+	i := c / 4
+	k := c % 4
+	l := (32 + 2*e + 2*i - h - k) % 7
+	m := (a + 11*h + 22*l) / 451
+	month := (h + l - 7*m + 114) / 31
+	day := ((h + l - 7*m + 114) % 31) + 1
+	return time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local)
 }
 
 func parseHHMM(s string) (hour, min int, ok bool) {

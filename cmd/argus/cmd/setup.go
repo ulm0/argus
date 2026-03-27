@@ -26,6 +26,7 @@ const defaultConfigYAML = `installation:
   boot_present_on_start: false
   boot_cleanup_on_start: false
   boot_random_chime_on_start: false
+  boot_block_until_ready: false
 
 disk_images:
   cam_name: usb_cam.img
@@ -72,6 +73,9 @@ offline_ap:
 system:
   config_file: /boot/firmware/config.txt
   samba_conf: /etc/samba/smb.conf
+  reapply_sysctl_on_start: false
+  watchdog_enabled: false
+  watchdog_timeout_sec: 60
 
 web:
   secret_key: CHANGE-THIS-TO-A-RANDOM-SECRET-KEY-ON-FIRST-INSTALL

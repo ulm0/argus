@@ -43,6 +43,8 @@ type InstallationConfig struct {
 	BootCleanupOnStart bool `yaml:"boot_cleanup_on_start"`
 	// BootRandomChimeOnStart picks a random chime from the configured group before presenting (TeslaUSB parity).
 	BootRandomChimeOnStart bool `yaml:"boot_random_chime_on_start"`
+	// BootBlockUntilReady blocks HTTP startup until the boot sequence has completed.
+	BootBlockUntilReady bool `yaml:"boot_block_until_ready"`
 }
 
 type DiskImagesConfig struct {
@@ -54,13 +56,13 @@ type DiskImagesConfig struct {
 	MusicLabel     string `yaml:"music_label"`
 	// Part2Enabled controls whether the shared LightShow/Chimes/Wraps partition is created at all.
 	// All three sub-features (chimes, lightshow, wraps) require this to be true.
-	Part2Enabled    bool `yaml:"part2_enabled"`
-	ChimesEnabled   bool `yaml:"chimes_enabled"`
-	LightshowEnabled bool `yaml:"lightshow_enabled"`
-	WrapsEnabled    bool `yaml:"wraps_enabled"`
-	MusicEnabled    bool `yaml:"music_enabled"`
-	MusicFS         string `yaml:"music_fs"`
-	BootFsckEnabled bool   `yaml:"boot_fsck_enabled"`
+	Part2Enabled     bool   `yaml:"part2_enabled"`
+	ChimesEnabled    bool   `yaml:"chimes_enabled"`
+	LightshowEnabled bool   `yaml:"lightshow_enabled"`
+	WrapsEnabled     bool   `yaml:"wraps_enabled"`
+	MusicEnabled     bool   `yaml:"music_enabled"`
+	MusicFS          string `yaml:"music_fs"`
+	BootFsckEnabled  bool   `yaml:"boot_fsck_enabled"`
 }
 
 type SetupConfig struct {
@@ -94,23 +96,26 @@ type OfflineAPConfig struct {
 }
 
 type SystemConfig struct {
-	ConfigFile string `yaml:"config_file"`
-	SambaConf  string `yaml:"samba_conf"`
+	ConfigFile           string `yaml:"config_file"`
+	SambaConf            string `yaml:"samba_conf"`
+	ReapplySysctlOnStart bool   `yaml:"reapply_sysctl_on_start"`
+	WatchdogEnabled      bool   `yaml:"watchdog_enabled"`
+	WatchdogTimeoutSec   int    `yaml:"watchdog_timeout_sec"`
 }
 
 type WebConfig struct {
-	SecretKey           string  `yaml:"secret_key"`
-	MaxLockChimeSize    int64   `yaml:"max_lock_chime_size"`
-	MaxLockChimeDur     float64 `yaml:"max_lock_chime_duration"`
-	MinLockChimeDur     float64 `yaml:"min_lock_chime_duration"`
-	SpeedRangeMin       float64 `yaml:"speed_range_min"`
-	SpeedRangeMax       float64 `yaml:"speed_range_max"`
-	SpeedStep           float64 `yaml:"speed_step"`
-	LockChimeFilename   string  `yaml:"lock_chime_filename"`
-	ChimesFolder        string  `yaml:"chimes_folder"`
-	LightshowFolder     string  `yaml:"lightshow_folder"`
-	MaxUploadSizeMB     int     `yaml:"max_upload_size_mb"`
-	MaxUploadChunkMB    int     `yaml:"max_upload_chunk_mb"`
+	SecretKey         string  `yaml:"secret_key"`
+	MaxLockChimeSize  int64   `yaml:"max_lock_chime_size"`
+	MaxLockChimeDur   float64 `yaml:"max_lock_chime_duration"`
+	MinLockChimeDur   float64 `yaml:"min_lock_chime_duration"`
+	SpeedRangeMin     float64 `yaml:"speed_range_min"`
+	SpeedRangeMax     float64 `yaml:"speed_range_max"`
+	SpeedStep         float64 `yaml:"speed_step"`
+	LockChimeFilename string  `yaml:"lock_chime_filename"`
+	ChimesFolder      string  `yaml:"chimes_folder"`
+	LightshowFolder   string  `yaml:"lightshow_folder"`
+	MaxUploadSizeMB   int     `yaml:"max_upload_size_mb"`
+	MaxUploadChunkMB  int     `yaml:"max_upload_chunk_mb"`
 }
 
 type TelegramConfig struct {
@@ -234,6 +239,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.LogLevel == "" {
 		c.LogLevel = "debug"
+	}
+	if c.System.WatchdogTimeoutSec <= 0 {
+		c.System.WatchdogTimeoutSec = 60
 	}
 }
 
