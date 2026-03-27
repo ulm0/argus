@@ -7,12 +7,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/ulm0/argus/internal/config"
@@ -170,9 +172,8 @@ Must be run as root (sudo).`,
 		fmt.Printf("  Binary:  /usr/local/bin/argus\n")
 		fmt.Printf("  Service: argus.service\n\n")
 		fmt.Println("  Edit config.yaml to set your Samba password, WiFi AP credentials, etc.")
-		fmt.Println("  Then start with: sudo systemctl start argus")
-		fmt.Println("  Or reboot to start automatically.")
 		fmt.Println()
+		setupReboot()
 			return nil
 		},
 	}
@@ -580,34 +581,72 @@ func setupCopyBinary() error {
 		return fmt.Errorf("resolve executable: %w", err)
 	}
 
+	// Write to a sibling temp file first, then atomically rename over binDest.
+	// Opening binDest directly with O_TRUNC would fail with ETXTBSY on Linux
+	// when the binary is already running from that path.
+	tmp := binDest + ".new"
+
 	src, err := os.Open(exe)
 	if err != nil {
 		return fmt.Errorf("open binary: %w", err)
 	}
 	defer src.Close()
 
-	dst, err := os.OpenFile(binDest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	dst, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
-		return fmt.Errorf("install binary to %s: %w", binDest, err)
+		return fmt.Errorf("stage binary at %s: %w", tmp, err)
 	}
-	defer dst.Close()
 
 	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		os.Remove(tmp)
 		return fmt.Errorf("copy binary: %w", err)
 	}
-
 	if err := dst.Sync(); err != nil {
+		dst.Close()
+		os.Remove(tmp)
 		return fmt.Errorf("sync binary: %w", err)
+	}
+	dst.Close()
+
+	if err := os.Rename(tmp, binDest); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("install binary to %s: %w", binDest, err)
 	}
 
 	setupLog("Binary installed at %s", binDest)
 	return nil
 }
 func setupMaskDesktopServices() {
-	setupLog("Masking unnecessary desktop services...")
 	for _, svc := range []string{"pipewire", "pipewire-pulse", "wireplumber", "colord"} {
-		_ = runCmd("systemctl", "--user", "mask", svc+".service")
+		runCmdSilent("systemctl", "--user", "mask", svc+".service")
 	}
+}
+
+// setupReboot counts down 5 seconds and reboots unless the user presses Ctrl+C.
+func setupReboot() {
+	fmt.Println("  Rebooting in 5 seconds — press Ctrl+C to cancel and reboot manually.")
+	fmt.Println()
+
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sig)
+
+	for i := 5; i > 0; i-- {
+		fmt.Printf("\r  Rebooting in %d...  ", i)
+		select {
+		case <-sig:
+			fmt.Println("\n\n  Reboot cancelled.")
+			fmt.Println("  Start Argus manually with: sudo systemctl start argus")
+			fmt.Println("  Or reboot when ready:      sudo reboot")
+			fmt.Println()
+			return
+		case <-time.After(time.Second):
+		}
+	}
+
+	fmt.Println("\r  Rebooting now...       ")
+	_ = exec.Command("systemctl", "reboot").Run()
 }
 
 // ─── shared utilities ────────────────────────────────────────────────────────
