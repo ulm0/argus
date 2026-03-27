@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/ulm0/argus/internal/config"
 )
@@ -80,18 +81,26 @@ func (h *LogsHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = cmd.Wait() }()
 
+	// Kill the process when the client disconnects so the goroutine unblocks
+	// from scanner.Scan() promptly rather than waiting for the next log line.
+	go func() {
+		<-r.Context().Done()
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}()
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
 
 	scanner := bufio.NewScanner(stdout)
 	for scanner.Scan() {
-		select {
-		case <-r.Context().Done():
+		if r.Context().Err() != nil {
 			return
-		default:
 		}
 
 		line := scanner.Text()
@@ -108,29 +117,25 @@ func (h *LogsHandler) Stream(w http.ResponseWriter, r *http.Request) {
 // parseJournalLine splits a short-iso journalctl line into its components.
 // Format: "2024-01-15T12:34:56+0000 hostname unit[pid]: message"
 func parseJournalLine(line string) logLine {
-	if len(line) < 25 {
-		return logLine{Message: line}
-	}
-
-	// Extract timestamp (first 25 chars cover ISO timestamp + timezone offset)
+	// Timestamp is the first space-delimited field (ISO 8601 with timezone).
 	ts := ""
 	rest := line
-	if len(line) > 25 {
-		ts = line[:25]
-		rest = line[26:]
+	if idx := indexByte(line, ' '); idx > 0 {
+		ts = line[:idx]
+		rest = line[idx+1:]
 	}
 
-	// Strip the host + unit prefix to get just the message
+	// Strip "hostname unit[pid]: " prefix — the message starts after ": ".
 	msg := rest
-	if idx := indexByte(rest, ':'); idx >= 0 && idx+2 < len(rest) {
+	if idx := strings.Index(rest, "]: "); idx >= 0 {
+		msg = rest[idx+3:]
+	} else if idx := strings.Index(rest, ": "); idx >= 0 {
 		msg = rest[idx+2:]
 	}
 
-	priority := detectPriority(msg)
-
 	return logLine{
 		Timestamp: ts,
-		Priority:  priority,
+		Priority:  detectPriority(msg),
 		Message:   msg,
 	}
 }

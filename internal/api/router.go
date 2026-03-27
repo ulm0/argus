@@ -22,7 +22,15 @@ func NewRouter(cfg *config.Config, webFS fs.FS) http.Handler {
 	r.Use(middleware.Logging)
 	r.Use(middleware.PanicRecovery)
 	r.Use(func(next http.Handler) http.Handler {
-		return gorillahandlers.CompressHandler(next)
+		// Skip gzip compression for SSE endpoints — the compressor buffers output
+		// and breaks flushing, so EventSource clients never receive events.
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			gorillahandlers.CompressHandler(next).ServeHTTP(w, r)
+		})
 	})
 
 	maxBody := int64(cfg.Web.MaxUploadSizeMB) * 1024 * 1024
