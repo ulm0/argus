@@ -490,8 +490,10 @@ func setupConfigureBoot() error {
 		}
 	}
 
-	if err := appendLineIfMissing("/etc/modules", "dwc2"); err != nil {
-		setupWarn("modules dwc2: %v", err)
+	for _, mod := range []string{"dwc2", "libcomposite"} {
+		if err := appendLineIfMissing("/etc/modules", mod); err != nil {
+			setupWarn("modules %s: %v", mod, err)
+		}
 	}
 
 	setupLog("Boot configuration updated")

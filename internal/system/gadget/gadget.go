@@ -50,8 +50,14 @@ func (m *Manager) Create(luns []LUNConfig) error {
 		return fmt.Errorf("configfs: %w", err)
 	}
 
-	if err := os.MkdirAll(m.gadgetDir, 0755); err != nil {
-		return fmt.Errorf("create gadget dir: %w", err)
+	// usb_gadget is created by kernel/libcomposite, not by userspace.
+	// Create only our gadget node under that kernel-managed base path.
+	if _, err := os.Stat(m.gadgetDir); os.IsNotExist(err) {
+		if err := os.Mkdir(m.gadgetDir, 0755); err != nil {
+			return fmt.Errorf("create gadget dir: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("stat gadget dir: %w", err)
 	}
 
 	writes := map[string]string{
@@ -269,26 +275,29 @@ func writeFilePath(path, value string) error {
 
 // ensureConfigFS checks if configfs is mounted and mounts it if necessary.
 func ensureConfigFS() error {
-	if isConfigFSMounted() {
-		return nil
+	// Load modules explicitly (same family of behavior TeslaUSB expects on Pi).
+	if out, err := exec.Command("modprobe", "configfs").CombinedOutput(); err != nil {
+		return fmt.Errorf("modprobe configfs: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, err := exec.Command("modprobe", "libcomposite").CombinedOutput(); err != nil {
+		return fmt.Errorf("modprobe libcomposite: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 
-	// Load the configfs kernel module (no-op if already loaded or built-in)
-	_ = exec.Command("modprobe", "configfs").Run()
-
-	logger.L.Info("configfs not mounted, mounting at " + configfsMount)
-	if err := os.MkdirAll(configfsMount, 0755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", configfsMount, err)
+	if !isConfigFSMounted() {
+		logger.L.Info("configfs not mounted, mounting at " + configfsMount)
+		if err := os.MkdirAll(configfsMount, 0755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", configfsMount, err)
+		}
+		cmd := exec.Command("mount", "-t", "configfs", "none", configfsMount)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("mount configfs: %s: %w", strings.TrimSpace(string(out)), err)
+		}
 	}
 
-	cmd := exec.Command("mount", "-t", "configfs", "none", configfsMount)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("mount configfs: %s: %w", strings.TrimSpace(string(out)), err)
+	// libcomposite should expose /sys/kernel/config/usb_gadget.
+	if st, err := os.Stat(gadgetBase); err != nil || !st.IsDir() {
+		return fmt.Errorf("%s unavailable (libcomposite not active or kernel missing USB gadget support)", gadgetBase)
 	}
-
-	// Also load libcomposite for USB gadget support
-	_ = exec.Command("modprobe", "libcomposite").Run()
-
 	return nil
 }
 
