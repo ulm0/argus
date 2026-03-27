@@ -175,7 +175,7 @@ export default function AnalyticsPage() {
               </div>
             )}
 
-            <div className="rounded bg-[var(--color-bg-card-nested)] p-4 sm:col-span-2 lg:col-span-3">
+            <div className="rounded bg-[var(--color-bg-card-nested)] p-4">
               <p className="text-xs text-[var(--color-text-muted)]">RAM</p>
               <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">
                 {formatBytes(systemMetrics.ram.used_bytes)} / {formatBytes(systemMetrics.ram.total_bytes)}
