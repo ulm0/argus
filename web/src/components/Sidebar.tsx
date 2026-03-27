@@ -208,8 +208,18 @@ export default function Sidebar() {
   const navContent = (
     <div className="flex h-full flex-col">
       {/* Logo */}
-      <div className="flex h-16 items-center justify-center px-5">
-        <span className="text-[17px] font-semibold tracking-wide text-white">Argus</span>
+      <div className="flex h-16 items-center justify-center px-4">
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <span className="text-[17px] font-semibold tracking-wide text-white">Argus</span>
+          <span className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-medium text-white">
+            {currentVersion}
+          </span>
+          {updateAvailable && latestVersion && latestVersion !== currentVersion && (
+            <span className="inline-flex items-center rounded-full bg-[#005aff] px-2.5 py-1 text-xs font-semibold text-white">
+              New {latestVersion}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Nav links */}
@@ -233,20 +243,6 @@ export default function Sidebar() {
           );
         })}
       </nav>
-
-      {/* Version Info */}
-      <div className="p-3 border-t border-white/10">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-medium text-white">
-            {currentVersion}
-          </span>
-          {updateAvailable && latestVersion && latestVersion !== currentVersion && (
-            <span className="inline-flex items-center rounded-full bg-[#005aff] px-2.5 py-1 text-xs font-semibold text-white">
-              New {latestVersion}
-            </span>
-          )}
-        </div>
-      </div>
 
       {/* Bottom section */}
       <div className="border-t border-white/10 p-3">
