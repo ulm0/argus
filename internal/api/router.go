@@ -168,6 +168,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service) h
 	api.HandleFunc("/analytics/partition-usage", analyticsH.PartitionUsage).Methods("GET")
 	api.HandleFunc("/analytics/video-stats", analyticsH.VideoStats).Methods("GET")
 	api.HandleFunc("/analytics/health", analyticsH.Health).Methods("GET")
+	api.HandleFunc("/analytics/system", analyticsH.SystemMetrics).Methods("GET")
 
 	// Cleanup
 	api.HandleFunc("/cleanup/settings", cleanupH.GetSettings).Methods("GET")

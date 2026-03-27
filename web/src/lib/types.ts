@@ -215,6 +215,22 @@ export interface CompleteAnalytics {
   last_updated: string;
 }
 
+export interface SystemMetrics {
+  cpu: {
+    usage_percent: number;
+    cores: number;
+    capacity_mhz?: number;
+    temp_c?: number;
+  };
+  ram: {
+    used_bytes: number;
+    total_bytes: number;
+  };
+  power: {
+    watts?: number;
+  };
+}
+
 // Cleanup
 
 export interface AgePolicy {
@@ -360,6 +376,14 @@ export interface TelegramStatus {
   max_queue: number;
   online: boolean;
   bot_configured: boolean;
+}
+
+// Update
+export interface UpdateStatus {
+  current: string;
+  latest?: string;
+  update_available: boolean;
+  published_at?: string;
 }
 
 // Camera types

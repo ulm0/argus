@@ -8,6 +8,7 @@ import type {
   VideoStats,
   FsckStatus,
   FsckCheckResult,
+  SystemMetrics,
 } from "@/lib/types";
 
 function formatBytes(bytes: number): string {
@@ -38,6 +39,7 @@ export default function AnalyticsPage() {
   const [dashboard, setDashboard] = useState<CompleteAnalytics | null>(null);
   const [fsckStatus, setFsckStatus] = useState<FsckStatus | null>(null);
   const [fsckHistory, setFsckHistory] = useState<FsckCheckResult[]>([]);
+  const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [fsckRunning, setFsckRunning] = useState(false);
@@ -49,12 +51,14 @@ export default function AnalyticsPage() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [analytics, fsck, history] = await Promise.all([
+      const [analytics, system, fsck, history] = await Promise.all([
         api.getDashboard(),
+        api.getSystemMetrics(),
         api.getFsckStatus(),
         api.getFsckHistory(),
       ]);
       setDashboard(analytics);
+      setSystemMetrics(system);
       setFsckStatus(fsck);
       setFsckRunning(fsck.running);
       setFsckHistory(history.history || []);
@@ -131,6 +135,55 @@ export default function AnalyticsPage() {
       )}
 
       <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">Storage Analytics</h1>
+
+      {/* Raspberry Pi System Stats */}
+      {systemMetrics && (
+        <section className="rounded bg-[var(--color-bg-card)] p-6 shadow-sm">
+          <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">Raspberry Pi System</h2>
+          <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="rounded bg-[var(--color-bg-card-nested)] p-4">
+              <p className="text-xs text-[var(--color-text-muted)]">CPU Usage</p>
+              <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">
+                {systemMetrics.cpu.usage_percent.toFixed(1)}%
+              </p>
+              <p className="mt-1 text-xs text-[var(--color-text-muted)]">{systemMetrics.cpu.cores} cores</p>
+            </div>
+
+            <div className="rounded bg-[var(--color-bg-card-nested)] p-4">
+              <p className="text-xs text-[var(--color-text-muted)]">CPU Capacity</p>
+              <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">
+                {systemMetrics.cpu.capacity_mhz ? `${systemMetrics.cpu.capacity_mhz.toFixed(0)} MHz` : "N/A"}
+              </p>
+              <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+                Temp: {systemMetrics.cpu.temp_c ? `${systemMetrics.cpu.temp_c.toFixed(1)} °C` : "N/A"}
+              </p>
+            </div>
+
+            <div className="rounded bg-[var(--color-bg-card-nested)] p-4">
+              <p className="text-xs text-[var(--color-text-muted)]">Power Draw</p>
+              <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">
+                {systemMetrics.power.watts ? `${systemMetrics.power.watts.toFixed(2)} W` : "N/A"}
+              </p>
+              <p className="mt-1 text-xs text-[var(--color-text-muted)]">Device sensor dependent</p>
+            </div>
+
+            <div className="rounded bg-[var(--color-bg-card-nested)] p-4 sm:col-span-2 lg:col-span-3">
+              <p className="text-xs text-[var(--color-text-muted)]">RAM</p>
+              <p className="mt-1 text-2xl font-bold text-[var(--color-text-primary)]">
+                {formatBytes(systemMetrics.ram.used_bytes)} / {formatBytes(systemMetrics.ram.total_bytes)}
+              </p>
+              <div className="mt-2 h-3 overflow-hidden rounded-full bg-[var(--color-border)]">
+                <div
+                  className="h-full rounded-full bg-[var(--color-accent)] transition-all"
+                  style={{
+                    width: `${systemMetrics.ram.total_bytes > 0 ? (systemMetrics.ram.used_bytes / systemMetrics.ram.total_bytes) * 100 : 0}%`,
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Health Card */}
       <section className={`rounded p-6 shadow-sm ${style.bg}`}>

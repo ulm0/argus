@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "@/components/ThemeProvider";
-import { getStatus } from "@/lib/api";
+import { getStatus, getUpdateStatus } from "@/lib/api";
 import type { AppStatus } from "@/lib/types";
 
 interface NavLink {
@@ -161,24 +161,7 @@ export default function Sidebar() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [currentVersion, setCurrentVersion] = useState("dev");
   const [latestVersion, setLatestVersion] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch('/api/version')  // Endpoint to get the current version
-      .then((res) => res.json())
-      .then((data) => setCurrentVersion(data.version))
-      .catch(() => setCurrentVersion("dev"));
-  }, []);
-
-  useEffect(() => {
-    fetch('https://api.github.com/repos/your_repo/releases/latest')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.tag_name) {
-          setLatestVersion(data.tag_name);
-        }
-      })
-      .catch(() => {});
-  }, []);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -186,6 +169,26 @@ export default function Sidebar() {
       .then((s) => { if (!cancelled) setStatus(s); })
       .catch(() => {});
     return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getUpdateStatus()
+      .then((u) => {
+        if (cancelled) return;
+        setCurrentVersion(u.current || "dev");
+        setLatestVersion(u.latest ?? null);
+        setUpdateAvailable(Boolean(u.update_available));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCurrentVersion("dev");
+        setLatestVersion(null);
+        setUpdateAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const toggleTheme = useCallback(() => {
@@ -233,11 +236,13 @@ export default function Sidebar() {
 
       {/* Version Info */}
       <div className="p-3 border-t border-white/10">
-        <div className="flex justify-between items-center text-sm text-white">
-          <span>Version: {currentVersion}</span>
-          {latestVersion && latestVersion !== currentVersion && (
-            <span className="text-xs bg-red-600 text-white rounded-full px-2 py-1">
-              Update available: {latestVersion}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-2.5 py-1 text-xs font-medium text-white">
+            {currentVersion}
+          </span>
+          {updateAvailable && latestVersion && latestVersion !== currentVersion && (
+            <span className="inline-flex items-center rounded-full bg-[#005aff] px-2.5 py-1 text-xs font-semibold text-white">
+              New {latestVersion}
             </span>
           )}
         </div>

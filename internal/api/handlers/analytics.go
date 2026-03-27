@@ -24,6 +24,10 @@ func (h *AnalyticsHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, data)
 }
 
+func (h *AnalyticsHandler) SystemMetrics(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, h.analyticsSvc.GetSystemMetrics())
+}
+
 func (h *AnalyticsHandler) PartitionUsage(w http.ResponseWriter, r *http.Request) {
 	usages := h.analyticsSvc.GetPartitionUsage()
 	writeJSON(w, http.StatusOK, map[string]any{"partitions": usages})

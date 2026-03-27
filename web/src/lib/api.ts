@@ -30,8 +30,10 @@ import type {
   Schedule,
   StartupConfigPublic,
   StatusResponse,
+  SystemMetrics,
   TelegramConfigPublic,
   TelegramStatus,
+  UpdateStatus,
   UpdateConfigPublic,
   VideoEvent,
   VideoEventsResponse,
@@ -388,6 +390,10 @@ export function getHealth(): Promise<HealthStatus> {
   return request<HealthStatus>("/api/analytics/health");
 }
 
+export function getSystemMetrics(): Promise<SystemMetrics> {
+  return request<SystemMetrics>("/api/analytics/system");
+}
+
 // ──────────────────────────────────────────────
 // Cleanup
 // ──────────────────────────────────────────────
@@ -496,6 +502,13 @@ export function configureTelegram(
 
 export function testTelegram(): Promise<StatusResponse> {
   return post<StatusResponse>("/api/telegram/test");
+}
+
+// ──────────────────────────────────────────────
+// Update
+// ──────────────────────────────────────────────
+export function getUpdateStatus(): Promise<UpdateStatus> {
+  return request<UpdateStatus>("/api/update/status");
 }
 
 // ──────────────────────────────────────────────
