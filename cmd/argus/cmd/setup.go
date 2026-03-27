@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"embed"
 	"fmt"
 	"io"
 	"os"
@@ -95,7 +96,7 @@ update:
   channel: stable
 `
 
-func NewSetupCmd() *cobra.Command {
+func NewSetupCmd(templates *embed.FS) *cobra.Command {
 	var (
 		installDir string
 		cfgPath    string
@@ -157,7 +158,7 @@ Must be run as root (sudo).`,
 			if err := setupConfigureSysctl(); err != nil {
 				return err
 			}
-			if err := setupInstallService(installDir); err != nil {
+			if err := setupInstallService(installDir, templates); err != nil {
 				return err
 			}
 			setupMaskDesktopServices()
@@ -501,9 +502,9 @@ func setupConfigureSwap() error {
 	swapFile := "/var/argus-fsck.swap"
 
 	// Disable the OS default swap to avoid duplicate swap files on the same device.
-	// dphys-swapfile creates /var/swap (100MB) which would coexist pointlessly with ours.
-	_ = runCmd("systemctl", "disable", "--now", "dphys-swapfile")
-	_ = runCmd("dphys-swapfile", "swapoff")
+	// dphys-swapfile may not be installed on all distros — silence errors silently.
+	runCmdSilent("systemctl", "disable", "--now", "dphys-swapfile")
+	runCmdSilent("dphys-swapfile", "swapoff")
 
 	if _, err := os.Stat(swapFile); os.IsNotExist(err) {
 		if err := runCmd("fallocate", "-l", "1G", swapFile); err != nil {
@@ -537,21 +538,15 @@ func setupConfigureSysctl() error {
 	return nil
 }
 
-func setupInstallService(installDir string) error {
+func setupInstallService(installDir string, templates *embed.FS) error {
 	setupLog("Installing systemd service...")
 
 	targetUser := currentUser()
 
-	templatePath := filepath.Join(installDir, "templates", "argus.service")
-	data, err := os.ReadFile(templatePath)
+	// Read the service template from the embedded FS; it is always present in the binary.
+	data, err := templates.ReadFile("templates/argus.service")
 	if err != nil {
-		// Try relative to executable
-		exe, _ := os.Executable()
-		templatePath = filepath.Join(filepath.Dir(exe), "templates", "argus.service")
-		data, err = os.ReadFile(templatePath)
-		if err != nil {
-			return fmt.Errorf("read service template: %w", err)
-		}
+		return fmt.Errorf("read service template: %w", err)
 	}
 
 	rendered := strings.ReplaceAll(string(data), "__GADGET_DIR__", installDir)
@@ -622,6 +617,13 @@ func runCmd(name string, args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// runCmdSilent runs a command discarding all output. Used for best-effort
+// operations where the command may not exist (e.g. dphys-swapfile).
+func runCmdSilent(name string, args ...string) {
+	cmd := exec.Command(name, args...)
+	_ = cmd.Run()
 }
 
 func createSparseFile(path, size string) error {

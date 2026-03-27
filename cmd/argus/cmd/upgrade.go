@@ -13,8 +13,8 @@ func NewUpgradeCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "upgrade",
 		Short: "Upgrade Argus to the latest release",
-		Long: `Check GitHub for a newer release and install it.
-The binary is atomically replaced and the systemd service is restarted.
+		Long: `Check GitHub for the latest release asset (a raw argus binary),
+download it, replace /usr/local/bin/argus atomically, and restart argus.service.
 Must be run as root (sudo).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := setupCheckRoot(); err != nil {

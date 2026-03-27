@@ -1,8 +1,6 @@
 package updater
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -106,7 +103,7 @@ func CheckLatest(currentVersion string) (*Release, error) {
 		return nil, nil
 	}
 
-	assetName := archiveNameForArch(gr.TagName)
+	assetName := assetNameForArch(gr.TagName)
 	downloadURL := ""
 	for _, a := range gr.Assets {
 		if a.Name == assetName {
@@ -125,23 +122,29 @@ func CheckLatest(currentVersion string) (*Release, error) {
 	}, nil
 }
 
-// Install downloads the release archive, extracts the binary, atomically replaces
-// /usr/local/bin/argus, and restarts the systemd service.
+// Install downloads the raw argus binary published by GoReleaser (binary format,
+// no archive wrapping), atomically replaces /usr/local/bin/argus, and restarts
+// the systemd service.
 func Install(release *Release) error {
-	tmp, err := os.MkdirTemp("", "argus-update-*")
+	tmp, err := os.CreateTemp("", "argus-update-*")
 	if err != nil {
-		return fmt.Errorf("create temp dir: %w", err)
+		return fmt.Errorf("create temp file: %w", err)
 	}
-	defer os.RemoveAll(tmp)
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
 
-	archivePath := filepath.Join(tmp, "argus.tar.gz")
-	if err := download(release.DownloadURL, archivePath); err != nil {
+	if err := downloadTo(release.DownloadURL, tmp); err != nil {
+		tmp.Close()
 		return fmt.Errorf("download: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("sync download: %w", err)
+	}
+	tmp.Close()
 
-	binaryTmp := filepath.Join(tmp, "argus")
-	if err := extractBinary(archivePath, binaryTmp); err != nil {
-		return fmt.Errorf("extract: %w", err)
+	if err := os.Chmod(tmpPath, 0755); err != nil {
+		return fmt.Errorf("chmod binary: %w", err)
 	}
 
 	// Backup existing binary before swap
@@ -149,12 +152,7 @@ func Install(release *Release) error {
 		_ = os.Rename(binaryDest, binaryDest+".backup")
 	}
 
-	// Atomic replace: write to .new then rename
-	newPath := binaryDest + ".new"
-	if err := copyFile(binaryTmp, newPath, 0755); err != nil {
-		return fmt.Errorf("stage binary: %w", err)
-	}
-	if err := os.Rename(newPath, binaryDest); err != nil {
+	if err := os.Rename(tmpPath, binaryDest); err != nil {
 		return fmt.Errorf("install binary: %w", err)
 	}
 
@@ -164,24 +162,30 @@ func Install(release *Release) error {
 	return nil
 }
 
-// archiveNameForArch returns the GoReleaser asset filename for the current architecture.
-// e.g. "argus_v1.2.3_linux_arm64.tar.gz"
-func archiveNameForArch(tag string) string {
+// assetNameForArch returns the GoReleaser binary asset filename for the current
+// architecture, matching the name_template in .goreleaser.yaml.
+// e.g. "argus_1.2.3_linux_arm64", "argus_1.2.3_linux_armv6"
+func assetNameForArch(tag string) string {
+	version := strings.TrimPrefix(tag, "v")
 	var archSuffix string
 	switch runtime.GOARCH {
 	case "arm64":
 		archSuffix = "arm64"
 	case "arm":
-		archSuffix = "armv6" // conservative default for 32-bit ARM
+		if goarm == "7" {
+			archSuffix = "armv7"
+		} else {
+			archSuffix = "armv6"
+		}
 	case "amd64":
 		archSuffix = "amd64"
 	default:
 		archSuffix = runtime.GOARCH
 	}
-	return fmt.Sprintf("argus_%s_linux_%s.tar.gz", strings.TrimPrefix(tag, "v"), archSuffix)
+	return fmt.Sprintf("argus_%s_linux_%s", version, archSuffix)
 }
 
-func download(url, dest string) error {
+func downloadTo(url string, dst *os.File) error {
 	client := &http.Client{Timeout: 5 * time.Minute}
 	resp, err := client.Get(url)
 	if err != nil {
@@ -191,70 +195,8 @@ func download(url, dest string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download returned %d", resp.StatusCode)
 	}
-	f, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
+	_, err = io.Copy(dst, resp.Body)
 	return err
-}
-
-func extractBinary(archivePath, destPath string) error {
-	f, err := os.Open(archivePath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return err
-	}
-	defer gz.Close()
-
-	tr := tar.NewReader(gz)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		// Extract only the top-level "argus" binary
-		if hdr.Typeflag == tar.TypeReg && filepath.Base(hdr.Name) == "argus" {
-			out, err := os.OpenFile(destPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-			if err != nil {
-				return err
-			}
-			_, err = io.Copy(out, tr)
-			out.Close()
-			return err
-		}
-	}
-	return fmt.Errorf("binary 'argus' not found in archive")
-}
-
-func copyFile(src, dst string, mode os.FileMode) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-	if err != nil {
-		return err
-	}
-	if _, err = io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	if err := out.Sync(); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 // compareSemver compares two semver strings (e.g. "1.2.3").

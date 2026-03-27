@@ -16,18 +16,11 @@ builds:
     goarch:
       - arm64
       - arm
-      - amd64
     goarm:
       - "6"
       - "7"
     ignore:
-      # arm6 only makes sense for armv6 (Pi Zero 1); skip arm6/amd64 combination
-      - goos: linux
-        goarch: amd64
-        goarm: "6"
-      - goos: linux
-        goarch: amd64
-        goarm: "7"
+      # arm6 only makes sense for armv6 (Pi Zero 1)
       - goos: linux
         goarch: arm64
         goarm: "6"
@@ -44,16 +37,9 @@ builds:
       - -trimpath
 
 archives:
-  - id: argus
-    ids:
-      - argus
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ if .Arm }}v{{ .Arm }}{{ end }}"
-    formats:
-      - tar.gz
-    files:
-      - config.yaml
-      - README.md
-      - templates/argus.service
+  - formats:
+      - binary
+    # Binaries are published directly (no archive wrapping) — web + templates are embedded.
 
 checksum:
   name_template: "checksums.txt"

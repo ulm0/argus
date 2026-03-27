@@ -11,6 +11,9 @@ import (
 //go:embed all:web/out
 var webContent embed.FS
 
+//go:embed templates
+var templates embed.FS
+
 // version is set at build time via -ldflags "-X main.version=..."
 var version = "dev"
 
@@ -26,7 +29,7 @@ func main() {
 	root.AddCommand(
 		cmd.NewRunCmd(&webContent),
 		cmd.NewGenerateCmd(),
-		cmd.NewSetupCmd(),
+		cmd.NewSetupCmd(&templates),
 		cmd.NewRemoveCmd(),
 		cmd.NewUpgradeCmd(),
 		cmd.NewVersionCmd(),
