@@ -1,7 +1,8 @@
 [Unit]
 Description=Argus Edge Dashcam Manager
-After=network.target multi-user.target
+After=network.target multi-user.target sys-kernel-config.mount
 Wants=network.target
+Requires=sys-kernel-config.mount
 StartLimitBurst=5
 StartLimitIntervalSec=300
 

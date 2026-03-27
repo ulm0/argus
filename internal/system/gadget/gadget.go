@@ -3,6 +3,7 @@ package gadget
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,13 +13,14 @@ import (
 )
 
 const (
-	gadgetBase  = "/sys/kernel/config/usb_gadget"
-	gadgetName  = "argus"
-	usbVendor   = "0x1d6b" // Linux Foundation
-	usbProduct  = "0x0104" // Multifunction Composite Gadget
-	manufacturer = "Argus"
-	productName  = "Argus Mass Storage"
-	serialNumber = "000000000001"
+	configfsMount = "/sys/kernel/config"
+	gadgetBase    = "/sys/kernel/config/usb_gadget"
+	gadgetName    = "argus"
+	usbVendor     = "0x1d6b" // Linux Foundation
+	usbProduct    = "0x0104" // Multifunction Composite Gadget
+	manufacturer  = "Argus"
+	productName   = "Argus Mass Storage"
+	serialNumber  = "000000000001"
 )
 
 type Manager struct {
@@ -43,6 +45,10 @@ func NewManager() *Manager {
 func (m *Manager) Create(luns []LUNConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if err := ensureConfigFS(); err != nil {
+		return fmt.Errorf("configfs: %w", err)
+	}
 
 	if err := os.MkdirAll(m.gadgetDir, 0755); err != nil {
 		return fmt.Errorf("create gadget dir: %w", err)
@@ -259,4 +265,43 @@ func (m *Manager) writeFile(name, value string) error {
 
 func writeFilePath(path, value string) error {
 	return os.WriteFile(path, []byte(value), 0644)
+}
+
+// ensureConfigFS checks if configfs is mounted and mounts it if necessary.
+func ensureConfigFS() error {
+	if isConfigFSMounted() {
+		return nil
+	}
+
+	// Load the configfs kernel module (no-op if already loaded or built-in)
+	_ = exec.Command("modprobe", "configfs").Run()
+
+	logger.L.Info("configfs not mounted, mounting at " + configfsMount)
+	if err := os.MkdirAll(configfsMount, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", configfsMount, err)
+	}
+
+	cmd := exec.Command("mount", "-t", "configfs", "none", configfsMount)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mount configfs: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+
+	// Also load libcomposite for USB gadget support
+	_ = exec.Command("modprobe", "libcomposite").Run()
+
+	return nil
+}
+
+func isConfigFSMounted() bool {
+	data, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[1] == configfsMount && fields[2] == "configfs" {
+			return true
+		}
+	}
+	return false
 }

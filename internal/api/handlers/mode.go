@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/ulm0/argus/internal/config"
+	"github.com/ulm0/argus/internal/logger"
 	"github.com/ulm0/argus/internal/services/mode"
 )
 
@@ -73,6 +74,13 @@ func (h *ModeHandler) OperationStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
+	if status >= 500 {
+		if m, ok := v.(map[string]string); ok {
+			if errMsg := m["error"]; errMsg != "" {
+				logger.L.WithField("status", status).WithField("detail", errMsg).Error("request error")
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
