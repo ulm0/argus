@@ -218,16 +218,22 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 		camera = "front"
 	}
 
+	// Pick the requested camera if it exists and is not encrypted.
+	// Otherwise fall back to the first non-encrypted camera available.
 	videoFile, ok := details.CameraVideos[camera]
-	if !ok {
+	if !ok || details.Encrypted[camera] {
+		videoFile = ""
+		camera = ""
 		for cam, f := range details.CameraVideos {
-			camera = cam
-			videoFile = f
-			break
+			if !details.Encrypted[cam] {
+				camera = cam
+				videoFile = f
+				break
+			}
 		}
 	}
 	if videoFile == "" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no video found for thumbnail"})
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no unencrypted video available for thumbnail"})
 		return
 	}
 
@@ -277,16 +283,25 @@ func (h *VideoHandler) SessionThumbnail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Prefer front camera
+	// Prefer front camera; skip encrypted (invalid MP4) files.
 	var target string
 	for _, v := range videos {
-		if strings.Contains(v, "-front.") {
+		if strings.Contains(v, "-front.") && h.videoSvc.IsValidMP4(filepath.Join(folderPath, v)) {
 			target = v
 			break
 		}
 	}
 	if target == "" {
-		target = videos[0]
+		for _, v := range videos {
+			if h.videoSvc.IsValidMP4(filepath.Join(folderPath, v)) {
+				target = v
+				break
+			}
+		}
+	}
+	if target == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no unencrypted video available for thumbnail"})
+		return
 	}
 
 	videoFullPath := filepath.Join(folderPath, target)

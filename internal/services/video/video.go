@@ -237,9 +237,17 @@ func (s *Service) StreamVideo(w http.ResponseWriter, r *http.Request, videoPath 
 }
 
 // GenerateThumbnail creates a thumbnail image from a video file.
+// Returns an error if the file is not a valid MP4 or if ffmpeg fails.
 func (s *Service) GenerateThumbnail(videoPath, outputPath string, width, height int) error {
-	os.MkdirAll(filepath.Dir(outputPath), 0755)
+	if !s.IsValidMP4(videoPath) {
+		return fmt.Errorf("not a valid MP4 file (possibly encrypted or corrupt)")
+	}
 
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return fmt.Errorf("create thumbnail dir: %w", err)
+	}
+
+	var stderr strings.Builder
 	cmd := exec.Command("ffmpeg",
 		"-i", videoPath,
 		"-ss", "00:00:01",
@@ -247,7 +255,12 @@ func (s *Service) GenerateThumbnail(videoPath, outputPath string, width, height 
 		"-vf", fmt.Sprintf("scale=%d:%d", width, height),
 		"-y", outputPath,
 	)
-	return cmd.Run()
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ffmpeg: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
 }
 
 // ThumbnailHash generates a unique hash for cache-busting.

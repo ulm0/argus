@@ -247,10 +247,16 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service) h
 
 		// Directory route (e.g. /analytics or /analytics/): serve its index.html
 		// directly to avoid the FileServer redirect loop on directory/index.html.
+		// Walk up the path segments to find the deepest matching index.html so
+		// that client-side pages under a route prefix (e.g. /videos/Folder/Event)
+		// are served by their parent shell (videos/index.html) rather than the
+		// root, giving the correct Next.js page component a chance to render.
 		clean := strings.TrimSuffix(path, "/")
-		if _, err := fs.Stat(webFS, clean+"/index.html"); err == nil {
-			serveFile(w, r, webFS, clean+"/index.html")
-			return
+		for seg := clean; seg != ""; seg = parentPath(seg) {
+			if _, err := fs.Stat(webFS, seg+"/index.html"); err == nil {
+				serveFile(w, r, webFS, seg+"/index.html")
+				return
+			}
 		}
 
 		// Fallback: serve the root index.html for any unknown path.
@@ -277,4 +283,14 @@ func serveFile(w http.ResponseWriter, r *http.Request, webFS fs.FS, name string)
 	}
 
 	http.ServeContent(w, r, name, stat.ModTime(), f.(io.ReadSeeker))
+}
+
+// parentPath returns the parent directory of a slash-separated path segment.
+// Returns "" when there is no parent (i.e. the path is already a root segment).
+func parentPath(p string) string {
+	idx := strings.LastIndex(p, "/")
+	if idx <= 0 {
+		return ""
+	}
+	return p[:idx]
 }
