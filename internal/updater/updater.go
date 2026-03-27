@@ -125,8 +125,13 @@ func CheckLatest(currentVersion string) (*Release, error) {
 // Install downloads the raw argus binary published by GoReleaser (binary format,
 // no archive wrapping), atomically replaces /usr/local/bin/argus, and restarts
 // the systemd service.
+//
+// The temp file is created in the same directory as binaryDest so that
+// os.Rename stays on the same filesystem (avoiding EXDEV cross-device errors).
 func Install(release *Release) error {
-	tmp, err := os.CreateTemp("", "argus-update-*")
+	destDir := binaryDest[:strings.LastIndex(binaryDest, "/")]
+
+	tmp, err := os.CreateTemp(destDir, ".argus-update-*")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
@@ -147,7 +152,7 @@ func Install(release *Release) error {
 		return fmt.Errorf("chmod binary: %w", err)
 	}
 
-	// Backup existing binary before swap
+	// Back up the existing binary before swapping.
 	if _, err := os.Stat(binaryDest); err == nil {
 		_ = os.Rename(binaryDest, binaryDest+".backup")
 	}
@@ -156,7 +161,7 @@ func Install(release *Release) error {
 		return fmt.Errorf("install binary: %w", err)
 	}
 
-	// Restart service; best-effort — the binary is already replaced
+	// Restart service; best-effort — the binary is already replaced.
 	_ = exec.Command("systemctl", "restart", "argus.service").Run()
 
 	return nil
