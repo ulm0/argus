@@ -159,6 +159,26 @@ export default function Sidebar() {
   const { resolvedTheme, setTheme } = useTheme();
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [currentVersion, setCurrentVersion] = useState("dev");
+  const [latestVersion, setLatestVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/version')  // Endpoint to get the current version
+      .then((res) => res.json())
+      .then((data) => setCurrentVersion(data.version))
+      .catch(() => setCurrentVersion("dev"));
+  }, []);
+
+  useEffect(() => {
+    fetch('https://api.github.com/repos/your_repo/releases/latest')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.tag_name) {
+          setLatestVersion(data.tag_name);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -210,6 +230,18 @@ export default function Sidebar() {
           );
         })}
       </nav>
+
+      {/* Version Info */}
+      <div className="p-3 border-t border-white/10">
+        <div className="flex justify-between items-center text-sm text-white">
+          <span>Version: {currentVersion}</span>
+          {latestVersion && latestVersion !== currentVersion && (
+            <span className="text-xs bg-red-600 text-white rounded-full px-2 py-1">
+              Update available: {latestVersion}
+            </span>
+          )}
+        </div>
+      </div>
 
       {/* Bottom section */}
       <div className="border-t border-white/10 p-3">
