@@ -470,6 +470,17 @@ export interface UpdateConfigPublic {
   channel: string;
 }
 
+export interface StartupConfigPublic {
+  boot_present_on_start: boolean;
+  boot_block_until_ready: boolean;
+  boot_cleanup_on_start: boolean;
+  boot_random_chime_on_start: boolean;
+  boot_fsck_enabled: boolean;
+  watchdog_enabled: boolean;
+  watchdog_timeout_sec: number;
+  reapply_sysctl_on_start: boolean;
+}
+
 export interface StorageInfo {
   cam_name: string;
   cam_label: string;
@@ -491,6 +502,7 @@ export interface ConfigResponse {
   web: WebConfigPublic;
   telegram: TelegramConfigPublic;
   update: UpdateConfigPublic;
+  startup: StartupConfigPublic;
   log_level: string;
   storage: StorageInfo;
 }

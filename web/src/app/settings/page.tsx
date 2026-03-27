@@ -65,6 +65,16 @@ export default function SettingsPage() {
   const [updateAuto, setUpdateAuto] = useState(false);
   const [updateCheckOnStartup, setUpdateCheckOnStartup] = useState(true);
 
+  // Editable states — Startup & reliability
+  const [bootPresentOnStart, setBootPresentOnStart] = useState(false);
+  const [bootBlockUntilReady, setBootBlockUntilReady] = useState(false);
+  const [bootCleanupOnStart, setBootCleanupOnStart] = useState(false);
+  const [bootRandomChimeOnStart, setBootRandomChimeOnStart] = useState(false);
+  const [bootFsckEnabled, setBootFsckEnabled] = useState(true);
+  const [watchdogEnabled, setWatchdogEnabled] = useState(false);
+  const [watchdogTimeoutSec, setWatchdogTimeoutSec] = useState(60);
+  const [reapplySysctlOnStart, setReapplySysctlOnStart] = useState(false);
+
   // Editable states — AP advanced
   const [apCheckInterval, setApCheckInterval] = useState(0);
   const [apDisconnectGrace, setApDisconnectGrace] = useState(0);
@@ -93,6 +103,14 @@ export default function SettingsPage() {
       setWebMaxChunk(data.web.max_upload_chunk_mb);
       setUpdateAuto(data.update.auto_update);
       setUpdateCheckOnStartup(data.update.check_on_startup);
+      setBootPresentOnStart(data.startup.boot_present_on_start);
+      setBootBlockUntilReady(data.startup.boot_block_until_ready);
+      setBootCleanupOnStart(data.startup.boot_cleanup_on_start);
+      setBootRandomChimeOnStart(data.startup.boot_random_chime_on_start);
+      setBootFsckEnabled(data.startup.boot_fsck_enabled);
+      setWatchdogEnabled(data.startup.watchdog_enabled);
+      setWatchdogTimeoutSec(data.startup.watchdog_timeout_sec);
+      setReapplySysctlOnStart(data.startup.reapply_sysctl_on_start);
       setApCheckInterval(data.offline_ap.check_interval);
       setApDisconnectGrace(data.offline_ap.disconnect_grace);
       setApMinRSSI(data.offline_ap.min_rssi);
@@ -283,6 +301,112 @@ export default function SettingsPage() {
             }
           >
             {saving === "update" ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Startup & Reliability ─────────────── */}
+      <div className={cardCls}>
+        <SectionHeader
+          title="Startup & Reliability"
+          description="Controls for unattended boot behavior. Most options apply on next service start/boot."
+        />
+        <div className="space-y-4">
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={bootPresentOnStart}
+              onChange={(e) => setBootPresentOnStart(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Present USB automatically on startup</span>
+          </label>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={bootBlockUntilReady}
+              onChange={(e) => setBootBlockUntilReady(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Block startup until boot pipeline completes</span>
+          </label>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={bootCleanupOnStart}
+              onChange={(e) => setBootCleanupOnStart(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Run boot cleanup on startup</span>
+          </label>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={bootRandomChimeOnStart}
+              onChange={(e) => setBootRandomChimeOnStart(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Pick a random chime on startup</span>
+          </label>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={bootFsckEnabled}
+              onChange={(e) => setBootFsckEnabled(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Run boot fsck checks</span>
+          </label>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={watchdogEnabled}
+              onChange={(e) => setWatchdogEnabled(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Enable hardware watchdog</span>
+          </label>
+          <label className={fieldLabel} htmlFor="watchdog-timeout-sec">
+            Watchdog timeout (seconds)
+          </label>
+          <input
+            id="watchdog-timeout-sec"
+            type="number"
+            min={1}
+            className={inputCls}
+            value={watchdogTimeoutSec}
+            onChange={(e) => setWatchdogTimeoutSec(Number(e.target.value))}
+          />
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={reapplySysctlOnStart}
+              onChange={(e) => setReapplySysctlOnStart(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Reapply sysctl profile on startup</span>
+          </label>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            className={btnPrimaryCls}
+            disabled={saving === "startup"}
+            onClick={() =>
+              saveSection("startup", {
+                startup: {
+                  boot_present_on_start: bootPresentOnStart,
+                  boot_block_until_ready: bootBlockUntilReady,
+                  boot_cleanup_on_start: bootCleanupOnStart,
+                  boot_random_chime_on_start: bootRandomChimeOnStart,
+                  boot_fsck_enabled: bootFsckEnabled,
+                  watchdog_enabled: watchdogEnabled,
+                  watchdog_timeout_sec: watchdogTimeoutSec,
+                  reapply_sysctl_on_start: reapplySysctlOnStart,
+                },
+              })
+            }
+          >
+            {saving === "startup" ? "Saving…" : "Save"}
           </button>
         </div>
       </div>

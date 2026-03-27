@@ -23,10 +23,10 @@ import (
 const defaultConfigYAML = `installation:
   target_user: pi # replaced at runtime by the detected non-root user
   mount_dir: /mnt/gadget
-  boot_present_on_start: false
-  boot_cleanup_on_start: false
+  boot_present_on_start: true
+  boot_cleanup_on_start: true
   boot_random_chime_on_start: false
-  boot_block_until_ready: false
+  boot_block_until_ready: true
 
 disk_images:
   cam_name: usb_cam.img
@@ -73,8 +73,8 @@ offline_ap:
 system:
   config_file: /boot/firmware/config.txt
   samba_conf: /etc/samba/smb.conf
-  reapply_sysctl_on_start: false
-  watchdog_enabled: false
+  reapply_sysctl_on_start: true
+  watchdog_enabled: true
   watchdog_timeout_sec: 60
 
 web:

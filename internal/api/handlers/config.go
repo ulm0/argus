@@ -25,12 +25,13 @@ func NewConfigHandler(cfg *config.Config) *ConfigHandler {
 // explicit in the API contract.
 type configResponse struct {
 	// Editable fields
-	Network  networkConfigPublic  `json:"network"`
-	OfflineAP offlineAPPublic     `json:"offline_ap"`
-	Web      webConfigPublic      `json:"web"`
-	Telegram telegramConfigPublic `json:"telegram"`
-	Update   updateConfigPublic   `json:"update"`
-	LogLevel string               `json:"log_level"`
+	Network   networkConfigPublic  `json:"network"`
+	OfflineAP offlineAPPublic      `json:"offline_ap"`
+	Web       webConfigPublic      `json:"web"`
+	Telegram  telegramConfigPublic `json:"telegram"`
+	Update    updateConfigPublic   `json:"update"`
+	Startup   startupConfigPublic  `json:"startup"`
+	LogLevel  string               `json:"log_level"`
 
 	// Read-only info (not patchable)
 	Storage storageInfo `json:"storage"`
@@ -83,19 +84,30 @@ type updateConfigPublic struct {
 	Channel        string `json:"channel"`
 }
 
+type startupConfigPublic struct {
+	BootPresentOnStart     bool `json:"boot_present_on_start"`
+	BootBlockUntilReady    bool `json:"boot_block_until_ready"`
+	BootCleanupOnStart     bool `json:"boot_cleanup_on_start"`
+	BootRandomChimeOnStart bool `json:"boot_random_chime_on_start"`
+	BootFsckEnabled        bool `json:"boot_fsck_enabled"`
+	WatchdogEnabled        bool `json:"watchdog_enabled"`
+	WatchdogTimeoutSec     int  `json:"watchdog_timeout_sec"`
+	ReapplySysctlOnStart   bool `json:"reapply_sysctl_on_start"`
+}
+
 type storageInfo struct {
-	CamName        string `json:"cam_name"`
-	CamLabel       string `json:"cam_label"`
-	Part2Enabled   bool   `json:"part2_enabled"`
-	ChimesEnabled  bool   `json:"chimes_enabled"`
-	LightshowEnabled bool `json:"lightshow_enabled"`
-	WrapsEnabled   bool   `json:"wraps_enabled"`
-	MusicEnabled   bool   `json:"music_enabled"`
-	MusicFS        string `json:"music_fs"`
-	BootFsckEnabled bool  `json:"boot_fsck_enabled"`
-	InstallDir     string `json:"install_dir"`
-	MountDir       string `json:"mount_dir"`
-	TargetUser     string `json:"target_user"`
+	CamName          string `json:"cam_name"`
+	CamLabel         string `json:"cam_label"`
+	Part2Enabled     bool   `json:"part2_enabled"`
+	ChimesEnabled    bool   `json:"chimes_enabled"`
+	LightshowEnabled bool   `json:"lightshow_enabled"`
+	WrapsEnabled     bool   `json:"wraps_enabled"`
+	MusicEnabled     bool   `json:"music_enabled"`
+	MusicFS          string `json:"music_fs"`
+	BootFsckEnabled  bool   `json:"boot_fsck_enabled"`
+	InstallDir       string `json:"install_dir"`
+	MountDir         string `json:"mount_dir"`
+	TargetUser       string `json:"target_user"`
 }
 
 // Get returns the current configuration, separating editable from read-only fields.
@@ -144,6 +156,16 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 			CheckOnStartup: cfg.Update.CheckOnStartup,
 			Channel:        cfg.Update.Channel,
 		},
+		Startup: startupConfigPublic{
+			BootPresentOnStart:     cfg.Installation.BootPresentOnStart,
+			BootBlockUntilReady:    cfg.Installation.BootBlockUntilReady,
+			BootCleanupOnStart:     cfg.Installation.BootCleanupOnStart,
+			BootRandomChimeOnStart: cfg.Installation.BootRandomChimeOnStart,
+			BootFsckEnabled:        cfg.DiskImages.BootFsckEnabled,
+			WatchdogEnabled:        cfg.System.WatchdogEnabled,
+			WatchdogTimeoutSec:     cfg.System.WatchdogTimeoutSec,
+			ReapplySysctlOnStart:   cfg.System.ReapplySysctlOnStart,
+		},
 		LogLevel: cfg.LogLevel,
 		Storage: storageInfo{
 			CamName:          cfg.DiskImages.CamName,
@@ -165,12 +187,13 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // patchRequest contains only the fields that are allowed to be updated.
 type patchRequest struct {
-	Network  *networkPatch  `json:"network,omitempty"`
+	Network   *networkPatch   `json:"network,omitempty"`
 	OfflineAP *offlineAPPatch `json:"offline_ap,omitempty"`
-	Web      *webPatch      `json:"web,omitempty"`
-	Telegram *telegramPatch `json:"telegram,omitempty"`
-	Update   *updatePatch   `json:"update,omitempty"`
-	LogLevel *string        `json:"log_level,omitempty"`
+	Web       *webPatch       `json:"web,omitempty"`
+	Telegram  *telegramPatch  `json:"telegram,omitempty"`
+	Update    *updatePatch    `json:"update,omitempty"`
+	Startup   *startupPatch   `json:"startup,omitempty"`
+	LogLevel  *string         `json:"log_level,omitempty"`
 }
 
 type networkPatch struct {
@@ -218,6 +241,17 @@ type updatePatch struct {
 	AutoUpdate     *bool   `json:"auto_update,omitempty"`
 	CheckOnStartup *bool   `json:"check_on_startup,omitempty"`
 	Channel        *string `json:"channel,omitempty"`
+}
+
+type startupPatch struct {
+	BootPresentOnStart     *bool `json:"boot_present_on_start,omitempty"`
+	BootBlockUntilReady    *bool `json:"boot_block_until_ready,omitempty"`
+	BootCleanupOnStart     *bool `json:"boot_cleanup_on_start,omitempty"`
+	BootRandomChimeOnStart *bool `json:"boot_random_chime_on_start,omitempty"`
+	BootFsckEnabled        *bool `json:"boot_fsck_enabled,omitempty"`
+	WatchdogEnabled        *bool `json:"watchdog_enabled,omitempty"`
+	WatchdogTimeoutSec     *int  `json:"watchdog_timeout_sec,omitempty"`
+	ReapplySysctlOnStart   *bool `json:"reapply_sysctl_on_start,omitempty"`
 }
 
 // Patch applies a partial update to the mutable config sections and persists to disk.
@@ -338,6 +372,37 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		}
 		if p.Channel != nil {
 			cfg.Update.Channel = *p.Channel
+		}
+	}
+
+	if p := req.Startup; p != nil {
+		if p.BootPresentOnStart != nil {
+			cfg.Installation.BootPresentOnStart = *p.BootPresentOnStart
+		}
+		if p.BootBlockUntilReady != nil {
+			cfg.Installation.BootBlockUntilReady = *p.BootBlockUntilReady
+		}
+		if p.BootCleanupOnStart != nil {
+			cfg.Installation.BootCleanupOnStart = *p.BootCleanupOnStart
+		}
+		if p.BootRandomChimeOnStart != nil {
+			cfg.Installation.BootRandomChimeOnStart = *p.BootRandomChimeOnStart
+		}
+		if p.BootFsckEnabled != nil {
+			cfg.DiskImages.BootFsckEnabled = *p.BootFsckEnabled
+		}
+		if p.WatchdogEnabled != nil {
+			cfg.System.WatchdogEnabled = *p.WatchdogEnabled
+		}
+		if p.ReapplySysctlOnStart != nil {
+			cfg.System.ReapplySysctlOnStart = *p.ReapplySysctlOnStart
+		}
+		if p.WatchdogTimeoutSec != nil {
+			if *p.WatchdogTimeoutSec <= 0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "watchdog_timeout_sec must be > 0"})
+				return
+			}
+			cfg.System.WatchdogTimeoutSec = *p.WatchdogTimeoutSec
 		}
 	}
 

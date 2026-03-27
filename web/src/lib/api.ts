@@ -28,6 +28,7 @@ import type {
   PartitionUsage,
   SambaStatus,
   Schedule,
+  StartupConfigPublic,
   StatusResponse,
   TelegramConfigPublic,
   TelegramStatus,
@@ -533,6 +534,7 @@ type ConfigPatch = {
   web?: Partial<WebConfigPublic>;
   telegram?: Partial<TelegramConfigPublic>;
   update?: Partial<UpdateConfigPublic>;
+  startup?: Partial<StartupConfigPublic>;
   log_level?: string;
 };
 
