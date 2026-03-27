@@ -35,7 +35,16 @@ func NewRouter(cfg *config.Config, webFS fs.FS) http.Handler {
 
 	maxBody := int64(cfg.Web.MaxUploadSizeMB) * 1024 * 1024
 	r.Use(func(next http.Handler) http.Handler {
-		return http.MaxBytesHandler(next, maxBody)
+		// MaxBytesHandler wraps the ResponseWriter in a type that does not
+		// implement http.Flusher, so skip it for SSE streaming endpoints.
+		limited := http.MaxBytesHandler(next, maxBody)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			limited.ServeHTTP(w, r)
+		})
 	})
 
 	modeH := handlers.NewModeHandler(cfg)
