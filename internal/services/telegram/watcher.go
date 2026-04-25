@@ -12,6 +12,10 @@ import (
 	"github.com/ulm0/argus/internal/logger"
 )
 
+// maxConcurrentEvents limits how many sentry event goroutines run simultaneously.
+// On a single-core Pi Zero, more than a few concurrent goroutines just cause context switching overhead.
+const maxConcurrentEvents = 3
+
 // SentryWatcher watches for new Sentry Mode events using polling.
 // On Linux with inotify (via fsnotify), this would be event-driven.
 // For portability, we use a polling approach that checks for new directories.
@@ -21,6 +25,7 @@ type SentryWatcher struct {
 	seen     map[string]bool
 	stopCh   chan struct{}
 	stopOnce sync.Once
+	sem      chan struct{}
 }
 
 func NewSentryWatcher(cfg *config.Config, callback func(SentryEvent)) *SentryWatcher {
@@ -29,6 +34,7 @@ func NewSentryWatcher(cfg *config.Config, callback func(SentryEvent)) *SentryWat
 		callback: callback,
 		seen:     make(map[string]bool),
 		stopCh:   make(chan struct{}),
+		sem:      make(chan struct{}, maxConcurrentEvents),
 	}
 }
 
@@ -111,10 +117,20 @@ func (w *SentryWatcher) checkForNewEvents(ctx context.Context) {
 
 		w.seen[name] = true
 
-		// Process each new event concurrently so that multiple events detected in
-		// the same tick don't serialize their 5-second "write-settle" wait.
+		// Process each new event concurrently but bounded by the semaphore so we
+		// never flood the single-core Pi Zero with unbounded goroutines.
 		go func(eventName string) {
-			// Wait for the event to be fully written, honouring shutdown signals.
+			// Acquire semaphore slot, honouring shutdown signals.
+			select {
+			case w.sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			case <-w.stopCh:
+				return
+			}
+			defer func() { <-w.sem }()
+
+			// Wait for the event to be fully written.
 			select {
 			case <-time.After(5 * time.Second):
 			case <-ctx.Done():

@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/ulm0/argus/internal/config"
 )
@@ -46,8 +48,13 @@ type CompleteAnalytics struct {
 	LastUpdated       string            `json:"last_updated"`
 }
 
+const videoStatsCacheTTL = 30 * time.Second
+
 type Service struct {
-	cfg *config.Config
+	cfg      *config.Config
+	mu       sync.Mutex
+	vsCache  []VideoStats
+	vsCacheExp time.Time
 }
 
 func NewService(cfg *config.Config) *Service {
@@ -88,10 +95,19 @@ func (s *Service) GetPartitionUsage() []PartitionUsage {
 }
 
 // GetVideoStatistics returns video counts and sizes per TeslaCam folder.
+// Results are cached for videoStatsCacheTTL to avoid repeated directory walks.
 func (s *Service) GetVideoStatistics() []VideoStats {
+	s.mu.Lock()
+	if s.vsCache != nil && time.Now().Before(s.vsCacheExp) {
+		cached := make([]VideoStats, len(s.vsCache))
+		copy(cached, s.vsCache)
+		s.mu.Unlock()
+		return cached
+	}
+	s.mu.Unlock()
+
 	var stats []VideoStats
 
-	// Find TeslaCam path
 	for _, ro := range []bool{true, false} {
 		base := s.cfg.MountPath("part1", ro)
 		tcPath := filepath.Join(base, "TeslaCam")
@@ -119,6 +135,10 @@ func (s *Service) GetVideoStatistics() []VideoStats {
 		break
 	}
 
+	s.mu.Lock()
+	s.vsCache = stats
+	s.vsCacheExp = time.Now().Add(videoStatsCacheTTL)
+	s.mu.Unlock()
 	return stats
 }
 

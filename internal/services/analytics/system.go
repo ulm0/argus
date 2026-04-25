@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -57,12 +58,28 @@ func (s *Service) GetSystemMetrics() SystemMetrics {
 	}
 }
 
+var (
+	cpuCacheMu  sync.Mutex
+	cpuCacheVal float64
+	cpuCacheExp time.Time
+)
+
+const cpuCacheTTL = 5 * time.Second
+
 type cpuTimes struct {
 	idle  uint64
 	total uint64
 }
 
 func readCPUUsagePercent() float64 {
+	cpuCacheMu.Lock()
+	if time.Now().Before(cpuCacheExp) {
+		v := cpuCacheVal
+		cpuCacheMu.Unlock()
+		return v
+	}
+	cpuCacheMu.Unlock()
+
 	t1, err := readCPUTimes()
 	if err != nil {
 		return 0
@@ -75,10 +92,16 @@ func readCPUUsagePercent() float64 {
 
 	totalDelta := float64(t2.total - t1.total)
 	idleDelta := float64(t2.idle - t1.idle)
-	if totalDelta <= 0 {
-		return 0
+	var usage float64
+	if totalDelta > 0 {
+		usage = (1 - idleDelta/totalDelta) * 100
 	}
-	return (1 - idleDelta/totalDelta) * 100
+
+	cpuCacheMu.Lock()
+	cpuCacheVal = usage
+	cpuCacheExp = time.Now().Add(cpuCacheTTL)
+	cpuCacheMu.Unlock()
+	return usage
 }
 
 func readCPUTimes() (cpuTimes, error) {

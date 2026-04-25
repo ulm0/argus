@@ -36,6 +36,7 @@ type Monitor struct {
 	stopCh chan struct{}
 	onDisconnect func()
 	onReconnect  func()
+	connInfoExp  time.Time // protected by mu; refreshes getConnectionInfo every 5 min
 }
 
 func NewMonitor(cfg *config.Config) *Monitor {
@@ -97,31 +98,37 @@ func (m *Monitor) monitorLoop(ctx context.Context) {
 }
 
 func (m *Monitor) checkWifi() bool {
-	// Check link status
 	if !m.linkUp() {
 		m.updateStatus(false, "", 0)
 		return false
 	}
 
-	// Check IP
 	if !m.ipReady() {
 		m.updateStatus(false, "", 0)
 		return false
 	}
 
-	// Ping check
 	if !m.pingOK() {
 		m.updateStatus(false, "", 0)
 		return false
 	}
 
-	// Get connection details
-	status := m.getConnectionInfo()
+	// Refresh SSID/signal details at most once every 5 minutes; the connectivity
+	// checks above already confirmed we are online.
 	m.mu.Lock()
-	m.status = status
+	needsRefresh := time.Now().After(m.connInfoExp)
 	m.mu.Unlock()
 
-	return status.Connected
+	if needsRefresh {
+		status := m.getConnectionInfo()
+		m.mu.Lock()
+		m.status = status
+		m.connInfoExp = time.Now().Add(5 * time.Minute)
+		m.mu.Unlock()
+		return status.Connected
+	}
+
+	return true
 }
 
 func (m *Monitor) linkUp() bool {
