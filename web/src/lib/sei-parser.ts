@@ -150,7 +150,7 @@ function decodeSeiProtobuf(data: Uint8Array): SeiMetadata | null {
           break;
         }
         default:
-          return msg;
+          return null;
       }
     }
   } catch {

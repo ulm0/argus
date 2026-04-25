@@ -61,7 +61,15 @@ export default function DashcamPlayer({
   const thumbnailVideoRefs = useRef<Map<CameraName, HTMLVideoElement>>(new Map());
   const seiAbortRef = useRef<AbortController | null>(null);
 
-  const activeFile = event.camera_videos[activeCamera];
+  const activeFile = useMemo(() => {
+    const clipTs = clips[clipIndex];
+    if (clipTs) {
+      const refFile = Object.values(event.camera_videos)[0] ?? "";
+      const ext = refFile.match(/\.(\w+)$/)?.[1] ?? "mp4";
+      return `${clipTs}-${activeCamera}.${ext}`;
+    }
+    return event.camera_videos[activeCamera];
+  }, [clips, clipIndex, activeCamera, event.camera_videos]);
   const isEncrypted = event.encrypted_videos?.[activeCamera] ?? false;
 
   const streamSrc = useMemo(() => {
@@ -71,14 +79,41 @@ export default function DashcamPlayer({
 
   const videoSrc = blobSrc || streamSrc;
 
-  // Restore HUD toggle from localStorage
+  // Restore HUD toggle from localStorage and load SEI data if it was enabled
   useEffect(() => {
     try {
-      setHudEnabled(localStorage.getItem("seiOverlayEnabled") === "true");
+      const saved = localStorage.getItem("seiOverlayEnabled") === "true";
+      setHudEnabled(saved);
+      if (saved && activeFile && !isEncrypted) {
+        loadSeiData(activeFile);
+      }
     } catch {
       // SSR or restricted storage
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Clear SEI/blob and reload when the active file changes (clip navigation or camera switch)
+  const prevFileRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const prev = prevFileRef.current;
+    prevFileRef.current = activeFile;
+    if (prev === undefined || prev === activeFile) return;
+
+    abortSei();
+    setSeiFrames([]);
+    setCurrentSei(null);
+    setSeiLoading(false);
+    setBlobSrc((existing: string | null) => {
+      if (existing) URL.revokeObjectURL(existing);
+      return null;
+    });
+
+    if (hudEnabled && activeFile && !isEncrypted) {
+      loadSeiData(activeFile);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFile]);
 
   // Sync thumbnail videos to main video time
   const syncThumbnails = useCallback((time: number) => {
@@ -328,7 +363,7 @@ export default function DashcamPlayer({
     });
   }, [activeFile, isEncrypted, loadSeiData, abortSei, blobSrc]);
 
-  // Reset SEI on camera switch
+  // Switch camera — SEI reload is handled by the activeFile change effect
   const switchCamera = useCallback((cam: CameraName) => {
     abortSei();
     setSeiFrames([]);
@@ -352,15 +387,8 @@ export default function DashcamPlayer({
         v.currentTime = savedTime;
         if (wasPlaying) v.play().catch(() => {});
       }
-
-      // Re-trigger SEI load if HUD is enabled
-      const file = event.camera_videos[cam];
-      const encrypted = event.encrypted_videos?.[cam] ?? false;
-      if (hudEnabled && file && !encrypted) {
-        loadSeiData(file);
-      }
     });
-  }, [abortSei, blobSrc, event.camera_videos, event.encrypted_videos, hudEnabled, loadSeiData]);
+  }, [abortSei, blobSrc]);
 
   // Cleanup blob URLs on unmount
   useEffect(() => {

@@ -376,6 +376,7 @@ func (s *Service) parseEvent(eventDir, name string) Event {
 	}
 
 	var totalSize int64
+	clipSet := make(map[string]bool)
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -396,20 +397,13 @@ func (s *Service) parseEvent(eventDir, name string) Event {
 			event.CameraVideos[camera] = name
 			fullPath := filepath.Join(eventDir, name)
 			event.Encrypted[camera] = !s.IsValidMP4(fullPath)
+			clipSet[m[1]] = true
 		}
 	}
 
 	event.SizeMB = float64(totalSize) / (1024 * 1024)
 
-	// Collect clip timestamps
-	clipMap := make(map[string]bool)
-	for _, name := range event.CameraVideos {
-		m := sessionPattern.FindStringSubmatch(name)
-		if m != nil {
-			clipMap[m[1]] = true
-		}
-	}
-	for clip := range clipMap {
+	for clip := range clipSet {
 		event.Clips = append(event.Clips, clip)
 	}
 	sort.Strings(event.Clips)
