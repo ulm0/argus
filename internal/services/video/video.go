@@ -58,7 +58,8 @@ type Event struct {
 	HasThumbnail bool              `json:"has_thumbnail"`
 	CameraVideos map[string]string `json:"camera_videos"`
 	Encrypted    map[string]bool   `json:"encrypted_videos"`
-	Clips        []string          `json:"clips,omitempty"`
+	Clips              []string          `json:"clips,omitempty"`
+	StartingClipIndex  int               `json:"starting_clip_index"`
 }
 
 type Folder struct {
@@ -101,6 +102,18 @@ func (s *Service) GetTeslaCamPath() string {
 	return found
 }
 
+// GetArchivePath returns the TeslaCam path inside the configured archive directory, or "".
+func (s *Service) GetArchivePath() string {
+	if s.cfg.Installation.ArchivePath == "" {
+		return ""
+	}
+	p := filepath.Join(s.cfg.Installation.ArchivePath, "TeslaCam")
+	if info, err := os.Stat(p); err == nil && info.IsDir() {
+		return p
+	}
+	return ""
+}
+
 // GetFolders returns the TeslaCam subfolders (SavedClips, SentryClips, RecentClips, etc.).
 func (s *Service) GetFolders() []Folder {
 	tcPath := s.GetTeslaCamPath()
@@ -125,6 +138,24 @@ func (s *Service) GetFolders() []Folder {
 		count := countVideoFiles(filepath.Join(tcPath, name))
 		folders = append(folders, Folder{Name: name, Path: name, Count: count})
 	}
+
+	if archivePath := s.GetArchivePath(); archivePath != "" {
+		archiveEntries, err := os.ReadDir(archivePath)
+		if err == nil {
+			for _, e := range archiveEntries {
+				if !e.IsDir() || e.Name() == "." || e.Name() == ".." {
+					continue
+				}
+				count := countVideoFiles(filepath.Join(archivePath, e.Name()))
+				folders = append(folders, Folder{
+					Name:  e.Name() + " (Archive)",
+					Path:  "archive/" + e.Name(),
+					Count: count,
+				})
+			}
+		}
+	}
+
 	return folders
 }
 
@@ -408,7 +439,50 @@ func (s *Service) parseEvent(eventDir, name string) Event {
 	}
 	sort.Strings(event.Clips)
 
+	event.StartingClipIndex = computeStartingClipIndex(event.Clips, event.Datetime)
+
 	return event
+}
+
+// computeStartingClipIndex finds the index of the clip that contains or immediately
+// precedes the event's trigger timestamp. Falls back to 0 if parsing fails.
+func computeStartingClipIndex(clips []string, datetime string) int {
+	if len(clips) == 0 {
+		return 0
+	}
+	if len(clips) == 1 {
+		return 0
+	}
+
+	// Parse event time — try ISO 8601 first, then the folder-name format
+	var eventTime time.Time
+	for _, layout := range []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02_15-04-05",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, datetime); err == nil {
+			eventTime = t
+			break
+		}
+	}
+	if eventTime.IsZero() {
+		return 0
+	}
+
+	// Clip timestamps are in "YYYY-MM-DD_HH-MM-SS" format (already sorted ascending)
+	best := 0
+	for i, clip := range clips {
+		t, err := time.Parse("2006-01-02_15-04-05", clip)
+		if err != nil {
+			continue
+		}
+		if !t.After(eventTime) {
+			best = i
+		}
+	}
+	return best
 }
 
 // CreateEventZip creates a ZIP archive of all videos in an event.

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import * as api from "@/lib/api";
-import type { VideoEvent } from "@/lib/types";
+import type { AppStatus, VideoEvent } from "@/lib/types";
 import DashcamPlayer from "@/components/DashcamPlayer";
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
 
 export default function VideoEventPage({ folder, event }: Props) {
   const [details, setDetails] = useState<VideoEvent | null>(null);
+  const [appStatus, setAppStatus] = useState<AppStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleted, setDeleted] = useState(false);
@@ -19,9 +20,11 @@ export default function VideoEventPage({ folder, event }: Props) {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    api
-      .getEvent(folder, event)
-      .then(setDetails)
+    Promise.all([api.getEvent(folder, event), api.getStatus()])
+      .then(([eventData, statusData]) => {
+        setDetails(eventData);
+        setAppStatus(statusData);
+      })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load event"))
       .finally(() => setLoading(false));
   }, [folder, event]);
@@ -124,7 +127,7 @@ export default function VideoEventPage({ folder, event }: Props) {
           event={details}
           streamUrlFn={(file) => api.streamURL(`${folder}/${event}/${file}`)}
           seiUrlFn={(file) => api.seiURL(`${folder}/${event}/${file}`)}
-          onDelete={handleDelete}
+          onDelete={appStatus?.mode === "edit" ? handleDelete : undefined}
         />
       </div>
     </div>

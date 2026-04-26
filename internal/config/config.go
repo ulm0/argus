@@ -37,6 +37,9 @@ type Config struct {
 type InstallationConfig struct {
 	TargetUser string `yaml:"target_user"`
 	MountDir   string `yaml:"mount_dir"`
+	// ArchivePath is the optional path to the archive storage directory.
+	// If set and a TeslaCam subdirectory exists there, its contents are included in the folder listing.
+	ArchivePath string `yaml:"archive_path"`
 	// BootPresentOnStart runs SwitchToPresent once at process start (replaces TeslaUSB present_usb_on_boot.service).
 	BootPresentOnStart bool `yaml:"boot_present_on_start"`
 	// BootCleanupOnStart runs cleanup against TeslaCam before presenting when cleanup_config.json has boot_cleanup policies.

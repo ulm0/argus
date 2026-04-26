@@ -173,6 +173,13 @@ export default function VideosListPage() {
         <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
           Videos
         </h1>
+        <a
+          href="/videos/local"
+          className="rounded-sm border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-secondary)] transition-colors"
+          title="Analyze local MP4 files from your computer"
+        >
+          Local Analysis
+        </a>
         <button
           onClick={() => setEditMode(!editMode)}
           className={`rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ${

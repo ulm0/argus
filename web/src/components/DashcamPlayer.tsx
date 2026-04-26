@@ -9,9 +9,13 @@ import {
 } from "react";
 import type { CameraName, VideoEvent } from "@/lib/types";
 import { CAMERA_LABELS } from "@/lib/types";
-import { DashcamMP4, findSeiAtTime } from "@/lib/sei-parser";
+import { DashcamMP4, findSeiAtTime, downloadCsv } from "@/lib/sei-parser";
 import type { SeiFrame, SeiMetadata } from "@/lib/sei-parser";
 import ArgusHUD from "./ArgusHUD";
+
+// Module-level cache survives component remounts — enables Range-request resume
+interface SeiCacheEntry { chunks: Uint8Array[]; loaded: number; total: number; }
+const seiDownloadCache = new Map<string, SeiCacheEntry>();
 
 interface DashcamPlayerProps {
   event: VideoEvent;
@@ -41,7 +45,7 @@ export default function DashcamPlayer({
   const [activeCamera, setActiveCamera] = useState<CameraName>(
     cameras.includes("front") ? "front" : cameras[0],
   );
-  const [clipIndex, setClipIndex] = useState(0);
+  const [clipIndex, setClipIndex] = useState(event.starting_clip_index ?? 0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -249,7 +253,6 @@ export default function DashcamPlayer({
 
     const url = seiUrlFn(file);
     setSeiLoading(true);
-    setSeiProgress("Downloading video file...");
     setSeiFrames([]);
     setCurrentSei(null);
 
@@ -257,29 +260,41 @@ export default function DashcamPlayer({
     seiAbortRef.current = controller;
 
     try {
-      const response = await fetch(url, {
-        credentials: "same-origin",
-        signal: controller.signal,
-      });
+      const cached = seiDownloadCache.get(url);
+      const resumeFrom = cached ? cached.loaded : 0;
 
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setSeiProgress(resumeFrom > 0 ? "Resuming download..." : "Downloading video file...");
 
-      const total = parseInt(response.headers.get("content-length") || "0", 10);
+      const headers: HeadersInit = resumeFrom > 0 ? { Range: `bytes=${resumeFrom}-` } : {};
+      const response = await fetch(url, { credentials: "same-origin", signal: controller.signal, headers });
+
+      if (!response.ok && response.status !== 206) throw new Error(`HTTP ${response.status}`);
+
+      const isResume = response.status === 206 && cached !== undefined;
+      const total = (() => {
+        const cl = response.headers.get("content-length");
+        if (response.status === 206) {
+          const m = response.headers.get("content-range")?.match(/\/(\d+)$/);
+          return m ? parseInt(m[1], 10) : (cl ? parseInt(cl, 10) + resumeFrom : 0);
+        }
+        return cl ? parseInt(cl, 10) : 0;
+      })();
+
       const reader = response.body?.getReader();
       if (!reader) throw new Error("No response body");
 
-      const chunks: Uint8Array[] = [];
-      let loaded = 0;
+      const newChunks: Uint8Array[] = [];
+      let newLoaded = 0;
 
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        chunks.push(value);
-        loaded += value.length;
-
+        newChunks.push(value);
+        newLoaded += value.length;
+        const totalLoaded = resumeFrom + newLoaded;
         if (total) {
-          const pct = Math.round((loaded / total) * 100);
-          const mb = (loaded / 1024 / 1024).toFixed(1);
+          const pct = Math.round((totalLoaded / total) * 100);
+          const mb = (totalLoaded / 1024 / 1024).toFixed(1);
           const totalMb = (total / 1024 / 1024).toFixed(1);
           setSeiProgress(`${mb} MB / ${totalMb} MB (${pct}%)`);
         }
@@ -287,12 +302,13 @@ export default function DashcamPlayer({
 
       setSeiProgress("Parsing video data...");
 
-      const buffer = new Uint8Array(loaded);
+      const allChunks = isResume ? [...cached!.chunks, ...newChunks] : newChunks;
+      const totalBytes = resumeFrom + newLoaded;
+      const buffer = new Uint8Array(totalBytes);
       let pos = 0;
-      for (const chunk of chunks) {
-        buffer.set(chunk, pos);
-        pos += chunk.length;
-      }
+      for (const chunk of allChunks) { buffer.set(chunk, pos); pos += chunk.length; }
+
+      seiDownloadCache.set(url, { chunks: allChunks, loaded: totalBytes, total });
 
       const mp4 = new DashcamMP4(buffer.buffer);
       const frames = mp4.parseFrames();
@@ -300,14 +316,11 @@ export default function DashcamPlayer({
 
       const blob = new Blob([buffer], { type: "video/mp4" });
       const blobUrl = URL.createObjectURL(blob);
-
       const v = mainVideoRef.current;
       const savedTime = v?.currentTime ?? 0;
       const wasPlaying = v ? !v.paused : false;
-
       setBlobSrc(blobUrl);
 
-      // Restore playback state after source swap
       requestAnimationFrame(() => {
         const vid = mainVideoRef.current;
         if (vid) {
@@ -537,6 +550,20 @@ export default function DashcamPlayer({
           </div>
 
           <div className="flex items-center gap-1">
+            {/* CSV telemetry export */}
+            {hudEnabled && seiFrames.length > 0 && (
+              <button
+                onClick={() => downloadCsv(seiFrames, `${activeFile?.replace(/\.mp4$/i, "") ?? "telemetry"}.csv`)}
+                className="rounded p-1.5 text-zinc-400 hover:text-white transition-colors"
+                aria-label="Download telemetry CSV"
+                title="Download telemetry CSV"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+              </button>
+            )}
+
             {/* HUD Overlay toggle */}
             <button
               onClick={toggleHud}

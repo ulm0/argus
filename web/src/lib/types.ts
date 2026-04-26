@@ -43,6 +43,7 @@ export interface VideoEvent {
   camera_videos: Record<string, string>;
   encrypted_videos: Record<string, boolean>;
   clips?: string[];
+  starting_clip_index?: number;
 }
 
 export interface SessionGroup {
