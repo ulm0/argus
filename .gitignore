@@ -15,3 +15,6 @@ coverage.html
 
 # Playwright MCP browser automation
 .playwright-mcp/
+
+# Claude Code internal state
+.claude/worktrees/
