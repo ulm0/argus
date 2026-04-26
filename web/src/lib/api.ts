@@ -158,6 +158,10 @@ export function seiURL(relativePath: string): string {
   return `/api/videos/sei/${relativePath}`;
 }
 
+export function telemetryURL(relativePath: string): string {
+  return `/api/videos/telemetry/${relativePath}`;
+}
+
 export function downloadEventURL(folder: string, event: string): string {
   return `/api/videos/download-event/${encodeURIComponent(folder)}/${encodeURIComponent(event)}`;
 }

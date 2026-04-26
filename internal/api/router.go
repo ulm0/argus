@@ -103,6 +103,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service) h
 	api.HandleFunc("/videos/{folder}/{event}", videoH.Event).Methods("GET")
 	api.HandleFunc("/videos/stream/{rest:.*}", videoH.Stream).Methods("GET")
 	api.HandleFunc("/videos/sei/{rest:.*}", videoH.SEI).Methods("GET")
+	api.HandleFunc("/videos/telemetry/{rest:.*}", videoH.Telemetry).Methods("GET")
 	api.HandleFunc("/videos/download/{rest:.*}", videoH.Download).Methods("GET")
 	api.HandleFunc("/videos/download-event/{folder}/{event}", videoH.DownloadEvent).Methods("GET")
 	api.HandleFunc("/videos/thumbnail/{folder}/{event}", videoH.Thumbnail).Methods("GET")

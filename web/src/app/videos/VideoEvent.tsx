@@ -126,7 +126,7 @@ export default function VideoEventPage({ folder, event }: Props) {
         <DashcamPlayer
           event={details}
           streamUrlFn={(file) => api.streamURL(`${folder}/${event}/${file}`)}
-          seiUrlFn={(file) => api.seiURL(`${folder}/${event}/${file}`)}
+          telemetryUrlFn={(file) => api.telemetryURL(`${folder}/${event}/${file}`)}
           onDelete={appStatus?.mode === "edit" ? handleDelete : undefined}
         />
       </div>

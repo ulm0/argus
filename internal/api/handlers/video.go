@@ -141,6 +141,22 @@ func (h *VideoHandler) SEI(w http.ResponseWriter, r *http.Request) {
 	h.videoSvc.ReadSEIData(w, r, videoPath)
 }
 
+// Telemetry extracts Tesla SEI telemetry from an MP4 file and serves it as JSON.
+func (h *VideoHandler) Telemetry(w http.ResponseWriter, r *http.Request) {
+	videoPath := h.resolveVideoPath(r)
+	if videoPath == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid video path"})
+		return
+	}
+
+	if _, err := os.Stat(videoPath); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "video not found"})
+		return
+	}
+
+	h.videoSvc.ExtractTelemetry(w, videoPath)
+}
+
 // Download serves a single video file as an attachment.
 func (h *VideoHandler) Download(w http.ResponseWriter, r *http.Request) {
 	videoPath := h.resolveVideoPath(r)
