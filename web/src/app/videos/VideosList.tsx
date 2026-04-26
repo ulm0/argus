@@ -223,8 +223,9 @@ export default function VideosListPage() {
       {activeTab === "RecentClips" ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {sessions.map((s) => (
-            <div
+            <a
               key={s.session}
+              href={`/videos/${activeTab}/${s.session}`}
               className="group relative overflow-hidden rounded bg-[var(--color-bg-card)] shadow-sm transition-all hover:shadow-md"
             >
               <div className="aspect-video bg-[var(--color-bg-tertiary)]">
@@ -247,7 +248,7 @@ export default function VideosListPage() {
                   <span>{s.cameras?.length || 0} cameras</span>
                 </div>
               </div>
-            </div>
+            </a>
           ))}
         </div>
       ) : (

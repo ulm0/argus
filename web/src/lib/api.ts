@@ -146,6 +146,10 @@ export function getEvent(folder: string, event: string): Promise<VideoEvent> {
   return request<VideoEvent>(`/api/videos/${encodeURIComponent(folder)}/${encodeURIComponent(event)}`);
 }
 
+export function getSessionDetail(folder: string, session: string): Promise<VideoEvent> {
+  return request<VideoEvent>(`/api/videos/session-detail/${encodeURIComponent(folder)}/${encodeURIComponent(session)}`);
+}
+
 export function streamURL(relativePath: string): string {
   return `/api/videos/stream/${relativePath}`;
 }

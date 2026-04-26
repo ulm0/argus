@@ -261,6 +261,62 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, thumbPath)
 }
 
+// SessionDetail returns a VideoEvent-shaped response for a RecentClips session.
+func (h *VideoHandler) SessionDetail(w http.ResponseWriter, r *http.Request) {
+	folder := mux.Vars(r)["folder"]
+	session := mux.Vars(r)["session"]
+
+	folderPath := h.resolveFolderPath(folder)
+	if folderPath == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "folder not found"})
+		return
+	}
+
+	filenames := h.videoSvc.GetSessionVideos(folderPath, session)
+	if len(filenames) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+
+	cameraVideos := make(map[string]string)
+	encrypted := make(map[string]bool)
+	var totalBytes int64
+
+	for _, filename := range filenames {
+		_, camera, ok := video.ParseSessionFromFilename(filename)
+		if !ok {
+			continue
+		}
+		cameraVideos[camera] = filename
+		fullPath := filepath.Join(folderPath, filename)
+		encrypted[camera] = !h.videoSvc.IsValidMP4(fullPath)
+		if info, err := os.Stat(fullPath); err == nil {
+			totalBytes += info.Size()
+		}
+	}
+
+	if len(cameraVideos) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no valid videos in session"})
+		return
+	}
+
+	// session format is "2024-01-01_12-00-00" → datetime "2024-01-01T12:00:00"
+	datetime := ""
+	if len(session) >= 19 {
+		datetime = session[:10] + "T" + strings.ReplaceAll(session[11:19], "-", ":")
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":                session,
+		"camera_videos":       cameraVideos,
+		"encrypted_videos":    encrypted,
+		"clips":               []string{session},
+		"starting_clip_index": 0,
+		"datetime":            datetime,
+		"size_mb":             float64(totalBytes) / (1024 * 1024),
+	})
+}
+
 // SessionThumbnail generates and serves a thumbnail for a session (RecentClips).
 func (h *VideoHandler) SessionThumbnail(w http.ResponseWriter, r *http.Request) {
 	folder := mux.Vars(r)["folder"]
