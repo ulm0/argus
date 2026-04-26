@@ -137,7 +137,7 @@ function ArgusHUD({ sei, visible }: ArgusHUDProps) {
               opacity: apLabel ? 1 : 0,
               transition: "opacity 0.25s ease, max-height 0.25s ease",
             }}
-            className="overflow-hidden text-center text-[11px] font-semibold tracking-wide text-[#4af]"
+            className="overflow-hidden text-center text-[11px] font-semibold tracking-wide text-[#32c759]"
           >
             {apLabel}
           </div>

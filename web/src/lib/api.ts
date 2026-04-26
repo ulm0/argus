@@ -146,6 +146,10 @@ export function getEvent(folder: string, event: string): Promise<VideoEvent> {
   return request<VideoEvent>(`/api/videos/${encodeURIComponent(folder)}/${encodeURIComponent(event)}`);
 }
 
+export function getSessionDetail(folder: string, session: string): Promise<VideoEvent> {
+  return request<VideoEvent>(`/api/videos/session-detail/${encodeURIComponent(folder)}/${encodeURIComponent(session)}`);
+}
+
 export function streamURL(relativePath: string): string {
   return `/api/videos/stream/${relativePath}`;
 }
@@ -156,6 +160,10 @@ export function downloadURL(relativePath: string): string {
 
 export function seiURL(relativePath: string): string {
   return `/api/videos/sei/${relativePath}`;
+}
+
+export function telemetryURL(relativePath: string): string {
+  return `/api/videos/telemetry/${relativePath}`;
 }
 
 export function downloadEventURL(folder: string, event: string): string {
@@ -556,6 +564,36 @@ export function patchConfig(patch: ConfigPatch): Promise<StatusResponse> {
     method: "PATCH",
     body: JSON.stringify(patch),
   });
+}
+
+// ──────────────────────────────────────────────
+// Webhook
+// ──────────────────────────────────────────────
+
+export interface WebhookStatus {
+  enabled: boolean;
+  url: string;
+  has_secret: boolean;
+}
+
+export function getWebhookStatus(): Promise<WebhookStatus> {
+  return request<WebhookStatus>("/api/webhook/status");
+}
+
+export function configureWebhook(data: {
+  enabled: boolean;
+  url: string;
+  secret: string;
+}): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/webhook/configure", data);
+}
+
+// ──────────────────────────────────────────────
+// Sentry Events (SSE)
+// ──────────────────────────────────────────────
+
+export function sentryEventsURL(): string {
+  return "/api/events/stream";
 }
 
 // ──────────────────────────────────────────────

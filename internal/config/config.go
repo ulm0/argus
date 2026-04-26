@@ -20,6 +20,7 @@ type Config struct {
 	System       SystemConfig       `yaml:"system"`
 	Web          WebConfig          `yaml:"web"`
 	Telegram     TelegramConfig     `yaml:"telegram"`
+	Webhook      WebhookConfig      `yaml:"webhook"`
 	Update       UpdateConfig       `yaml:"update"`
 	LogLevel     string             `yaml:"log_level"`
 
@@ -37,6 +38,9 @@ type Config struct {
 type InstallationConfig struct {
 	TargetUser string `yaml:"target_user"`
 	MountDir   string `yaml:"mount_dir"`
+	// ArchivePath is the optional path to the archive storage directory.
+	// If set and a TeslaCam subdirectory exists there, its contents are included in the folder listing.
+	ArchivePath string `yaml:"archive_path"`
 	// BootPresentOnStart runs SwitchToPresent once at process start (replaces TeslaUSB present_usb_on_boot.service).
 	BootPresentOnStart bool `yaml:"boot_present_on_start"`
 	// BootCleanupOnStart runs cleanup against TeslaCam before presenting when cleanup_config.json has boot_cleanup policies.
@@ -125,6 +129,13 @@ type TelegramConfig struct {
 	OfflineMode  string `yaml:"offline_mode"`
 	MaxQueueSize int    `yaml:"max_queue_size"`
 	VideoQuality string `yaml:"video_quality"`
+}
+
+type WebhookConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	URL     string `yaml:"url"`
+	// Secret is used to sign payloads with HMAC-SHA256 (X-Argus-Signature header). Optional.
+	Secret string `yaml:"secret"`
 }
 
 type UpdateConfig struct {

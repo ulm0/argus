@@ -11,18 +11,21 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/ulm0/argus/internal/config"
+	"github.com/ulm0/argus/internal/services/mode"
 	"github.com/ulm0/argus/internal/services/video"
 )
 
 type VideoHandler struct {
 	cfg      *config.Config
 	videoSvc *video.Service
+	modeSvc  *mode.Service
 }
 
 func NewVideoHandler(cfg *config.Config) *VideoHandler {
 	return &VideoHandler{
 		cfg:      cfg,
 		videoSvc: video.NewService(cfg),
+		modeSvc:  mode.NewService(cfg),
 	}
 }
 
@@ -92,15 +95,9 @@ func (h *VideoHandler) Event(w http.ResponseWriter, r *http.Request) {
 	folder := mux.Vars(r)["folder"]
 	event := mux.Vars(r)["event"]
 
-	tcPath := h.videoSvc.GetTeslaCamPath()
-	if tcPath == "" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "TeslaCam directory not found"})
-		return
-	}
-
-	folderPath := filepath.Join(tcPath, filepath.Clean(folder))
-	if !strings.HasPrefix(folderPath, tcPath) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid folder path"})
+	folderPath := h.resolveFolderPath(folder)
+	if folderPath == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "folder not found"})
 		return
 	}
 
@@ -144,6 +141,22 @@ func (h *VideoHandler) SEI(w http.ResponseWriter, r *http.Request) {
 	h.videoSvc.ReadSEIData(w, r, videoPath)
 }
 
+// Telemetry extracts Tesla SEI telemetry from an MP4 file and serves it as JSON.
+func (h *VideoHandler) Telemetry(w http.ResponseWriter, r *http.Request) {
+	videoPath := h.resolveVideoPath(r)
+	if videoPath == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid video path"})
+		return
+	}
+
+	if _, err := os.Stat(videoPath); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "video not found"})
+		return
+	}
+
+	h.videoSvc.ExtractTelemetry(w, videoPath)
+}
+
 // Download serves a single video file as an attachment.
 func (h *VideoHandler) Download(w http.ResponseWriter, r *http.Request) {
 	videoPath := h.resolveVideoPath(r)
@@ -166,15 +179,9 @@ func (h *VideoHandler) DownloadEvent(w http.ResponseWriter, r *http.Request) {
 	folder := mux.Vars(r)["folder"]
 	event := mux.Vars(r)["event"]
 
-	tcPath := h.videoSvc.GetTeslaCamPath()
-	if tcPath == "" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "TeslaCam directory not found"})
-		return
-	}
-
-	folderPath := filepath.Join(tcPath, filepath.Clean(folder))
-	if !strings.HasPrefix(folderPath, tcPath) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid folder path"})
+	folderPath := h.resolveFolderPath(folder)
+	if folderPath == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "folder not found"})
 		return
 	}
 
@@ -195,15 +202,9 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 	folder := mux.Vars(r)["folder"]
 	event := mux.Vars(r)["event"]
 
-	tcPath := h.videoSvc.GetTeslaCamPath()
-	if tcPath == "" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "TeslaCam directory not found"})
-		return
-	}
-
-	folderPath := filepath.Join(tcPath, filepath.Clean(folder))
-	if !strings.HasPrefix(folderPath, tcPath) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid folder path"})
+	folderPath := h.resolveFolderPath(folder)
+	if folderPath == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "folder not found"})
 		return
 	}
 
@@ -260,20 +261,70 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, thumbPath)
 }
 
+// SessionDetail returns a VideoEvent-shaped response for a RecentClips session.
+func (h *VideoHandler) SessionDetail(w http.ResponseWriter, r *http.Request) {
+	folder := mux.Vars(r)["folder"]
+	session := mux.Vars(r)["session"]
+
+	folderPath := h.resolveFolderPath(folder)
+	if folderPath == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "folder not found"})
+		return
+	}
+
+	filenames := h.videoSvc.GetSessionVideos(folderPath, session)
+	if len(filenames) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "session not found"})
+		return
+	}
+
+	cameraVideos := make(map[string]string)
+	encrypted := make(map[string]bool)
+	var totalBytes int64
+
+	for _, filename := range filenames {
+		_, camera, ok := video.ParseSessionFromFilename(filename)
+		if !ok {
+			continue
+		}
+		cameraVideos[camera] = filename
+		fullPath := filepath.Join(folderPath, filename)
+		encrypted[camera] = !h.videoSvc.IsValidMP4(fullPath)
+		if info, err := os.Stat(fullPath); err == nil {
+			totalBytes += info.Size()
+		}
+	}
+
+	if len(cameraVideos) == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no valid videos in session"})
+		return
+	}
+
+	// session format is "2024-01-01_12-00-00" → datetime "2024-01-01T12:00:00"
+	datetime := ""
+	if len(session) >= 19 {
+		datetime = session[:10] + "T" + strings.ReplaceAll(session[11:19], "-", ":")
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"name":                session,
+		"camera_videos":       cameraVideos,
+		"encrypted_videos":    encrypted,
+		"clips":               []string{session},
+		"starting_clip_index": 0,
+		"datetime":            datetime,
+		"size_mb":             float64(totalBytes) / (1024 * 1024),
+	})
+}
+
 // SessionThumbnail generates and serves a thumbnail for a session (RecentClips).
 func (h *VideoHandler) SessionThumbnail(w http.ResponseWriter, r *http.Request) {
 	folder := mux.Vars(r)["folder"]
 	session := mux.Vars(r)["session"]
 
-	tcPath := h.videoSvc.GetTeslaCamPath()
-	if tcPath == "" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "TeslaCam directory not found"})
-		return
-	}
-
-	folderPath := filepath.Join(tcPath, filepath.Clean(folder))
-	if !strings.HasPrefix(folderPath, tcPath) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid folder path"})
+	folderPath := h.resolveFolderPath(folder)
+	if folderPath == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "folder not found"})
 		return
 	}
 
@@ -329,18 +380,17 @@ func (h *VideoHandler) SessionThumbnail(w http.ResponseWriter, r *http.Request) 
 
 // Delete removes an event and all its videos.
 func (h *VideoHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	folder := mux.Vars(r)["folder"]
-	event := mux.Vars(r)["event"]
-
-	tcPath := h.videoSvc.GetTeslaCamPath()
-	if tcPath == "" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "TeslaCam directory not found"})
+	if h.modeSvc.CurrentMode().Token != "edit" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "delete requires edit mode"})
 		return
 	}
 
-	folderPath := filepath.Join(tcPath, filepath.Clean(folder))
-	if !strings.HasPrefix(folderPath, tcPath) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid folder path"})
+	folder := mux.Vars(r)["folder"]
+	event := mux.Vars(r)["event"]
+
+	folderPath := h.resolveFolderPath(folder)
+	if folderPath == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "folder not found"})
 		return
 	}
 
@@ -350,6 +400,33 @@ func (h *VideoHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "event": event})
+}
+
+// resolveFolderPath resolves a folder name (from the API) to its absolute path on disk.
+// Folders prefixed with "archive/" are resolved against the archive TeslaCam path.
+func (h *VideoHandler) resolveFolderPath(folder string) string {
+	if strings.HasPrefix(folder, "archive/") {
+		archivePath := h.videoSvc.GetArchivePath()
+		if archivePath == "" {
+			return ""
+		}
+		sub := strings.TrimPrefix(folder, "archive/")
+		p := filepath.Join(archivePath, filepath.Clean(sub))
+		if !strings.HasPrefix(p, archivePath) {
+			return ""
+		}
+		return p
+	}
+
+	tcPath := h.videoSvc.GetTeslaCamPath()
+	if tcPath == "" {
+		return ""
+	}
+	p := filepath.Join(tcPath, filepath.Clean(folder))
+	if !strings.HasPrefix(p, tcPath) {
+		return ""
+	}
+	return p
 }
 
 // resolveVideoPath extracts and validates the video path from the wildcard URL segment.

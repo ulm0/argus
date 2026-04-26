@@ -173,6 +173,13 @@ export default function VideosListPage() {
         <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">
           Videos
         </h1>
+        <a
+          href="/videos/local"
+          className="rounded-sm border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-secondary)] transition-colors"
+          title="Analyze local MP4 files from your computer"
+        >
+          Local Analysis
+        </a>
         <button
           onClick={() => setEditMode(!editMode)}
           className={`rounded-sm px-3 py-1.5 text-sm font-medium transition-colors ${
@@ -216,8 +223,9 @@ export default function VideosListPage() {
       {activeTab === "RecentClips" ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {sessions.map((s) => (
-            <div
+            <a
               key={s.session}
+              href={`/videos/${activeTab}/${s.session}`}
               className="group relative overflow-hidden rounded bg-[var(--color-bg-card)] shadow-sm transition-all hover:shadow-md"
             >
               <div className="aspect-video bg-[var(--color-bg-tertiary)]">
@@ -240,7 +248,7 @@ export default function VideosListPage() {
                   <span>{s.cameras?.length || 0} cameras</span>
                 </div>
               </div>
-            </div>
+            </a>
           ))}
         </div>
       ) : (

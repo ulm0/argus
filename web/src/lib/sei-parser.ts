@@ -29,9 +29,9 @@ export interface SeiMetadata {
   latitudeDeg: number;
   longitudeDeg: number;
   headingDeg: number;
-  linearAccelerationX: number;
-  linearAccelerationY: number;
-  linearAccelerationZ: number;
+  linearAccelerationMps2X: number;
+  linearAccelerationMps2Y: number;
+  linearAccelerationMps2Z: number;
 }
 
 export interface SeiFrame {
@@ -71,9 +71,9 @@ function decodeSeiProtobuf(data: Uint8Array): SeiMetadata | null {
     latitudeDeg: 0,
     longitudeDeg: 0,
     headingDeg: 0,
-    linearAccelerationX: 0,
-    linearAccelerationY: 0,
-    linearAccelerationZ: 0,
+    linearAccelerationMps2X: 0,
+    linearAccelerationMps2Y: 0,
+    linearAccelerationMps2Z: 0,
   };
 
   function readVarint(): number {
@@ -138,9 +138,9 @@ function decodeSeiProtobuf(data: Uint8Array): SeiMetadata | null {
             case 11: msg.latitudeDeg = value; break;
             case 12: msg.longitudeDeg = value; break;
             case 13: msg.headingDeg = value; break;
-            case 14: msg.linearAccelerationX = value; break;
-            case 15: msg.linearAccelerationY = value; break;
-            case 16: msg.linearAccelerationZ = value; break;
+            case 14: msg.linearAccelerationMps2X = value; break;
+            case 15: msg.linearAccelerationMps2Y = value; break;
+            case 16: msg.linearAccelerationMps2Z = value; break;
           }
           break;
         }
@@ -150,7 +150,7 @@ function decodeSeiProtobuf(data: Uint8Array): SeiMetadata | null {
           break;
         }
         default:
-          return msg;
+          return null;
       }
     }
   } catch {
@@ -317,6 +317,55 @@ export class DashcamMP4 {
 
     return frames;
   }
+}
+
+// ── CSV export ──
+
+const SEI_HEADERS = [
+  "time_s", "version", "gear_state", "frame_seq_no",
+  "vehicle_speed_mps", "accelerator_pedal_position", "steering_wheel_angle",
+  "blinker_on_left", "blinker_on_right", "brake_applied", "autopilot_state",
+  "latitude_deg", "longitude_deg", "heading_deg",
+  "linear_acceleration_mps2_x", "linear_acceleration_mps2_y", "linear_acceleration_mps2_z",
+] as const;
+
+export function buildCsv(frames: SeiFrame[]): string {
+  const lines: string[] = [SEI_HEADERS.join(",")];
+  for (const frame of frames) {
+    if (!frame.sei) continue;
+    const s = frame.sei;
+    lines.push([
+      frame.time.toFixed(3),
+      s.version,
+      GearState[s.gearState] ?? s.gearState,
+      s.frameSeqNo,
+      s.vehicleSpeedMps.toFixed(3),
+      s.acceleratorPedalPosition.toFixed(3),
+      s.steeringWheelAngle.toFixed(3),
+      s.blinkerOnLeft ? "1" : "0",
+      s.blinkerOnRight ? "1" : "0",
+      s.brakeApplied ? "1" : "0",
+      AutopilotState[s.autopilotState] ?? s.autopilotState,
+      s.latitudeDeg.toFixed(7),
+      s.longitudeDeg.toFixed(7),
+      s.headingDeg.toFixed(3),
+      s.linearAccelerationMps2X.toFixed(4),
+      s.linearAccelerationMps2Y.toFixed(4),
+      s.linearAccelerationMps2Z.toFixed(4),
+    ].join(","));
+  }
+  return lines.join("\n");
+}
+
+export function downloadCsv(frames: SeiFrame[], filename: string): void {
+  const csv = buildCsv(frames);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 // ── Frame lookup (binary search) ──

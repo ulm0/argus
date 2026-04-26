@@ -22,6 +22,8 @@ import (
 const (
 	apiBaseURL  = "https://api.telegram.org/bot"
 	maxFileSize = 50 * 1024 * 1024 // Telegram 50 MiB limit
+
+	onlineCacheTTL = 30 * time.Second
 )
 
 type SentryEvent struct {
@@ -31,19 +33,87 @@ type SentryEvent struct {
 	Videos    []string  `json:"videos"`
 }
 
+// eventRingBuf is a fixed-capacity circular buffer for SentryEvents.
+// It avoids the repeated slice header shuffling and GC pressure of a plain []SentryEvent.
+type eventRingBuf struct {
+	buf  []SentryEvent
+	head int
+	tail int
+	size int
+}
+
+func newEventRingBuf(cap int) eventRingBuf {
+	if cap <= 0 {
+		cap = 50
+	}
+	return eventRingBuf{buf: make([]SentryEvent, cap)}
+}
+
+func (r *eventRingBuf) Len() int { return r.size }
+
+// push adds e, silently dropping the oldest entry if the buffer is full.
+func (r *eventRingBuf) push(e SentryEvent) {
+	if r.size == len(r.buf) {
+		r.buf[r.head] = SentryEvent{}
+		r.head = (r.head + 1) % len(r.buf)
+		r.size--
+	}
+	r.buf[r.tail] = e
+	r.tail = (r.tail + 1) % len(r.buf)
+	r.size++
+}
+
+// pop removes and returns the oldest entry.
+func (r *eventRingBuf) pop() (SentryEvent, bool) {
+	if r.size == 0 {
+		return SentryEvent{}, false
+	}
+	e := r.buf[r.head]
+	r.buf[r.head] = SentryEvent{}
+	r.head = (r.head + 1) % len(r.buf)
+	r.size--
+	return e, true
+}
+
+// pushFront re-inserts e at the front (highest priority), dropping the newest if full.
+func (r *eventRingBuf) pushFront(e SentryEvent) {
+	if r.size == len(r.buf) {
+		r.tail = (r.tail - 1 + len(r.buf)) % len(r.buf)
+		r.buf[r.tail] = SentryEvent{}
+		r.size--
+	}
+	r.head = (r.head - 1 + len(r.buf)) % len(r.buf)
+	r.buf[r.head] = e
+	r.size++
+}
+
 type Service struct {
 	cfg      *config.Config
 	mu       sync.Mutex
-	queue    []SentryEvent
+	queue    eventRingBuf
 	stopCh   chan struct{}
 	stopOnce sync.Once
 	watcher  *SentryWatcher
+
+	httpClient      *http.Client
+	httpClientVideo *http.Client
+
+	onlineMu  sync.Mutex
+	onlineVal bool
+	onlineExp time.Time
 }
 
 func NewService(cfg *config.Config) *Service {
+	maxQ := cfg.Telegram.MaxQueueSize
+	if maxQ <= 0 {
+		maxQ = 50
+	}
 	return &Service{
-		cfg:    cfg,
-		stopCh: make(chan struct{}),
+		cfg:             cfg,
+		queue:           newEventRingBuf(maxQ),
+		stopCh:          make(chan struct{}),
+		httpClient:      &http.Client{Timeout: 15 * time.Second},
+		httpClientVideo: &http.Client{Timeout: 2 * time.Minute},
 	}
 }
 
@@ -54,11 +124,9 @@ func (s *Service) Start(ctx context.Context) {
 		return
 	}
 
-	// Start the sentry watcher
 	s.watcher = NewSentryWatcher(s.cfg, s.onSentryEvent)
 	go s.watcher.Start(ctx)
 
-	// Start the queue processor
 	go s.processQueue(ctx)
 
 	logger.L.Info("Telegram alerting started")
@@ -77,13 +145,14 @@ func (s *Service) Stop() {
 // GetStatus returns the current Telegram service status.
 func (s *Service) GetStatus() map[string]any {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	qLen := s.queue.Len()
+	s.mu.Unlock()
 
 	return map[string]any{
-		"enabled":    s.cfg.Telegram.Enabled,
-		"queue_size": len(s.queue),
-		"max_queue":  s.cfg.Telegram.MaxQueueSize,
-		"online":     s.isOnline(),
+		"enabled":        s.cfg.Telegram.Enabled,
+		"queue_size":     qLen,
+		"max_queue":      s.cfg.Telegram.MaxQueueSize,
+		"online":         s.isOnline(),
 		"bot_configured": s.cfg.Telegram.BotToken != "",
 	}
 }
@@ -119,12 +188,7 @@ func (s *Service) onSentryEvent(event SentryEvent) {
 		return
 	}
 
-	if len(s.queue) >= s.cfg.Telegram.MaxQueueSize {
-		// Drop oldest event
-		s.queue = s.queue[1:]
-	}
-
-	s.queue = append(s.queue, event)
+	s.queue.push(event)
 	logger.L.WithField("event", event.EventName).WithField("videos", len(event.Videos)).Info("Telegram: queued sentry event")
 }
 
@@ -150,21 +214,16 @@ func (s *Service) drainQueue() {
 	}
 
 	s.mu.Lock()
-	if len(s.queue) == 0 {
-		s.mu.Unlock()
+	event, ok := s.queue.pop()
+	s.mu.Unlock()
+	if !ok {
 		return
 	}
 
-	// Take the first event
-	event := s.queue[0]
-	s.queue = s.queue[1:]
-	s.mu.Unlock()
-
 	if err := s.sendSentryAlert(event); err != nil {
 		logger.L.WithError(err).WithField("event", event.EventName).Warn("Telegram: failed to send alert")
-		// Re-queue the event
 		s.mu.Lock()
-		s.queue = append([]SentryEvent{event}, s.queue...)
+		s.queue.pushFront(event)
 		s.mu.Unlock()
 	}
 }
@@ -183,13 +242,12 @@ func (s *Service) sendSentryAlert(event SentryEvent) error {
 		return err
 	}
 
-	// Send video clips (front camera preferred)
 	for _, videoPath := range event.Videos {
 		if strings.Contains(videoPath, "front") {
 			if err := s.sendVideo(videoPath, event.EventName); err != nil {
 				logger.L.WithError(err).WithField("video", filepath.Base(videoPath)).Warn("Telegram: failed to send video")
 			}
-			break // only send front camera
+			break
 		}
 	}
 
@@ -210,8 +268,7 @@ func (s *Service) sendMessage(text string) error {
 		return fmt.Errorf("marshal message: %w", err)
 	}
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(data))
+	resp, err := s.httpClient.Post(url, "application/json", bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("send message: %w", err)
 	}
@@ -269,8 +326,7 @@ func (s *Service) sendVideo(videoPath, caption string) error {
 	}
 	writer.Close()
 
-	client := &http.Client{Timeout: 2 * time.Minute}
-	resp, err := client.Post(url, writer.FormDataContentType(), &buf)
+	resp, err := s.httpClientVideo.Post(url, writer.FormDataContentType(), &buf)
 	if err != nil {
 		return err
 	}
@@ -284,11 +340,26 @@ func (s *Service) sendVideo(videoPath, caption string) error {
 	return nil
 }
 
+// isOnline checks connectivity to Telegram's API, caching the result for onlineCacheTTL
+// to avoid a blocking TCP dial on every queue tick and sentry event.
 func (s *Service) isOnline() bool {
-	conn, err := net.DialTimeout("tcp", "api.telegram.org:443", 5*time.Second)
-	if err != nil {
-		return false
+	s.onlineMu.Lock()
+	if time.Now().Before(s.onlineExp) {
+		v := s.onlineVal
+		s.onlineMu.Unlock()
+		return v
 	}
-	conn.Close()
-	return true
+	s.onlineMu.Unlock()
+
+	conn, err := net.DialTimeout("tcp", "api.telegram.org:443", 5*time.Second)
+	online := err == nil
+	if online {
+		conn.Close()
+	}
+
+	s.onlineMu.Lock()
+	s.onlineVal = online
+	s.onlineExp = time.Now().Add(onlineCacheTTL)
+	s.onlineMu.Unlock()
+	return online
 }

@@ -9,14 +9,14 @@ import {
 } from "react";
 import type { CameraName, VideoEvent } from "@/lib/types";
 import { CAMERA_LABELS } from "@/lib/types";
-import { DashcamMP4, findSeiAtTime } from "@/lib/sei-parser";
+import { findSeiAtTime, downloadCsv } from "@/lib/sei-parser";
 import type { SeiFrame, SeiMetadata } from "@/lib/sei-parser";
 import ArgusHUD from "./ArgusHUD";
 
 interface DashcamPlayerProps {
   event: VideoEvent;
   streamUrlFn: (cameraFile: string) => string;
-  seiUrlFn: (cameraFile: string) => string;
+  telemetryUrlFn: (cameraFile: string) => string;
   onDelete?: () => void;
 }
 
@@ -25,7 +25,7 @@ const SEEK_STEP = 5;
 export default function DashcamPlayer({
   event,
   streamUrlFn,
-  seiUrlFn,
+  telemetryUrlFn,
   onDelete,
 }: DashcamPlayerProps) {
   const cameras = useMemo<CameraName[]>(
@@ -41,7 +41,7 @@ export default function DashcamPlayer({
   const [activeCamera, setActiveCamera] = useState<CameraName>(
     cameras.includes("front") ? "front" : cameras[0],
   );
-  const [clipIndex, setClipIndex] = useState(0);
+  const [clipIndex, setClipIndex] = useState(event.starting_clip_index ?? 0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -53,7 +53,6 @@ export default function DashcamPlayer({
   const [currentSei, setCurrentSei] = useState<SeiMetadata | null>(null);
   const [seiLoading, setSeiLoading] = useState(false);
   const [seiProgress, setSeiProgress] = useState("");
-  const [blobSrc, setBlobSrc] = useState<string | null>(null);
 
   const mainVideoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -61,7 +60,15 @@ export default function DashcamPlayer({
   const thumbnailVideoRefs = useRef<Map<CameraName, HTMLVideoElement>>(new Map());
   const seiAbortRef = useRef<AbortController | null>(null);
 
-  const activeFile = event.camera_videos[activeCamera];
+  const activeFile = useMemo(() => {
+    const clipTs = clips[clipIndex];
+    if (clipTs) {
+      const refFile = Object.values(event.camera_videos)[0] ?? "";
+      const ext = refFile.match(/\.(\w+)$/)?.[1] ?? "mp4";
+      return `${clipTs}-${activeCamera}.${ext}`;
+    }
+    return event.camera_videos[activeCamera];
+  }, [clips, clipIndex, activeCamera, event.camera_videos]);
   const isEncrypted = event.encrypted_videos?.[activeCamera] ?? false;
 
   const streamSrc = useMemo(() => {
@@ -69,16 +76,37 @@ export default function DashcamPlayer({
     return streamUrlFn(activeFile);
   }, [activeFile, isEncrypted, streamUrlFn]);
 
-  const videoSrc = blobSrc || streamSrc;
-
-  // Restore HUD toggle from localStorage
+  // Restore HUD toggle from localStorage and load telemetry if it was enabled
   useEffect(() => {
     try {
-      setHudEnabled(localStorage.getItem("seiOverlayEnabled") === "true");
+      const saved = localStorage.getItem("seiOverlayEnabled") === "true";
+      setHudEnabled(saved);
+      if (saved && activeFile && !isEncrypted) {
+        loadTelemetry(activeFile);
+      }
     } catch {
       // SSR or restricted storage
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Clear SEI and reload when the active file changes (clip navigation or camera switch)
+  const prevFileRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const prev = prevFileRef.current;
+    prevFileRef.current = activeFile;
+    if (prev === undefined || prev === activeFile) return;
+
+    abortSei();
+    setSeiFrames([]);
+    setCurrentSei(null);
+    setSeiLoading(false);
+
+    if (hudEnabled && activeFile && !isEncrypted) {
+      loadTelemetry(activeFile);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFile]);
 
   // Sync thumbnail videos to main video time
   const syncThumbnails = useCallback((time: number) => {
@@ -200,7 +228,7 @@ export default function DashcamPlayer({
     [duration, seekTo],
   );
 
-  // ── SEI download & parse ──
+  // ── Telemetry fetch ──
 
   const abortSei = useCallback(() => {
     if (seiAbortRef.current) {
@@ -209,90 +237,36 @@ export default function DashcamPlayer({
     }
   }, []);
 
-  const loadSeiData = useCallback(async (file: string) => {
+  const loadTelemetry = useCallback(async (file: string) => {
     abortSei();
-
-    const url = seiUrlFn(file);
     setSeiLoading(true);
-    setSeiProgress("Downloading video file...");
     setSeiFrames([]);
     setCurrentSei(null);
+    setSeiProgress("Loading telemetry…");
 
     const controller = new AbortController();
     seiAbortRef.current = controller;
 
     try {
-      const response = await fetch(url, {
+      const response = await fetch(telemetryUrlFn(file), {
         credentials: "same-origin",
         signal: controller.signal,
       });
-
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-      const total = parseInt(response.headers.get("content-length") || "0", 10);
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response body");
-
-      const chunks: Uint8Array[] = [];
-      let loaded = 0;
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        loaded += value.length;
-
-        if (total) {
-          const pct = Math.round((loaded / total) * 100);
-          const mb = (loaded / 1024 / 1024).toFixed(1);
-          const totalMb = (total / 1024 / 1024).toFixed(1);
-          setSeiProgress(`${mb} MB / ${totalMb} MB (${pct}%)`);
-        }
-      }
-
-      setSeiProgress("Parsing video data...");
-
-      const buffer = new Uint8Array(loaded);
-      let pos = 0;
-      for (const chunk of chunks) {
-        buffer.set(chunk, pos);
-        pos += chunk.length;
-      }
-
-      const mp4 = new DashcamMP4(buffer.buffer);
-      const frames = mp4.parseFrames();
+      const data = await response.json() as { frames: SeiFrame[] };
+      const frames = data.frames ?? [];
       setSeiFrames(frames);
-
-      const blob = new Blob([buffer], { type: "video/mp4" });
-      const blobUrl = URL.createObjectURL(blob);
-
-      const v = mainVideoRef.current;
-      const savedTime = v?.currentTime ?? 0;
-      const wasPlaying = v ? !v.paused : false;
-
-      setBlobSrc(blobUrl);
-
-      // Restore playback state after source swap
-      requestAnimationFrame(() => {
-        const vid = mainVideoRef.current;
-        if (vid) {
-          vid.currentTime = savedTime;
-          if (wasPlaying) vid.play().catch(() => {});
-        }
-      });
-
-      const seiCount = frames.filter((f) => f.sei).length;
-      setSeiProgress(`${seiCount} telemetry frames loaded`);
-      setTimeout(() => setSeiLoading(false), 800);
+      setSeiProgress(`${frames.length} telemetry frames`);
+      setTimeout(() => setSeiLoading(false), 500);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") {
         setSeiLoading(false);
         return;
       }
-      setSeiProgress(`Download failed: ${err instanceof Error ? err.message : "unknown error"}`);
+      setSeiProgress(`Failed: ${err instanceof Error ? err.message : "unknown error"}`);
       setTimeout(() => setSeiLoading(false), 2000);
     }
-  }, [abortSei, seiUrlFn]);
+  }, [abortSei, telemetryUrlFn]);
 
   // Toggle HUD
   const toggleHud = useCallback(() => {
@@ -301,44 +275,24 @@ export default function DashcamPlayer({
       try { localStorage.setItem("seiOverlayEnabled", String(next)); } catch {}
 
       if (next && activeFile && !isEncrypted) {
-        loadSeiData(activeFile);
+        loadTelemetry(activeFile);
       } else if (!next) {
         abortSei();
         setSeiFrames([]);
         setCurrentSei(null);
         setSeiLoading(false);
-
-        if (blobSrc) {
-          const v = mainVideoRef.current;
-          const savedTime = v?.currentTime ?? 0;
-          const wasPlaying = v ? !v.paused : false;
-          URL.revokeObjectURL(blobSrc);
-          setBlobSrc(null);
-          requestAnimationFrame(() => {
-            const vid = mainVideoRef.current;
-            if (vid) {
-              vid.currentTime = savedTime;
-              if (wasPlaying) vid.play().catch(() => {});
-            }
-          });
-        }
       }
 
       return next;
     });
-  }, [activeFile, isEncrypted, loadSeiData, abortSei, blobSrc]);
+  }, [activeFile, isEncrypted, loadTelemetry, abortSei]);
 
-  // Reset SEI on camera switch
+  // Switch camera — telemetry reload is handled by the activeFile change effect
   const switchCamera = useCallback((cam: CameraName) => {
     abortSei();
     setSeiFrames([]);
     setCurrentSei(null);
     setSeiLoading(false);
-
-    if (blobSrc) {
-      URL.revokeObjectURL(blobSrc);
-      setBlobSrc(null);
-    }
 
     const mainV = mainVideoRef.current;
     const savedTime = mainV?.currentTime ?? 0;
@@ -352,22 +306,12 @@ export default function DashcamPlayer({
         v.currentTime = savedTime;
         if (wasPlaying) v.play().catch(() => {});
       }
-
-      // Re-trigger SEI load if HUD is enabled
-      const file = event.camera_videos[cam];
-      const encrypted = event.encrypted_videos?.[cam] ?? false;
-      if (hudEnabled && file && !encrypted) {
-        loadSeiData(file);
-      }
     });
-  }, [abortSei, blobSrc, event.camera_videos, event.encrypted_videos, hudEnabled, loadSeiData]);
+  }, [abortSei]);
 
-  // Cleanup blob URLs on unmount
+  // Abort any in-flight fetch on unmount
   useEffect(() => {
-    return () => {
-      abortSei();
-      if (blobSrc) URL.revokeObjectURL(blobSrc);
-    };
+    return () => { abortSei(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -383,10 +327,10 @@ export default function DashcamPlayer({
             <LockIcon />
             <p className="text-sm">Encrypted video</p>
           </div>
-        ) : videoSrc ? (
+        ) : streamSrc ? (
           <video
             ref={mainVideoRef}
-            src={videoSrc}
+            src={streamSrc}
             className="h-full w-full object-contain"
             onTimeUpdate={onTimeUpdate}
             onLoadedMetadata={onLoadedMetadata}
@@ -404,7 +348,7 @@ export default function DashcamPlayer({
         {/* Tesla HUD Overlay */}
         <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} />
 
-        {/* SEI loading overlay */}
+        {/* Telemetry loading overlay */}
         {seiLoading && (
           <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70">
             <div className="flex flex-col items-center gap-3 rounded-lg bg-black/90 px-8 py-5 text-white backdrop-blur-sm">
@@ -415,7 +359,7 @@ export default function DashcamPlayer({
         )}
 
         {/* Overlay play button */}
-        {!isPlaying && !isEncrypted && videoSrc && !seiLoading && (
+        {!isPlaying && !isEncrypted && streamSrc && !seiLoading && (
           <button
             onClick={togglePlay}
             className="absolute inset-0 flex items-center justify-center bg-black/20 transition-opacity hover:bg-black/30"
@@ -509,6 +453,20 @@ export default function DashcamPlayer({
           </div>
 
           <div className="flex items-center gap-1">
+            {/* CSV telemetry export */}
+            {hudEnabled && seiFrames.length > 0 && (
+              <button
+                onClick={() => downloadCsv(seiFrames, `${activeFile?.replace(/\.mp4$/i, "") ?? "telemetry"}.csv`)}
+                className="rounded p-1.5 text-zinc-400 hover:text-white transition-colors"
+                aria-label="Download telemetry CSV"
+                title="Download telemetry CSV"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+              </button>
+            )}
+
             {/* HUD Overlay toggle */}
             <button
               onClick={toggleHud}

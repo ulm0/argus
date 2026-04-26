@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ulm0/argus/internal/config"
@@ -23,12 +24,29 @@ import (
 
 var sessionPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})-(.+)\.\w+$`)
 
+const tcPathCacheTTL = 30 * time.Second
+
+type mp4CacheEntry struct {
+	valid bool
+	mtime int64
+}
+
 type Service struct {
 	cfg *config.Config
+
+	tcPathMu  sync.Mutex
+	tcPath    string
+	tcPathExp time.Time
+
+	mp4Mu    sync.RWMutex
+	mp4Cache map[string]mp4CacheEntry
 }
 
 func NewService(cfg *config.Config) *Service {
-	return &Service{cfg: cfg}
+	return &Service{
+		cfg:      cfg,
+		mp4Cache: make(map[string]mp4CacheEntry),
+	}
 }
 
 type Event struct {
@@ -40,7 +58,8 @@ type Event struct {
 	HasThumbnail bool              `json:"has_thumbnail"`
 	CameraVideos map[string]string `json:"camera_videos"`
 	Encrypted    map[string]bool   `json:"encrypted_videos"`
-	Clips        []string          `json:"clips,omitempty"`
+	Clips              []string          `json:"clips,omitempty"`
+	StartingClipIndex  int               `json:"starting_clip_index"`
 }
 
 type Folder struct {
@@ -56,13 +75,41 @@ type SessionGroup struct {
 }
 
 // GetTeslaCamPath finds the TeslaCam directory on the mounted partition.
+// The result is cached for tcPathCacheTTL to avoid repeated stat calls.
 func (s *Service) GetTeslaCamPath() string {
+	s.tcPathMu.Lock()
+	if s.tcPath != "" && time.Now().Before(s.tcPathExp) {
+		p := s.tcPath
+		s.tcPathMu.Unlock()
+		return p
+	}
+	s.tcPathMu.Unlock()
+
+	var found string
 	for _, ro := range []bool{true, false} {
 		base := s.cfg.MountPath("part1", ro)
 		tcPath := filepath.Join(base, "TeslaCam")
 		if info, err := os.Stat(tcPath); err == nil && info.IsDir() {
-			return tcPath
+			found = tcPath
+			break
 		}
+	}
+
+	s.tcPathMu.Lock()
+	s.tcPath = found
+	s.tcPathExp = time.Now().Add(tcPathCacheTTL)
+	s.tcPathMu.Unlock()
+	return found
+}
+
+// GetArchivePath returns the TeslaCam path inside the configured archive directory, or "".
+func (s *Service) GetArchivePath() string {
+	if s.cfg.Installation.ArchivePath == "" {
+		return ""
+	}
+	p := filepath.Join(s.cfg.Installation.ArchivePath, "TeslaCam")
+	if info, err := os.Stat(p); err == nil && info.IsDir() {
+		return p
 	}
 	return ""
 }
@@ -91,6 +138,24 @@ func (s *Service) GetFolders() []Folder {
 		count := countVideoFiles(filepath.Join(tcPath, name))
 		folders = append(folders, Folder{Name: name, Path: name, Count: count})
 	}
+
+	if archivePath := s.GetArchivePath(); archivePath != "" {
+		archiveEntries, err := os.ReadDir(archivePath)
+		if err == nil {
+			for _, e := range archiveEntries {
+				if !e.IsDir() || e.Name() == "." || e.Name() == ".." {
+					continue
+				}
+				count := countVideoFiles(filepath.Join(archivePath, e.Name()))
+				folders = append(folders, Folder{
+					Name:  e.Name() + " (Archive)",
+					Path:  "archive/" + e.Name(),
+					Count: count,
+				})
+			}
+		}
+	}
+
 	return folders
 }
 
@@ -215,7 +280,22 @@ func (s *Service) GetSessionVideos(folderPath, sessionID string) []string {
 }
 
 // IsValidMP4 checks if a file starts with a valid MP4 ftyp box.
+// Results are cached by path+mtime to avoid reopening the same file on each event listing.
 func (s *Service) IsValidMP4(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	mtime := info.ModTime().UnixNano()
+
+	s.mp4Mu.RLock()
+	if entry, ok := s.mp4Cache[path]; ok && entry.mtime == mtime {
+		v := entry.valid
+		s.mp4Mu.RUnlock()
+		return v
+	}
+	s.mp4Mu.RUnlock()
+
 	f, err := os.Open(path)
 	if err != nil {
 		return false
@@ -224,11 +304,17 @@ func (s *Service) IsValidMP4(path string) bool {
 
 	buf := make([]byte, 12)
 	if _, err := io.ReadFull(f, buf); err != nil {
+		s.mp4Mu.Lock()
+		s.mp4Cache[path] = mp4CacheEntry{valid: false, mtime: mtime}
+		s.mp4Mu.Unlock()
 		return false
 	}
 
-	// Check for ftyp box
-	return string(buf[4:8]) == "ftyp"
+	valid := string(buf[4:8]) == "ftyp"
+	s.mp4Mu.Lock()
+	s.mp4Cache[path] = mp4CacheEntry{valid: valid, mtime: mtime}
+	s.mp4Mu.Unlock()
+	return valid
 }
 
 // StreamVideo serves a video file with HTTP Range support.
@@ -321,6 +407,7 @@ func (s *Service) parseEvent(eventDir, name string) Event {
 	}
 
 	var totalSize int64
+	clipSet := make(map[string]bool)
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -341,25 +428,61 @@ func (s *Service) parseEvent(eventDir, name string) Event {
 			event.CameraVideos[camera] = name
 			fullPath := filepath.Join(eventDir, name)
 			event.Encrypted[camera] = !s.IsValidMP4(fullPath)
+			clipSet[m[1]] = true
 		}
 	}
 
 	event.SizeMB = float64(totalSize) / (1024 * 1024)
 
-	// Collect clip timestamps
-	clipMap := make(map[string]bool)
-	for _, name := range event.CameraVideos {
-		m := sessionPattern.FindStringSubmatch(name)
-		if m != nil {
-			clipMap[m[1]] = true
-		}
-	}
-	for clip := range clipMap {
+	for clip := range clipSet {
 		event.Clips = append(event.Clips, clip)
 	}
 	sort.Strings(event.Clips)
 
+	event.StartingClipIndex = computeStartingClipIndex(event.Clips, event.Datetime)
+
 	return event
+}
+
+// computeStartingClipIndex finds the index of the clip that contains or immediately
+// precedes the event's trigger timestamp. Falls back to 0 if parsing fails.
+func computeStartingClipIndex(clips []string, datetime string) int {
+	if len(clips) == 0 {
+		return 0
+	}
+	if len(clips) == 1 {
+		return 0
+	}
+
+	// Parse event time — try ISO 8601 first, then the folder-name format
+	var eventTime time.Time
+	for _, layout := range []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02_15-04-05",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, datetime); err == nil {
+			eventTime = t
+			break
+		}
+	}
+	if eventTime.IsZero() {
+		return 0
+	}
+
+	// Clip timestamps are in "YYYY-MM-DD_HH-MM-SS" format (already sorted ascending)
+	best := 0
+	for i, clip := range clips {
+		t, err := time.Parse("2006-01-02_15-04-05", clip)
+		if err != nil {
+			continue
+		}
+		if !t.After(eventTime) {
+			best = i
+		}
+	}
+	return best
 }
 
 // CreateEventZip creates a ZIP archive of all videos in an event.

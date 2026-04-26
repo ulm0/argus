@@ -22,6 +22,7 @@ import (
 	"github.com/ulm0/argus/internal/services/chime"
 	"github.com/ulm0/argus/internal/services/mode"
 	"github.com/ulm0/argus/internal/services/telegram"
+	"github.com/ulm0/argus/internal/services/webhook"
 	"github.com/ulm0/argus/internal/system/ap"
 	"github.com/ulm0/argus/internal/system/network"
 	"github.com/ulm0/argus/internal/system/watchdog"
@@ -68,6 +69,12 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 			tgSvc := telegram.NewService(cfg)
 			tgSvc.Start(runCtx)
 
+			webhookSvc := webhook.NewService(cfg)
+			webhookSvc.Start(runCtx)
+
+			sentryEventsH := handlers.NewSentryEventsHandler(cfg)
+			sentryEventsH.Start(runCtx)
+
 			modeSvc := mode.NewService(cfg)
 			chSvc := chime.NewService(cfg)
 			if cfg.Installation.BootBlockUntilReady {
@@ -99,7 +106,7 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 				}
 			}()
 
-			router := api.NewRouter(cfg, webFS, tgSvc)
+			router := api.NewRouter(cfg, webFS, tgSvc, sentryEventsH, webhookSvc)
 
 			addr := fmt.Sprintf(":%d", cfg.Network.WebPort)
 			server := &http.Server{
@@ -123,6 +130,7 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 				logger.L.WithField("signal", sig).Info("received signal, shutting down")
 				runCancel()
 				tgSvc.Stop()
+				webhookSvc.Stop()
 				if wdMgr != nil {
 					wdMgr.Stop()
 				}

@@ -1,9 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
+import dynamic from "next/dynamic";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import Sidebar from "@/components/Sidebar";
 import SystemPanel from "@/components/SystemPanel";
 import "./globals.css";
+
+const SentryAlert = dynamic(() => import("@/components/SentryAlert"), { ssr: false });
 
 const inter = Inter({
   variable: "--font-inter",
@@ -45,6 +48,7 @@ export default function RootLayout({
           <Sidebar />
           <main className="flex-1 overflow-y-auto">{children}</main>
           <SystemPanel />
+          <SentryAlert />
         </ThemeProvider>
       </body>
     </html>
