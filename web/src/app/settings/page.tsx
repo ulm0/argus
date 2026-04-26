@@ -75,6 +75,11 @@ export default function SettingsPage() {
   const [watchdogTimeoutSec, setWatchdogTimeoutSec] = useState(60);
   const [reapplySysctlOnStart, setReapplySysctlOnStart] = useState(false);
 
+  // Editable states — Webhook
+  const [webhookEnabled, setWebhookEnabled] = useState(false);
+  const [webhookURL, setWebhookURL] = useState("");
+  const [webhookSecret, setWebhookSecret] = useState("");
+
   // Editable states — AP advanced
   const [apCheckInterval, setApCheckInterval] = useState(0);
   const [apDisconnectGrace, setApDisconnectGrace] = useState(0);
@@ -86,6 +91,16 @@ export default function SettingsPage() {
   const showToast = useCallback((msg: string, ok = true) => {
     setToast({ msg, ok });
     setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  const loadWebhook = useCallback(async () => {
+    try {
+      const data = await api.getWebhookStatus();
+      setWebhookEnabled(data.enabled);
+      setWebhookURL(data.url);
+    } catch {
+      // non-fatal: webhook section will show defaults
+    }
   }, []);
 
   const loadConfig = useCallback(async () => {
@@ -124,9 +139,24 @@ export default function SettingsPage() {
     }
   }, [showToast]);
 
+  const saveWebhook = useCallback(async () => {
+    setSaving("webhook");
+    try {
+      await api.configureWebhook({ enabled: webhookEnabled, url: webhookURL, secret: webhookSecret });
+      setWebhookSecret("");
+      showToast("Webhook settings saved");
+      await loadWebhook();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to save webhook", false);
+    } finally {
+      setSaving(null);
+    }
+  }, [webhookEnabled, webhookURL, webhookSecret, showToast, loadWebhook]);
+
   useEffect(() => {
     loadConfig();
-  }, [loadConfig]);
+    loadWebhook();
+  }, [loadConfig, loadWebhook]);
 
   const saveSection = useCallback(
     async (section: string, patch: Parameters<typeof api.patchConfig>[0]) => {
@@ -509,6 +539,61 @@ export default function SettingsPage() {
             }
           >
             {saving === "ap" ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Webhook Notifications ──────────────── */}
+      <div className={cardCls}>
+        <SectionHeader
+          title="Webhook Notifications"
+          description="POST a JSON payload to any URL when a new Sentry event is detected. Optionally sign payloads with an HMAC-SHA256 secret."
+        />
+        <div className="space-y-4">
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={webhookEnabled}
+              onChange={(e) => setWebhookEnabled(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Enable webhook notifications</span>
+          </label>
+          <div>
+            <label className={fieldLabel} htmlFor="webhook-url">
+              Webhook URL
+            </label>
+            <input
+              id="webhook-url"
+              type="url"
+              className={inputCls}
+              value={webhookURL}
+              onChange={(e) => setWebhookURL(e.target.value)}
+              placeholder="https://discord.com/api/webhooks/…"
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="webhook-secret">
+              Signing secret <span className="normal-case font-normal text-[var(--color-text-muted)]">(optional — leave blank to keep existing)</span>
+            </label>
+            <input
+              id="webhook-secret"
+              type="password"
+              className={inputCls}
+              value={webhookSecret}
+              onChange={(e) => setWebhookSecret(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="new-password"
+            />
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            className={btnPrimaryCls}
+            disabled={saving === "webhook"}
+            onClick={saveWebhook}
+          >
+            {saving === "webhook" ? "Saving…" : "Save"}
           </button>
         </div>
       </div>

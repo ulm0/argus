@@ -567,6 +567,36 @@ export function patchConfig(patch: ConfigPatch): Promise<StatusResponse> {
 }
 
 // ──────────────────────────────────────────────
+// Webhook
+// ──────────────────────────────────────────────
+
+export interface WebhookStatus {
+  enabled: boolean;
+  url: string;
+  has_secret: boolean;
+}
+
+export function getWebhookStatus(): Promise<WebhookStatus> {
+  return request<WebhookStatus>("/api/webhook/status");
+}
+
+export function configureWebhook(data: {
+  enabled: boolean;
+  url: string;
+  secret: string;
+}): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/webhook/configure", data);
+}
+
+// ──────────────────────────────────────────────
+// Sentry Events (SSE)
+// ──────────────────────────────────────────────
+
+export function sentryEventsURL(): string {
+  return "/api/events/stream";
+}
+
+// ──────────────────────────────────────────────
 // Logs
 // ──────────────────────────────────────────────
 

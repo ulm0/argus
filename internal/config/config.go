@@ -20,6 +20,7 @@ type Config struct {
 	System       SystemConfig       `yaml:"system"`
 	Web          WebConfig          `yaml:"web"`
 	Telegram     TelegramConfig     `yaml:"telegram"`
+	Webhook      WebhookConfig      `yaml:"webhook"`
 	Update       UpdateConfig       `yaml:"update"`
 	LogLevel     string             `yaml:"log_level"`
 
@@ -128,6 +129,13 @@ type TelegramConfig struct {
 	OfflineMode  string `yaml:"offline_mode"`
 	MaxQueueSize int    `yaml:"max_queue_size"`
 	VideoQuality string `yaml:"video_quality"`
+}
+
+type WebhookConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	URL     string `yaml:"url"`
+	// Secret is used to sign payloads with HMAC-SHA256 (X-Argus-Signature header). Optional.
+	Secret string `yaml:"secret"`
 }
 
 type UpdateConfig struct {
