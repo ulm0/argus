@@ -3,6 +3,7 @@
 import { memo } from "react";
 import { AutopilotState, GearState } from "@/lib/sei-parser";
 import type { SeiMetadata } from "@/lib/sei-parser";
+import { useSpeedUnit, mpsToUnit } from "@/lib/useSpeedUnit";
 
 interface ArgusHUDProps {
   sei: SeiMetadata | null;
@@ -24,9 +25,11 @@ const AP_LABELS: Record<AutopilotState, string> = {
 };
 
 function ArgusHUD({ sei, visible }: ArgusHUDProps) {
+  const [speedUnit] = useSpeedUnit();
+
   if (!visible) return null;
 
-  const speedMph = sei ? Math.round(Math.abs(sei.vehicleSpeedMps) * 2.23694) : 0;
+  const speed = sei ? mpsToUnit(sei.vehicleSpeedMps, speedUnit) : 0;
   const gear = sei ? (GEAR_LABELS[sei.gearState] ?? "P") : "P";
   const wheelAngle = sei?.steeringWheelAngle ?? 0;
   const leftBlinker = sei?.blinkerOnLeft ?? false;
@@ -62,9 +65,11 @@ function ArgusHUD({ sei, visible }: ArgusHUDProps) {
             className="font-extrabold text-white tabular-nums leading-none"
             style={{ fontSize: "clamp(16px, 2.2vw, 24px)" }}
           >
-            {speedMph}
+            {speed}
           </span>
-          <span className="text-[11px] font-semibold text-white/55 leading-none self-end pb-px">MPH</span>
+          <span className="text-[11px] font-semibold text-white/55 leading-none self-end pb-px">
+            {speedUnit.toUpperCase()}
+          </span>
           {apLabel && (
             <>
               <span className="text-white/25 select-none self-center text-xs">·</span>
