@@ -171,6 +171,7 @@ Must be run as root (sudo).`,
 				return err
 			}
 			setupMaskUsbGadgetServices()
+			setupMaskWatchdogServices()
 			setupCleanupForeignGadgets()
 			setupMaskDesktopServices()
 
@@ -267,9 +268,13 @@ func setupDefaultDir() string {
 
 func setupInstallDeps() error {
 	setupLog("Installing system dependencies...")
+	// Note: we deliberately do NOT install the Debian `watchdog` package.
+	// Argus talks to /dev/watchdog directly via ioctl; that package's
+	// userspace daemon would hold the device exclusively and make
+	// `cfg.System.WatchdogEnabled` fail with EBUSY.
 	packages := []string{
 		"samba", "hostapd", "dnsmasq", "ffmpeg",
-		"watchdog", "exfat-fuse", "exfatprogs",
+		"exfat-fuse", "exfatprogs",
 		"dosfstools", "network-manager",
 	}
 	aptArgs := append([]string{"install", "-y", "-qq"}, packages...)
@@ -640,6 +645,22 @@ func setupMaskUsbGadgetServices() {
 		runCmdSilent("systemctl", "mask", svc)
 	}
 	setupLog("Masked conflicting USB gadget systemd units (best-effort)")
+}
+
+// setupMaskWatchdogServices stops and masks the Debian `watchdog` package's
+// units. Existing installs may have them enabled from before we stopped
+// installing the package; if they're running they hold /dev/watchdog open
+// exclusively and Argus's own watchdog will fail with EBUSY at startup.
+func setupMaskWatchdogServices() {
+	if runtime.GOOS != "linux" {
+		return
+	}
+	for _, svc := range []string{"watchdog.service", "wd_keepalive.service"} {
+		runCmdSilent("systemctl", "stop", svc)
+		runCmdSilent("systemctl", "disable", svc)
+		runCmdSilent("systemctl", "mask", svc)
+	}
+	setupLog("Masked conflicting watchdog systemd units (best-effort)")
 }
 
 // setupCleanupForeignGadgets removes stale gadget trees under configfs except "argus" (TeslaUSB/setup_usb parity).
