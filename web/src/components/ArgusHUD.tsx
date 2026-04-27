@@ -21,7 +21,7 @@ const AP_LABELS: Record<AutopilotState, string> = {
   [AutopilotState.NONE]: "",
   [AutopilotState.SELF_DRIVING]: "Full Self-Driving",
   [AutopilotState.AUTOSTEER]: "Autosteer",
-  [AutopilotState.TACC]: "TACC",
+  [AutopilotState.TACC]: "Traffic-Aware Cruise",
 };
 
 function ArgusHUD({ sei, visible }: ArgusHUDProps) {
