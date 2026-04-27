@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gorilla/mux"
 
@@ -14,6 +15,26 @@ import (
 	"github.com/ulm0/argus/internal/services/mode"
 	"github.com/ulm0/argus/internal/services/video"
 )
+
+// thumbFlight deduplicates concurrent ffmpeg thumbnail generation for the same path.
+type thumbFlight struct {
+	done chan struct{}
+	err  error
+}
+
+var thumbFlights sync.Map // key: thumbPath → *thumbFlight
+
+func (h *VideoHandler) generateThumbnailOnce(videoPath, thumbPath string, width, height int) error {
+	f := &thumbFlight{done: make(chan struct{})}
+	if actual, loaded := thumbFlights.LoadOrStore(thumbPath, f); loaded {
+		<-actual.(*thumbFlight).done
+		return actual.(*thumbFlight).err
+	}
+	f.err = h.videoSvc.GenerateThumbnail(videoPath, thumbPath, width, height)
+	close(f.done)
+	thumbFlights.Delete(thumbPath)
+	return f.err
+}
 
 type VideoHandler struct {
 	cfg      *config.Config
@@ -214,6 +235,13 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tesla pre-generates thumb.png for most events — serve it directly.
+	if details.HasThumbnail {
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		http.ServeFile(w, r, filepath.Join(folderPath, event, "thumb.png"))
+		return
+	}
+
 	camera := r.URL.Query().Get("camera")
 	if camera == "" {
 		camera = "front"
@@ -251,7 +279,7 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 		if height <= 0 {
 			height = 180
 		}
-		if err := h.videoSvc.GenerateThumbnail(videoFullPath, thumbPath, width, height); err != nil {
+		if err := h.generateThumbnailOnce(videoFullPath, thumbPath, width, height); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "thumbnail generation failed: " + err.Error()})
 			return
 		}
@@ -368,7 +396,7 @@ func (h *VideoHandler) SessionThumbnail(w http.ResponseWriter, r *http.Request) 
 		if height <= 0 {
 			height = 180
 		}
-		if err := h.videoSvc.GenerateThumbnail(videoFullPath, thumbPath, width, height); err != nil {
+		if err := h.generateThumbnailOnce(videoFullPath, thumbPath, width, height); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "thumbnail generation failed: " + err.Error()})
 			return
 		}

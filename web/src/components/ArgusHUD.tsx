@@ -225,16 +225,20 @@ function PedalIndicator({
         strokeWidth={1.5}
       >
         {icon === "brake" ? (
+          /* Disc brake: outer ring + hub + 3 vanes */
           <>
             <circle cx="12" cy="12" r="8" />
-            <line x1="8" y1="12" x2="16" y2="12" />
+            <circle cx="12" cy="12" r="3" />
+            <line x1="12" y1="9" x2="12" y2="4" />
+            <line x1="14.6" y1="13.5" x2="18.9" y2="16" />
+            <line x1="9.4" y1="13.5" x2="5.1" y2="16" />
           </>
         ) : (
-          <>
-            <circle cx="12" cy="12" r="8" />
-            <line x1="12" y1="8" x2="12" y2="16" />
-            <line x1="8" y1="12" x2="16" y2="12" />
-          </>
+          /* Lightning bolt: power / acceleration */
+          <polygon
+            points="13,3 8,13 12,13 11,21 16,11 12,11"
+            fill="rgba(136,136,136,0.4)"
+          />
         )}
       </svg>
     </div>
