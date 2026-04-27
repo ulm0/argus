@@ -36,8 +36,10 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
   const wheelAngle = sei ? sei.steeringWheelAngle : 0;
   const leftBlinker = sei?.blinkerOnLeft ?? false;
   const rightBlinker = sei?.blinkerOnRight ?? false;
+  const brakeOn = sei?.brakeApplied ?? false;
+  const throttleOn = (sei?.acceleratorPedalPosition ?? 0) > 0.02;
   const apState = sei?.autopilotState ?? AutopilotState.NONE;
-  const apLabel = AP_LABELS[apState] ?? "—";
+  const apLabel = AP_LABELS[apState] || "";
 
   return (
     <div
@@ -47,83 +49,97 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
       title={`HUD size: ${scale.toFixed(2)}x (scroll to resize)`}
     >
       <div
-        className="border border-white/[0.14] shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
+        className="border border-white/[0.10] shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
         style={{
-          width: "260px",
-          minHeight: "108px",
-          padding: "10px 12px 8px",
+          width: "230px",
+          padding: "6px 10px 8px",
           borderRadius: "14px",
           backdropFilter: "blur(14px)",
-          background: "rgba(20, 22, 24, 0.72)",
+          background: "rgba(22, 26, 30, 0.78)",
         }}
       >
+        {/* Row 1: corner badges + arrows + speed */}
         <div
           className="grid items-center"
           style={{
-            gridTemplateColumns: "24px 1fr 24px",
-            gridTemplateRows: "20px auto 20px",
-            gridTemplateAreas:
-              '"leftTop topRow rightTop" "leftMid center rightMid" "leftBottom autopilot rightBottom"',
-            columnGap: "10px",
-            rowGap: "4px",
+            gridTemplateColumns: "20px 14px 1fr 14px 20px",
+            columnGap: "6px",
           }}
         >
-          <div style={{ gridArea: "leftTop" }} className="flex h-5 w-5 items-center justify-center rounded-full bg-[#2d65ff]/25 text-[10px] font-bold text-[#6da1ff]">
+          {/* Gear pill */}
+          <div
+            className="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white"
+            style={{ background: "rgba(45, 101, 255, 0.85)" }}
+          >
             {gear}
           </div>
 
-          <div style={{ gridArea: "leftMid" }} className="flex items-center justify-center text-white/55">
-            <SmallDotIcon />
-          </div>
+          {/* Left blinker arrow */}
+          <ArrowBlinker side="left" active={leftBlinker} />
 
-          <div style={{ gridArea: "leftBottom" }} />
-
-          <div
-            style={{ gridArea: "topRow" }}
-            className="flex items-center justify-center gap-6 pt-0.5"
-          >
-            <ArrowBlinker side="left" active={leftBlinker} />
-            <ArrowBlinker side="right" active={rightBlinker} />
-          </div>
-
-          <div style={{ gridArea: "center" }} className="flex flex-col items-center leading-none">
-            <span className="text-[42px] font-bold text-white/95" style={{ fontVariantNumeric: "tabular-nums" }}>
+          {/* Speed */}
+          <div className="flex flex-col items-center leading-none">
+            <span
+              className="text-[26px] font-bold text-white/95"
+              style={{ fontVariantNumeric: "tabular-nums" }}
+            >
               {speed}
             </span>
-            <span className="mt-0.5 text-[11px] font-semibold tracking-wide text-white/75">{speedUnit.toUpperCase()}</span>
+            <span className="mt-0.5 text-[10px] font-semibold tracking-wider text-white/70">
+              {speedUnit.toUpperCase()}
+            </span>
           </div>
 
-          <div style={{ gridArea: "autopilot" }} className="truncate text-center text-[11px] font-semibold text-[#1f6dff]">
-            {apLabel}
-          </div>
+          {/* Right blinker arrow */}
+          <ArrowBlinker side="right" active={rightBlinker} />
 
+          {/* Steering wheel */}
           <div
-            style={{ gridArea: "rightTop" }}
-            className="flex h-5 w-5 items-center justify-center text-white/55"
+            className="flex h-5 w-5 items-center justify-center rounded-full text-white/70"
+            style={{ background: "rgba(255,255,255,0.06)" }}
           >
             <svg
-              className="h-4 w-4"
+              className="h-3.5 w-3.5"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth={1.5}
+              strokeWidth={1.6}
               style={{
                 transform: `rotate(${wheelAngle}deg)`,
                 transition: "transform 0.1s ease-out",
               }}
             >
               <circle cx="12" cy="12" r="9" />
-              <circle cx="12" cy="12" r="3" />
-              <line x1="12" y1="3" x2="12" y2="9" />
-              <line x1="3" y1="12" x2="9" y2="12" />
-              <line x1="15" y1="12" x2="21" y2="12" />
+              <circle cx="12" cy="12" r="2.5" />
+              <line x1="12" y1="3" x2="12" y2="9.5" />
+              <line x1="3" y1="12" x2="9.5" y2="12" />
+              <line x1="14.5" y1="12" x2="21" y2="12" />
             </svg>
           </div>
+        </div>
 
-          <div style={{ gridArea: "rightMid" }} />
-
-          <div style={{ gridArea: "rightBottom" }} className="flex h-5 w-5 items-center justify-center text-white/55">
-            <InfoIcon />
+        {/* Row 2: brake icon + autopilot label + info icon */}
+        <div
+          className="mt-1 grid items-center"
+          style={{ gridTemplateColumns: "20px 1fr 20px", columnGap: "6px" }}
+        >
+          <div
+            className="flex h-4 w-4 items-center justify-center"
+            style={{ color: brakeOn ? "#ff5a5a" : "rgba(255,255,255,0.4)" }}
+          >
+            <BrakeIcon />
+          </div>
+          <div
+            className="truncate text-center text-[11px] font-semibold leading-tight"
+            style={{ color: "#1f6dff" }}
+          >
+            {apLabel}
+          </div>
+          <div
+            className="flex h-4 w-4 items-center justify-center"
+            style={{ color: throttleOn ? "#25c05a" : "rgba(255,255,255,0.4)" }}
+          >
+            <ThrottleIcon />
           </div>
         </div>
       </div>
@@ -135,38 +151,47 @@ export default memo(ArgusHUD);
 
 function ArrowBlinker({ side, active }: { side: "left" | "right"; active: boolean }) {
   return (
-    <div
-      className={`flex items-center justify-center ${active ? "text-[#25c05a]" : "text-white/35"}`}
+    <span
+      className={active ? "text-[#25c05a]" : "text-white/30"}
+      style={{ transition: "color 0.1s ease-out", display: "inline-flex", justifyContent: "center" }}
     >
-      <svg
-        className="h-4 w-4"
-        viewBox="0 0 24 24"
-        fill="currentColor"
-      >
-        {side === "left" ? (
-          <path d="M14 7l-5 5 5 5V7z" />
-        ) : (
-          <path d="M10 17l5-5-5-5v10z" />
-        )}
+      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+        {side === "left" ? <path d="M15 6l-7 6 7 6V6z" /> : <path d="M9 6l7 6-7 6V6z" />}
       </svg>
-    </div>
+    </span>
   );
 }
 
-function SmallDotIcon() {
+function BrakeIcon() {
   return (
-    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-      <circle cx="12" cy="12" r="8" />
+    <svg
+      className="h-4 w-4"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="4" y="13" width="16" height="8" rx="2.5" />
+      <rect x="9" y="3" width="6" height="10" rx="1.5" />
     </svg>
   );
 }
 
-function InfoIcon() {
+function ThrottleIcon() {
   return (
-    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}>
-      <circle cx="12" cy="12" r="9" />
-      <line x1="12" y1="10" x2="12" y2="16" />
-      <circle cx="12" cy="7.2" r="1" fill="currentColor" stroke="none" />
+    <svg
+      className="h-4 w-4"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.6}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="10" y="3" width="4" height="6" rx="1.5" />
+      <path d="M14 9 L14 14 Q14 16 16 16 L16 21 Q16 21 14 21 L10 21 Q8 21 8 19 L8 16" />
     </svg>
   );
 }

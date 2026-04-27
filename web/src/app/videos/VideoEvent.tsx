@@ -16,7 +16,7 @@ export default function VideoEventPage({ folder, event }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleted, setDeleted] = useState(false);
-  const [nextEventName, setNextEventName] = useState<string | null>(null);
+  const [nextEvent, setNextEvent] = useState<VideoEvent | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -34,7 +34,7 @@ export default function VideoEventPage({ folder, event }: Props) {
     let cancelled = false;
 
     const loadNextEvent = async () => {
-      setNextEventName(null);
+      setNextEvent(null);
 
       try {
         let page = 0;
@@ -46,7 +46,7 @@ export default function VideoEventPage({ folder, event }: Props) {
 
           if (foundCurrent) {
             if (pageEvents.length > 0) {
-              if (!cancelled) setNextEventName(pageEvents[0].name);
+              if (!cancelled) setNextEvent(pageEvents[0]);
             }
             return;
           }
@@ -54,7 +54,7 @@ export default function VideoEventPage({ folder, event }: Props) {
           const currentIndex = pageEvents.findIndex((ev) => ev.name === event);
           if (currentIndex >= 0) {
             if (currentIndex + 1 < pageEvents.length) {
-              if (!cancelled) setNextEventName(pageEvents[currentIndex + 1].name);
+              if (!cancelled) setNextEvent(pageEvents[currentIndex + 1]);
               return;
             }
             foundCurrent = true;
@@ -64,7 +64,7 @@ export default function VideoEventPage({ folder, event }: Props) {
           page += 1;
         }
       } catch {
-        // Leave nextEventName as null when lookup fails.
+        // Leave nextEvent as null when lookup fails.
       }
     };
 
@@ -164,21 +164,40 @@ export default function VideoEventPage({ folder, event }: Props) {
         >
           Download ZIP
         </a>
-        <a
-          href={
-            nextEventName
-              ? `/videos/${encodeURIComponent(folder)}/${encodeURIComponent(nextEventName)}`
-              : undefined
-          }
-          aria-disabled={!nextEventName}
-          className={`rounded-sm px-3 py-1 text-xs font-medium transition-colors ${
-            nextEventName
-              ? "bg-[var(--color-accent)] text-white hover:opacity-90"
-              : "cursor-not-allowed bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"
-          }`}
-        >
-          Next Event
-        </a>
+        {nextEvent && (
+          <a
+            href={`/videos/${encodeURIComponent(folder)}/${encodeURIComponent(nextEvent.name)}`}
+            title="Go to next event"
+            className="flex items-center gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-1 pr-3 text-xs transition-colors hover:bg-[var(--color-bg-tertiary)]"
+          >
+            <span className="flex h-7 w-7 items-center justify-center rounded text-[var(--color-text-secondary)]">
+              <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 18l8.5-6L6 6v12zM16 6h2v12h-2z" />
+              </svg>
+            </span>
+            {nextEvent.has_thumbnail && (
+              <img
+                src={api.thumbnailURL(folder, nextEvent.name)}
+                alt=""
+                className="h-9 w-16 rounded object-cover"
+                loading="lazy"
+                onError={(e) => {
+                  (e.currentTarget as HTMLImageElement).style.display = "none";
+                }}
+              />
+            )}
+            <span className="flex flex-col leading-tight">
+              <span className="text-sm font-semibold text-[var(--color-text-primary)]">
+                {nextEvent.city || nextEvent.name}
+              </span>
+              {nextEvent.datetime && (
+                <span className="text-[11px] text-[var(--color-text-muted)]">
+                  {formatShortDate(nextEvent.datetime)}
+                </span>
+              )}
+            </span>
+          </a>
+        )}
       </div>
 
       {/* Player */}
@@ -203,6 +222,20 @@ function formatDate(ts: string): string {
       year: "numeric",
       hour: "2-digit",
       minute: "2-digit",
+    });
+  } catch {
+    return ts;
+  }
+}
+
+function formatShortDate(ts: string): string {
+  if (!ts) return "";
+  try {
+    return new Date(ts).toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
     });
   } catch {
     return ts;
