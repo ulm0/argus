@@ -56,7 +56,7 @@ export default function DashcamPlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [viewMode, setViewMode] = useState<"single" | "composed">("single");
+  const [viewMode, setViewMode] = useState<"single" | "composed">("composed");
 
   // SEI / HUD state
   const [hudEnabled, setHudEnabled] = useState(false);
@@ -439,6 +439,9 @@ export default function DashcamPlayer({
                       onPause={isMaster ? () => setIsPlaying(false) : undefined}
                     />
                   ) : null}
+                  {isMaster && (
+                    <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} />
+                  )}
                   {hasCam && !encrypted && (
                     <div className="absolute bottom-1 left-1 rounded px-1 py-0.5 bg-black/50 text-[9px] font-medium text-white/50">
                       {CAMERA_LABELS[cam]}
@@ -620,29 +623,27 @@ export default function DashcamPlayer({
               </svg>
             </button>
 
-            {/* HUD Overlay toggle — only relevant in single mode */}
-            {viewMode === "single" && (
-              <button
-                onClick={toggleHud}
-                className={`
-                  rounded p-1.5 transition-colors
-                  ${hudEnabled
-                    ? "text-[var(--color-accent)]"
-                    : "text-zinc-400 hover:text-white"
-                  }
-                `}
-                aria-label="Toggle HUD Overlay"
-                title="HUD Overlay"
-              >
-                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                  <rect x="2" y="3" width="20" height="14" rx="2" />
-                  <line x1="8" y1="21" x2="16" y2="21" />
-                  <line x1="12" y1="17" x2="12" y2="21" />
-                  <circle cx="12" cy="10" r="2" />
-                  <path d="M7 10h2M15 10h2" />
-                </svg>
-              </button>
-            )}
+            {/* HUD Overlay toggle */}
+            <button
+              onClick={toggleHud}
+              className={`
+                rounded p-1.5 transition-colors
+                ${hudEnabled
+                  ? "text-[var(--color-accent)]"
+                  : "text-zinc-400 hover:text-white"
+                }
+              `}
+              aria-label="Toggle HUD Overlay"
+              title="HUD Overlay"
+            >
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                <rect x="2" y="3" width="20" height="14" rx="2" />
+                <line x1="8" y1="21" x2="16" y2="21" />
+                <line x1="12" y1="17" x2="12" y2="21" />
+                <circle cx="12" cy="10" r="2" />
+                <path d="M7 10h2M15 10h2" />
+              </svg>
+            </button>
 
             {onDelete && (
               <button
