@@ -6,6 +6,7 @@ project_name: argus
 before:
   hooks:
     - sh -c "cd web && NEXT_TELEMETRY_DISABLED=1 pnpm install --frozen-lockfile && pnpm run build && rm -rf ../cmd/argus/web/out && mkdir -p ../cmd/argus/web && cp -r out ../cmd/argus/web/out"
+    - sh -c "sudo apt update && sudo apt install -y upx" # for compressing the binary
 
 builds:
   - id: argus
@@ -40,6 +41,22 @@ archives:
   - formats:
       - binary
     # Binaries are published directly (no archive wrapping) — web + templates are embedded.
+
+upx:
+  - enabled: true
+    ids:
+      - argus
+    goos:
+      - linux
+    goarch:
+      - arm64
+      - arm
+    goarm:
+      - "6"
+      - "7"
+    compress: best
+    lzma: false
+    brute: true
 
 checksum:
   name_template: "checksums.txt"
