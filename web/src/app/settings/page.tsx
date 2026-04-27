@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback } from "react";
 import type React from "react";
 import * as api from "@/lib/api";
 import type { ConfigResponse } from "@/lib/types";
+import { useSpeedUnit } from "@/lib/useSpeedUnit";
+import type { SpeedUnit } from "@/lib/useSpeedUnit";
 
 const inputCls =
   "mt-1 block w-full rounded-sm border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-3 py-2.5 text-sm text-[var(--color-text-primary)] shadow-sm transition-all placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]/20 disabled:opacity-50";
@@ -79,6 +81,9 @@ export default function SettingsPage() {
   const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [webhookURL, setWebhookURL] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
+
+  // Display preferences (localStorage only)
+  const [speedUnit, setSpeedUnit] = useSpeedUnit();
 
   // Editable states — AP advanced
   const [apCheckInterval, setApCheckInterval] = useState(0);
@@ -540,6 +545,35 @@ export default function SettingsPage() {
           >
             {saving === "ap" ? "Saving…" : "Save"}
           </button>
+        </div>
+      </div>
+
+      {/* ── Display Preferences ────────────────── */}
+      <div className={cardCls}>
+        <SectionHeader
+          title="Display Preferences"
+          description="UI preferences stored in your browser."
+        />
+        <div>
+          <span className={fieldLabel}>Speed unit</span>
+          <div className="mt-2 flex gap-2">
+            {(["mph", "kph"] as SpeedUnit[]).map((u) => (
+              <button
+                key={u}
+                onClick={() => setSpeedUnit(u)}
+                className={`rounded px-5 py-2 text-sm font-semibold transition-colors ${
+                  speedUnit === u
+                    ? "bg-[var(--color-accent)] text-white"
+                    : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                }`}
+              >
+                {u.toUpperCase()}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+            Applies to the dashcam HUD telemetry overlay.
+          </p>
         </div>
       </div>
 
