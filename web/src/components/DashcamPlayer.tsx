@@ -12,6 +12,7 @@ import type { CameraName, VideoEvent } from "@/lib/types";
 import { CAMERA_LABELS } from "@/lib/types";
 import { findSeiAtTime, downloadCsv } from "@/lib/sei-parser";
 import type { SeiFrame, SeiMetadata } from "@/lib/sei-parser";
+import { useMapTheme } from "@/lib/useMapTheme";
 import ArgusHUD from "./ArgusHUD";
 
 const MapOverlay = dynamic(() => import("./MapOverlay"), { ssr: false });
@@ -60,9 +61,11 @@ export default function DashcamPlayer({
   const [duration, setDuration] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [viewMode, setViewMode] = useState<"single" | "composed">("composed");
+  const [mapTheme] = useMapTheme();
 
   // SEI / HUD state
   const [hudEnabled, setHudEnabled] = useState(false);
+  const [hudScale, setHudScale] = useState(1.0);
   const [mapEnabled, setMapEnabled] = useState(true);
   const [seiFrames, setSeiFrames] = useState<SeiFrame[]>([]);
   const [currentSei, setCurrentSei] = useState<SeiMetadata | null>(null);
@@ -118,8 +121,10 @@ export default function DashcamPlayer({
     try {
       const hudOn = localStorage.getItem("seiOverlayEnabled") !== "false";
       const mapOn = localStorage.getItem("mapOverlayEnabled") !== "false";
+      const scale = parseFloat(localStorage.getItem("hudScale") ?? "1") || 1;
       setHudEnabled(hudOn);
       setMapEnabled(mapOn);
+      setHudScale(scale);
       if ((hudOn || mapOn) && activeFile && !isEncrypted) {
         loadTelemetry(activeFile);
       }
@@ -361,6 +366,16 @@ export default function DashcamPlayer({
     });
   }, [activeFile, isEncrypted, loadTelemetry, abortSei, hudEnabled, seiFrames.length]);
 
+  const HUD_SCALES = [0.75, 1.0, 1.25, 1.5];
+  const cycleHudScale = useCallback(() => {
+    setHudScale((prev) => {
+      const idx = HUD_SCALES.indexOf(prev);
+      const next = HUD_SCALES[(idx + 1) % HUD_SCALES.length];
+      try { localStorage.setItem("hudScale", String(next)); } catch {}
+      return next;
+    });
+  }, []);
+
   // Switch camera — no-op in composed mode
   const switchCamera = useCallback((cam: CameraName) => {
     if (viewMode === "composed") return;
@@ -465,7 +480,7 @@ export default function DashcamPlayer({
                     />
                   ) : null}
                   {isMaster && (
-                    <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} />
+                    <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} scale={hudScale} />
                   )}
                   {hasCam && !encrypted && (
                     <div className="absolute bottom-1 left-1 rounded px-1 py-0.5 bg-black/50 text-[9px] font-medium text-white/50">
@@ -479,8 +494,8 @@ export default function DashcamPlayer({
 
           {/* Map overlay — bottom-right of composed grid */}
           {mapEnabled && seiFrames.length > 0 && (
-            <div className="absolute bottom-3 right-3 z-20 pointer-events-none">
-              <MapOverlay seiFrames={seiFrames} currentSei={currentSei} />
+            <div className="absolute bottom-3 right-3 z-20">
+              <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
             </div>
           )}
         </div>
@@ -511,12 +526,12 @@ export default function DashcamPlayer({
           )}
 
           {/* Tesla HUD Overlay */}
-          <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} />
+          <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} scale={hudScale} />
 
           {/* Map overlay — bottom-right */}
           {mapEnabled && seiFrames.length > 0 && (
-            <div className="absolute bottom-3 right-3 z-20 pointer-events-none">
-              <MapOverlay seiFrames={seiFrames} currentSei={currentSei} />
+            <div className="absolute bottom-3 right-3 z-20">
+              <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
             </div>
           )}
 
@@ -677,6 +692,18 @@ export default function DashcamPlayer({
               </svg>
             </button>
 
+
+            {/* HUD scale cycle */}
+            {hudEnabled && (
+              <button
+                onClick={cycleHudScale}
+                className="rounded p-1.5 text-zinc-400 hover:text-white transition-colors tabular-nums text-[11px] font-semibold w-8 text-center"
+                aria-label="Cycle HUD size"
+                title={`HUD size: ${hudScale}×`}
+              >
+                {hudScale}×
+              </button>
+            )}
 
             {/* HUD Overlay toggle */}
             <button

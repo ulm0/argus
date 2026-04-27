@@ -8,6 +8,7 @@ import { useSpeedUnit, mpsToUnit } from "@/lib/useSpeedUnit";
 interface ArgusHUDProps {
   sei: SeiMetadata | null;
   visible: boolean;
+  scale?: number;
 }
 
 const GEAR_LABELS: Record<GearState, string> = {
@@ -24,7 +25,7 @@ const AP_LABELS: Record<AutopilotState, string> = {
   [AutopilotState.TACC]: "Traffic-Aware Cruise",
 };
 
-function ArgusHUD({ sei, visible }: ArgusHUDProps) {
+function ArgusHUD({ sei, visible, scale = 1 }: ArgusHUDProps) {
   const [speedUnit] = useSpeedUnit();
 
   if (!visible) return null;
@@ -44,7 +45,10 @@ function ArgusHUD({ sei, visible }: ArgusHUDProps) {
   const apLabel = AP_LABELS[apState] ?? "";
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
+    <div
+      className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center"
+      style={{ transformOrigin: "top center", transform: `scale(${scale})` }}
+    >
       <div
         className="border border-white/[0.14] shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
         style={{
@@ -215,19 +219,23 @@ function PedalIndicator({
       <svg
         className="relative z-10 h-6 w-6"
         viewBox="0 0 24 24"
-        fill="rgba(136,136,136,0.85)"
+        fill="none"
+        stroke="rgba(190,190,190,0.9)"
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
       >
         {icon === "brake" ? (
-          /* Brake pedal: wide plate + stem (brake pedals are wide) */
+          /* Brake: wide rectangular pad + centered stem */
           <>
-            <rect x="3" y="15" width="18" height="4" rx="2" />
-            <rect x="9" y="7"  width="6"  height="8" rx="1.5" />
+            <rect x="4" y="13" width="16" height="8" rx="2.5" />
+            <rect x="9" y="3"  width="6"  height="10" rx="1.5" />
           </>
         ) : (
-          /* Throttle pedal: narrower plate + stem (gas pedals are narrower) */
+          /* Gas: narrow stem, angled knee, narrower vertical pad */
           <>
-            <rect x="6" y="15" width="12" height="4" rx="2" />
-            <rect x="10" y="7" width="4"  height="8" rx="1.5" />
+            <rect x="10" y="3" width="4" height="6" rx="1.5" />
+            <path d="M14 9 L14 14 Q14 16 16 16 L16 21 Q16 21 14 21 L10 21 Q8 21 8 19 L8 16" />
           </>
         )}
       </svg>
