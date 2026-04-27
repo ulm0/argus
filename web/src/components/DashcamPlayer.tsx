@@ -67,6 +67,7 @@ export default function DashcamPlayer({
   const [hudEnabled, setHudEnabled] = useState(false);
   const [hudScale, setHudScale] = useState(1.0);
   const [mapEnabled, setMapEnabled] = useState(true);
+  const [mapScale, setMapScale] = useState(1.0);
   const [seiFrames, setSeiFrames] = useState<SeiFrame[]>([]);
   const [currentSei, setCurrentSei] = useState<SeiMetadata | null>(null);
   const [seiLoading, setSeiLoading] = useState(false);
@@ -122,9 +123,11 @@ export default function DashcamPlayer({
       const hudOn = localStorage.getItem("seiOverlayEnabled") !== "false";
       const mapOn = localStorage.getItem("mapOverlayEnabled") !== "false";
       const scale = parseFloat(localStorage.getItem("hudScale") ?? "1") || 1;
+      const savedMapScale = parseFloat(localStorage.getItem("mapScale") ?? "1") || 1;
       setHudEnabled(hudOn);
       setMapEnabled(mapOn);
       setHudScale(scale);
+      setMapScale(savedMapScale);
       if ((hudOn || mapOn) && activeFile && !isEncrypted) {
         loadTelemetry(activeFile);
       }
@@ -366,15 +369,33 @@ export default function DashcamPlayer({
     });
   }, [activeFile, isEncrypted, loadTelemetry, abortSei, hudEnabled, seiFrames.length]);
 
-  const HUD_SCALES = [0.75, 1.0, 1.25, 1.5];
-  const cycleHudScale = useCallback(() => {
+  const updateHudScale = useCallback((nextScale: number) => {
     setHudScale((prev) => {
-      const idx = HUD_SCALES.indexOf(prev);
-      const next = HUD_SCALES[(idx + 1) % HUD_SCALES.length];
+      const next = Math.max(0.7, Math.min(1.8, nextScale));
       try { localStorage.setItem("hudScale", String(next)); } catch {}
       return next;
     });
   }, []);
+
+  const updateMapScale = useCallback((nextScale: number) => {
+    setMapScale((prev) => {
+      const next = Math.max(0.6, Math.min(2.2, nextScale));
+      try { localStorage.setItem("mapScale", String(next)); } catch {}
+      return next;
+    });
+  }, []);
+
+  const handleHudScaleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const step = e.deltaY < 0 ? 0.1 : -0.1;
+    updateHudScale(hudScale + step);
+  }, [hudScale, updateHudScale]);
+
+  const handleMapScaleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const step = e.deltaY < 0 ? 0.1 : -0.1;
+    updateMapScale(mapScale + step);
+  }, [mapScale, updateMapScale]);
 
   // Switch camera — no-op in composed mode
   const switchCamera = useCallback((cam: CameraName) => {
@@ -480,7 +501,12 @@ export default function DashcamPlayer({
                     />
                   ) : null}
                   {isMaster && (
-                    <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} scale={hudScale} />
+                    <ArgusHUD
+                      sei={currentSei}
+                      visible={hudEnabled && seiFrames.length > 0}
+                      scale={hudScale}
+                      onScaleWheel={handleHudScaleWheel}
+                    />
                   )}
                   {hasCam && !encrypted && (
                     <div className="absolute bottom-1 left-1 rounded px-1 py-0.5 bg-black/50 text-[9px] font-medium text-white/50">
@@ -494,8 +520,14 @@ export default function DashcamPlayer({
 
           {/* Map overlay — bottom-right of composed grid */}
           {mapEnabled && seiFrames.length > 0 && (
-            <div className="absolute bottom-3 right-3 z-20">
-              <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
+            <div
+              className="absolute bottom-3 right-3 z-20"
+              onWheel={handleMapScaleWheel}
+              title={`Map size: ${mapScale.toFixed(2)}x (scroll to resize)`}
+            >
+              <div style={{ transform: `scale(${mapScale})`, transformOrigin: "bottom right" }}>
+                <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
+              </div>
             </div>
           )}
         </div>
@@ -526,12 +558,23 @@ export default function DashcamPlayer({
           )}
 
           {/* Tesla HUD Overlay */}
-          <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} scale={hudScale} />
+          <ArgusHUD
+            sei={currentSei}
+            visible={hudEnabled && seiFrames.length > 0}
+            scale={hudScale}
+            onScaleWheel={handleHudScaleWheel}
+          />
 
           {/* Map overlay — bottom-right */}
           {mapEnabled && seiFrames.length > 0 && (
-            <div className="absolute bottom-3 right-3 z-20">
-              <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
+            <div
+              className="absolute bottom-3 right-3 z-20"
+              onWheel={handleMapScaleWheel}
+              title={`Map size: ${mapScale.toFixed(2)}x (scroll to resize)`}
+            >
+              <div style={{ transform: `scale(${mapScale})`, transformOrigin: "bottom right" }}>
+                <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
+              </div>
             </div>
           )}
 
@@ -691,19 +734,6 @@ export default function DashcamPlayer({
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
               </svg>
             </button>
-
-
-            {/* HUD scale cycle */}
-            {hudEnabled && (
-              <button
-                onClick={cycleHudScale}
-                className="rounded p-1.5 text-zinc-400 hover:text-white transition-colors tabular-nums text-[11px] font-semibold w-8 text-center"
-                aria-label="Cycle HUD size"
-                title={`HUD size: ${hudScale}×`}
-              >
-                {hudScale}×
-              </button>
-            )}
 
             {/* HUD Overlay toggle */}
             <button

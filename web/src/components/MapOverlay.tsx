@@ -143,7 +143,7 @@ export default function MapOverlay({ seiFrames, currentSei, theme }: MapOverlayP
         minHeight: "100px",
         maxWidth: "480px",
         maxHeight: "360px",
-        resize: "both",
+        resize: "none",
         overflow: "hidden",
         borderRadius: "10px",
         border: "1px solid rgba(255,255,255,0.15)",
