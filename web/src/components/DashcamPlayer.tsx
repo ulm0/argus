@@ -22,6 +22,16 @@ interface DashcamPlayerProps {
 
 const SEEK_STEP = 5;
 
+// Fixed camera grid positions for composed view (Tesla layout)
+const CAMERA_SLOTS: { cam: CameraName; area: string }[] = [
+  { cam: "left_repeater", area: "lr" },
+  { cam: "front",         area: "front" },
+  { cam: "right_repeater",area: "rr" },
+  { cam: "left_pillar",   area: "lp" },
+  { cam: "back",          area: "back" },
+  { cam: "right_pillar",  area: "rp" },
+];
+
 export default function DashcamPlayer({
   event,
   streamUrlFn,
@@ -46,6 +56,7 @@ export default function DashcamPlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [viewMode, setViewMode] = useState<"single" | "composed">("single");
 
   // SEI / HUD state
   const [hudEnabled, setHudEnabled] = useState(false);
@@ -54,11 +65,13 @@ export default function DashcamPlayer({
   const [seiLoading, setSeiLoading] = useState(false);
   const [seiProgress, setSeiProgress] = useState("");
 
-  const mainVideoRef = useRef<HTMLVideoElement>(null);
+  const mainVideoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const seekBarRef = useRef<HTMLDivElement>(null);
   const thumbnailVideoRefs = useRef<Map<CameraName, HTMLVideoElement>>(new Map());
   const seiAbortRef = useRef<AbortController | null>(null);
+  // Populated only in composed mode; empty in single mode (makes sync calls no-ops)
+  const composedRefs = useRef<Map<CameraName, HTMLVideoElement>>(new Map());
 
   const activeFile = useMemo(() => {
     const clipTs = clips[clipIndex];
@@ -75,6 +88,26 @@ export default function DashcamPlayer({
     if (!activeFile || isEncrypted) return "";
     return streamUrlFn(activeFile);
   }, [activeFile, isEncrypted, streamUrlFn]);
+
+  // Master camera for composed view: prefer front, else first unencrypted
+  const composedMaster = useMemo<CameraName>(() => {
+    const priority: CameraName[] = ["front", "back", "left_repeater", "right_repeater", "left_pillar", "right_pillar"];
+    for (const cam of priority) {
+      if (cameras.includes(cam) && !event.encrypted_videos?.[cam]) return cam;
+    }
+    return cameras[0] ?? "front";
+  }, [cameras, event.encrypted_videos]);
+
+  // Build the file path for a given camera at the current clip index
+  const getFileForCamera = useCallback((cam: CameraName): string => {
+    const clipTs = clips[clipIndex];
+    if (clipTs) {
+      const refFile = Object.values(event.camera_videos)[0] ?? "";
+      const ext = refFile.match(/\.(\w+)$/)?.[1] ?? "mp4";
+      return `${clipTs}-${cam}.${ext}`;
+    }
+    return event.camera_videos[cam] ?? "";
+  }, [clips, clipIndex, event.camera_videos]);
 
   // Restore HUD toggle from localStorage; default is enabled
   useEffect(() => {
@@ -124,6 +157,13 @@ export default function DashcamPlayer({
     setCurrentTime(v.currentTime);
     syncThumbnails(v.currentTime);
 
+    // Keep composed follower cameras in sync
+    composedRefs.current.forEach((cv) => {
+      if (cv !== v && Math.abs(cv.currentTime - v.currentTime) > 0.5) {
+        cv.currentTime = v.currentTime;
+      }
+    });
+
     if (seiFrames.length > 0) {
       setCurrentSei(findSeiAtTime(seiFrames, v.currentTime));
     }
@@ -142,15 +182,23 @@ export default function DashcamPlayer({
     }
   }, [clipIndex, clips.length]);
 
-  // Playback controls
+  // Playback controls — composedRefs is empty in single mode, so the forEach is a no-op
   const togglePlay = useCallback(() => {
     const v = mainVideoRef.current;
     if (!v) return;
     if (v.paused) {
-      v.play().then(() => setIsPlaying(true)).catch(() => {});
+      v.play()
+        .then(() => {
+          setIsPlaying(true);
+          composedRefs.current.forEach((cv) => {
+            if (cv !== v) { cv.currentTime = v.currentTime; cv.play().catch(() => {}); }
+          });
+        })
+        .catch(() => {});
     } else {
       v.pause();
       setIsPlaying(false);
+      composedRefs.current.forEach((cv) => { if (cv !== v) cv.pause(); });
     }
   }, []);
 
@@ -164,6 +212,7 @@ export default function DashcamPlayer({
     const v = mainVideoRef.current;
     if (!v) return;
     v.currentTime = time;
+    composedRefs.current.forEach((cv) => { if (cv !== v) cv.currentTime = time; });
   }, []);
 
   const toggleFullscreen = useCallback(() => {
@@ -287,8 +336,9 @@ export default function DashcamPlayer({
     });
   }, [activeFile, isEncrypted, loadTelemetry, abortSei]);
 
-  // Switch camera — telemetry reload is handled by the activeFile change effect
+  // Switch camera — no-op in composed mode
   const switchCamera = useCallback((cam: CameraName) => {
+    if (viewMode === "composed") return;
     abortSei();
     setSeiFrames([]);
     setCurrentSei(null);
@@ -307,7 +357,7 @@ export default function DashcamPlayer({
         if (wasPlaying) v.play().catch(() => {});
       }
     });
-  }, [abortSei]);
+  }, [viewMode, abortSei]);
 
   // Abort any in-flight fetch on unmount
   useEffect(() => {
@@ -315,64 +365,145 @@ export default function DashcamPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Clear composedRefs when leaving composed mode
+  useEffect(() => {
+    if (viewMode === "single") {
+      composedRefs.current.clear();
+    }
+  }, [viewMode]);
+
   return (
     <div
       ref={containerRef}
       className={`flex flex-col w-full bg-black ${isFullscreen ? "h-screen" : ""}`}
     >
-      {/* Main video */}
-      <div className="relative w-full bg-black" style={{ aspectRatio: "16/9" }}>
-        {isEncrypted ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-zinc-400">
-            <LockIcon />
-            <p className="text-sm">Encrypted video</p>
-          </div>
-        ) : streamSrc ? (
-          <video
-            ref={mainVideoRef}
-            src={streamSrc}
-            className="h-full w-full object-contain"
-            onTimeUpdate={onTimeUpdate}
-            onLoadedMetadata={onLoadedMetadata}
-            onEnded={onEnded}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            playsInline
-          />
-        ) : (
-          <div className="absolute inset-0 flex items-center justify-center text-zinc-500 text-sm">
-            No video available
-          </div>
-        )}
-
-        {/* Tesla HUD Overlay */}
-        <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} />
-
-        {/* Telemetry loading overlay */}
-        {seiLoading && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70">
-            <div className="flex flex-col items-center gap-3 rounded-lg bg-black/90 px-8 py-5 text-white backdrop-blur-sm">
-              <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-              <span className="text-sm">{seiProgress}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Overlay play button */}
-        {!isPlaying && !isEncrypted && streamSrc && !seiLoading && (
-          <button
-            onClick={togglePlay}
-            className="absolute inset-0 flex items-center justify-center bg-black/20 transition-opacity hover:bg-black/30"
-            aria-label="Play"
+      {/* Video area — single or composed */}
+      {viewMode === "composed" ? (
+        // ── Composed view: 3×2 grid of all cameras ──
+        // Container aspect ratio 8:3 ensures each 16:9 cell fills perfectly
+        <div className="relative w-full bg-black" style={{ aspectRatio: "8/3" }}>
+          <div
+            className="h-full w-full"
+            style={{
+              display: "grid",
+              gridTemplateAreas: '"lr front rr" "lp back rp"',
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gridTemplateRows: "1fr 1fr",
+              gap: "1px",
+              background: "#0a0a0a",
+            }}
           >
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-white/90 shadow-lg">
-              <svg className="ml-1 h-7 w-7 text-zinc-900" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M8 5v14l11-7z" />
-              </svg>
+            {CAMERA_SLOTS.map(({ cam, area }) => {
+              const file = getFileForCamera(cam);
+              const encrypted = event.encrypted_videos?.[cam] ?? false;
+              const hasCam = !!event.camera_videos[cam];
+              const isMaster = cam === composedMaster;
+
+              return (
+                <div
+                  key={cam}
+                  style={{ gridArea: area }}
+                  className="relative overflow-hidden bg-black"
+                >
+                  {!hasCam ? (
+                    <div className="absolute inset-0 flex items-center justify-center text-zinc-800 text-[10px] uppercase tracking-widest">
+                      {CAMERA_LABELS[cam]}
+                    </div>
+                  ) : encrypted ? (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-zinc-900/60 text-zinc-500 text-[10px]">
+                      <LockIcon className="h-4 w-4" />
+                      <span>Encrypted</span>
+                    </div>
+                  ) : file ? (
+                    <video
+                      ref={(el) => {
+                        if (isMaster) mainVideoRef.current = el;
+                        if (el) composedRefs.current.set(cam, el);
+                        else composedRefs.current.delete(cam);
+                      }}
+                      src={streamUrlFn(file)}
+                      className="h-full w-full object-cover"
+                      playsInline
+                      onTimeUpdate={isMaster ? onTimeUpdate : undefined}
+                      onLoadedMetadata={(e) => {
+                        if (isMaster) {
+                          onLoadedMetadata();
+                        } else {
+                          // Seek follower to master position on load
+                          const master = mainVideoRef.current;
+                          if (master) e.currentTarget.currentTime = master.currentTime;
+                        }
+                      }}
+                      onEnded={isMaster ? onEnded : undefined}
+                      onPlay={isMaster ? () => setIsPlaying(true) : undefined}
+                      onPause={isMaster ? () => setIsPlaying(false) : undefined}
+                    />
+                  ) : null}
+                  {hasCam && !encrypted && (
+                    <div className="absolute bottom-1 left-1 rounded px-1 py-0.5 bg-black/50 text-[9px] font-medium text-white/50">
+                      {CAMERA_LABELS[cam]}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        // ── Single camera view ──
+        <div className="relative w-full bg-black" style={{ aspectRatio: "16/9" }}>
+          {isEncrypted ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-zinc-400">
+              <LockIcon />
+              <p className="text-sm">Encrypted video</p>
             </div>
-          </button>
-        )}
-      </div>
+          ) : streamSrc ? (
+            <video
+              ref={(el) => { mainVideoRef.current = el; }}
+              src={streamSrc}
+              className="h-full w-full object-contain"
+              onTimeUpdate={onTimeUpdate}
+              onLoadedMetadata={onLoadedMetadata}
+              onEnded={onEnded}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
+              playsInline
+            />
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center text-zinc-500 text-sm">
+              No video available
+            </div>
+          )}
+
+          {/* Tesla HUD Overlay */}
+          <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} />
+
+          {/* Telemetry loading overlay */}
+          {seiLoading && (
+            <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70">
+              <div className="flex flex-col items-center gap-3 rounded-lg bg-black/90 px-8 py-5 text-white backdrop-blur-sm">
+                <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                <span className="text-sm">{seiProgress}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Overlay play button */}
+          {!isPlaying && !isEncrypted && streamSrc && !seiLoading && (
+            <button
+              onClick={togglePlay}
+              className="absolute inset-0 flex items-center justify-center bg-black/20 transition-opacity hover:bg-black/30"
+              aria-label="Play"
+            >
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-white/90 shadow-lg">
+                <svg className="ml-1 h-7 w-7 text-zinc-900" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </div>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Controls */}
       <div className="bg-zinc-900 px-3 py-2 space-y-2">
@@ -467,27 +598,51 @@ export default function DashcamPlayer({
               </button>
             )}
 
-            {/* HUD Overlay toggle */}
+            {/* Composed / single view toggle */}
             <button
-              onClick={toggleHud}
-              className={`
-                rounded p-1.5 transition-colors
-                ${hudEnabled
+              onClick={() => setViewMode((m) => m === "composed" ? "single" : "composed")}
+              className={`rounded p-1.5 transition-colors ${
+                viewMode === "composed"
                   ? "text-[var(--color-accent)]"
                   : "text-zinc-400 hover:text-white"
-                }
-              `}
-              aria-label="Toggle HUD Overlay"
-              title="HUD Overlay"
+              }`}
+              aria-label="Toggle composed view"
+              title="All cameras"
             >
+              {/* 3×2 grid icon */}
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
-                <rect x="2" y="3" width="20" height="14" rx="2" />
-                <line x1="8" y1="21" x2="16" y2="21" />
-                <line x1="12" y1="17" x2="12" y2="21" />
-                <circle cx="12" cy="10" r="2" />
-                <path d="M7 10h2M15 10h2" />
+                <rect x="2"  y="2"  width="6" height="9" rx="1" />
+                <rect x="9"  y="2"  width="6" height="9" rx="1" />
+                <rect x="16" y="2"  width="6" height="9" rx="1" />
+                <rect x="2"  y="13" width="6" height="9" rx="1" />
+                <rect x="9"  y="13" width="6" height="9" rx="1" />
+                <rect x="16" y="13" width="6" height="9" rx="1" />
               </svg>
             </button>
+
+            {/* HUD Overlay toggle — only relevant in single mode */}
+            {viewMode === "single" && (
+              <button
+                onClick={toggleHud}
+                className={`
+                  rounded p-1.5 transition-colors
+                  ${hudEnabled
+                    ? "text-[var(--color-accent)]"
+                    : "text-zinc-400 hover:text-white"
+                  }
+                `}
+                aria-label="Toggle HUD Overlay"
+                title="HUD Overlay"
+              >
+                <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                  <rect x="2" y="3" width="20" height="14" rx="2" />
+                  <line x1="8" y1="21" x2="16" y2="21" />
+                  <line x1="12" y1="17" x2="12" y2="21" />
+                  <circle cx="12" cy="10" r="2" />
+                  <path d="M7 10h2M15 10h2" />
+                </svg>
+              </button>
+            )}
 
             {onDelete && (
               <button
@@ -519,8 +674,8 @@ export default function DashcamPlayer({
         </div>
       </div>
 
-      {/* Camera thumbnails */}
-      {cameras.length > 1 && (
+      {/* Camera thumbnails — hidden in composed mode (all cameras already visible) */}
+      {viewMode === "single" && cameras.length > 1 && (
         <div className="bg-zinc-900 px-3 pb-3">
           <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(cameras.length, 6)}, 1fr)` }}>
             {cameras.map((cam) => {
