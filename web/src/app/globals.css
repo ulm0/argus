@@ -1,13 +1,5 @@
 @import "tailwindcss";
 
-@font-face {
-  font-family: "Universal Sans";
-  src: url("/fonts/UniversalSans.woff2") format("woff2");
-  font-weight: 100 900;
-  font-style: normal;
-  font-display: swap;
-}
-
 :root {
   --color-bg-primary: #ffffff;
   --color-bg-secondary: #fafafa;
@@ -61,7 +53,7 @@
 @theme inline {
   --color-background: var(--color-bg-primary);
   --color-foreground: var(--color-text-primary);
-  --font-sans: "Universal Sans", system-ui, sans-serif;
+  --font-sans: var(--font-inter);
 }
 
 html {
@@ -69,8 +61,6 @@ html {
 }
 
 body {
-  font-family: "Universal Sans", system-ui, sans-serif;
-  font-variation-settings: 'wght' 450;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
