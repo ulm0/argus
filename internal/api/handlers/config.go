@@ -86,7 +86,9 @@ type updateConfigPublic struct {
 }
 
 type viewerPrefsConfigPublic struct {
-	SpeedUnit string `json:"speed_unit"`
+	SpeedUnit string  `json:"speed_unit"`
+	HudScale  float64 `json:"hud_scale"`
+	MapScale  float64 `json:"map_scale"`
 }
 
 type startupConfigPublic struct {
@@ -173,6 +175,8 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 		},
 		ViewerPrefs: viewerPrefsConfigPublic{
 			SpeedUnit: cfg.ViewerPrefs.SpeedUnit,
+			HudScale:  cfg.ViewerPrefs.HudScale,
+			MapScale:  cfg.ViewerPrefs.MapScale,
 		},
 		LogLevel: cfg.LogLevel,
 		Storage: storageInfo{
@@ -253,7 +257,9 @@ type updatePatch struct {
 }
 
 type viewerPrefsPatch struct {
-	SpeedUnit *string `json:"speed_unit,omitempty"`
+	SpeedUnit *string  `json:"speed_unit,omitempty"`
+	HudScale  *float64 `json:"hud_scale,omitempty"`
+	MapScale  *float64 `json:"map_scale,omitempty"`
 }
 
 type startupPatch struct {
@@ -427,6 +433,25 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			cfg.ViewerPrefs.SpeedUnit = unit
+		}
+		// HUD/Map scale bounds mirror the limits enforced in the web client
+		// (see DashcamPlayer / ArgusHUD). Accept a slightly wider envelope
+		// here so future client tweaks don't require a backend update.
+		if p.HudScale != nil {
+			v := *p.HudScale
+			if v < 0.5 || v > 2.5 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hud_scale must be in [0.5, 2.5]"})
+				return
+			}
+			cfg.ViewerPrefs.HudScale = v
+		}
+		if p.MapScale != nil {
+			v := *p.MapScale
+			if v < 0.4 || v > 3.0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "map_scale must be in [0.4, 3.0]"})
+				return
+			}
+			cfg.ViewerPrefs.MapScale = v
 		}
 	}
 

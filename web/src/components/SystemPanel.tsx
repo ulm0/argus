@@ -33,6 +33,51 @@ function ModeBadge({ mode, label }: { mode: ModeToken; label: string }) {
   );
 }
 
+// SignalStrength renders a 4-bar WiFi indicator colored by RSSI bucket.
+//   ≥ -55 dBm → 4 bars, green   (excellent)
+//   -55 .. -65 → 3 bars, green   (good)
+//   -65 .. -75 → 2 bars, yellow  (fair)
+//   -75 .. -85 → 1 bar,  red     (weak)
+//   < -85      → 0 bars, red     (no usable signal)
+function SignalStrength({ rssi }: { rssi: number }) {
+  let bars: number;
+  let color: string;
+  if (rssi >= -55) {
+    bars = 4;
+    color = "var(--color-success)";
+  } else if (rssi >= -65) {
+    bars = 3;
+    color = "var(--color-success)";
+  } else if (rssi >= -75) {
+    bars = 2;
+    color = "var(--color-warning)";
+  } else if (rssi >= -85) {
+    bars = 1;
+    color = "var(--color-danger)";
+  } else {
+    bars = 0;
+    color = "var(--color-danger)";
+  }
+
+  return (
+    <div className="flex items-center gap-1.5" title={`Signal: ${rssi} dBm`}>
+      <div className="flex items-end gap-0.5">
+        {[1, 2, 3, 4].map((step) => (
+          <div
+            key={step}
+            className="w-1 rounded-full"
+            style={{
+              height: `${step * 2.5 + 3}px`,
+              backgroundColor: step <= bars ? color : "var(--color-border)",
+            }}
+          />
+        ))}
+      </div>
+      <span className="text-[10px] tabular-nums text-[var(--color-text-muted)]">{rssi} dBm</span>
+    </div>
+  );
+}
+
 function StatusBadge({ active, activeLabel, inactiveLabel }: { active: boolean; activeLabel: string; inactiveLabel: string }) {
   return (
     <span
@@ -190,22 +235,7 @@ export default function SystemPanel() {
                 <p className="font-mono text-[10px] text-[var(--color-text-muted)]">{wifiStatus.connection.ip}</p>
               )}
               {wifiStatus.connection.signal != null && (
-                <div className="flex items-center gap-1.5">
-                  <div className="flex items-end gap-0.5">
-                    {[25, 50, 75, 100].map((threshold) => (
-                      <div
-                        key={threshold}
-                        className={`w-1 rounded-full ${
-                          (wifiStatus.connection.signal ?? 0) >= threshold
-                            ? "bg-[var(--color-accent)]"
-                            : "bg-[var(--color-border)]"
-                        }`}
-                        style={{ height: `${threshold / 10 + 4}px` }}
-                      />
-                    ))}
-                  </div>
-                  <span className="text-[10px] tabular-nums text-[var(--color-text-muted)]">{wifiStatus.connection.signal}%</span>
-                </div>
+                <SignalStrength rssi={wifiStatus.connection.signal} />
               )}
             </div>
           )}

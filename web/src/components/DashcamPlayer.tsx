@@ -14,8 +14,17 @@ import { findSeiAtTime, downloadCsv } from "@/lib/sei-parser";
 import type { SeiFrame, SeiMetadata } from "@/lib/sei-parser";
 import { useMapTheme } from "@/lib/useMapTheme";
 import ArgusHUD from "./ArgusHUD";
+import CornerResize from "./CornerResize";
+import { useViewerScale } from "@/lib/useViewerScale";
 
 const MapOverlay = dynamic(() => import("./MapOverlay"), { ssr: false });
+
+// Bounds for overlay scales. Kept in sync with the server-side validation in
+// internal/api/handlers/config.go (which accepts a slightly wider envelope).
+const HUD_SCALE_MIN = 0.7;
+const HUD_SCALE_MAX = 1.8;
+const MAP_SCALE_MIN = 0.6;
+const MAP_SCALE_MAX = 2.2;
 
 interface DashcamPlayerProps {
   event: VideoEvent;
@@ -65,11 +74,21 @@ export default function DashcamPlayer({
   const [viewMode, setViewMode] = useState<"single" | "composed">("composed");
   const [mapTheme] = useMapTheme();
 
-  // SEI / HUD state
+  // SEI / HUD state. Overlay toggles still live in localStorage (per-device
+  // UI preference); overlay *scales* are server-persisted so they survive
+  // app updates and re-flashes.
   const [hudEnabled, setHudEnabled] = useState(false);
-  const [hudScale, setHudScale] = useState(1.0);
+  const [hudScale, updateHudScale] = useViewerScale({
+    kind: "hud",
+    min: HUD_SCALE_MIN,
+    max: HUD_SCALE_MAX,
+  });
   const [mapEnabled, setMapEnabled] = useState(true);
-  const [mapScale, setMapScale] = useState(1.0);
+  const [mapScale, updateMapScale] = useViewerScale({
+    kind: "map",
+    min: MAP_SCALE_MIN,
+    max: MAP_SCALE_MAX,
+  });
   const [seiFrames, setSeiFrames] = useState<SeiFrame[]>([]);
   const [currentSei, setCurrentSei] = useState<SeiMetadata | null>(null);
   const [seiLoading, setSeiLoading] = useState(false);
@@ -119,17 +138,14 @@ export default function DashcamPlayer({
     return event.camera_videos[cam] ?? "";
   }, [clips, clipIndex, event.camera_videos]);
 
-  // Restore HUD + map toggles from localStorage
+  // Restore HUD + map toggles from localStorage. Scales are handled by
+  // useViewerScale (server-persisted with localStorage cache).
   useEffect(() => {
     try {
       const hudOn = localStorage.getItem("seiOverlayEnabled") !== "false";
       const mapOn = localStorage.getItem("mapOverlayEnabled") !== "false";
-      const scale = parseFloat(localStorage.getItem("hudScale") ?? "1") || 1;
-      const savedMapScale = parseFloat(localStorage.getItem("mapScale") ?? "1") || 1;
       setHudEnabled(hudOn);
       setMapEnabled(mapOn);
-      setHudScale(scale);
-      setMapScale(savedMapScale);
       if ((hudOn || mapOn) && activeFile && !isEncrypted) {
         loadTelemetry(activeFile);
       }
@@ -371,22 +387,6 @@ export default function DashcamPlayer({
     });
   }, [activeFile, isEncrypted, loadTelemetry, abortSei, hudEnabled, seiFrames.length]);
 
-  const updateHudScale = useCallback((nextScale: number) => {
-    setHudScale((prev) => {
-      const next = Math.max(0.7, Math.min(1.8, nextScale));
-      try { localStorage.setItem("hudScale", String(next)); } catch {}
-      return next;
-    });
-  }, []);
-
-  const updateMapScale = useCallback((nextScale: number) => {
-    setMapScale((prev) => {
-      const next = Math.max(0.6, Math.min(2.2, nextScale));
-      try { localStorage.setItem("mapScale", String(next)); } catch {}
-      return next;
-    });
-  }, []);
-
   const handleHudScaleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
     const step = e.deltaY < 0 ? 0.1 : -0.1;
@@ -508,6 +508,7 @@ export default function DashcamPlayer({
                       visible={hudEnabled && seiFrames.length > 0}
                       scale={hudScale}
                       onScaleWheel={handleHudScaleWheel}
+                      onScaleChange={updateHudScale}
                     />
                   )}
                   {hasCam && !encrypted && (
@@ -523,12 +524,19 @@ export default function DashcamPlayer({
           {/* Map overlay — bottom-right of composed grid */}
           {mapEnabled && seiFrames.length > 0 && (
             <div
-              className="absolute bottom-3 right-3 z-20"
+              className="group absolute bottom-3 right-3 z-20"
               onWheel={handleMapScaleWheel}
-              title={`Map size: ${mapScale.toFixed(2)}x (scroll to resize)`}
+              title={`Map size: ${mapScale.toFixed(2)}x (scroll or drag corner to resize)`}
             >
-              <div style={{ transform: `scale(${mapScale})`, transformOrigin: "bottom right" }}>
+              <div className="relative" style={{ transform: `scale(${mapScale})`, transformOrigin: "bottom right" }}>
                 <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
+                <CornerResize
+                  scale={mapScale}
+                  onChange={updateMapScale}
+                  min={MAP_SCALE_MIN}
+                  max={MAP_SCALE_MAX}
+                  corner="tl"
+                />
               </div>
             </div>
           )}
@@ -565,17 +573,25 @@ export default function DashcamPlayer({
             visible={hudEnabled && seiFrames.length > 0}
             scale={hudScale}
             onScaleWheel={handleHudScaleWheel}
+            onScaleChange={updateHudScale}
           />
 
           {/* Map overlay — bottom-right */}
           {mapEnabled && seiFrames.length > 0 && (
             <div
-              className="absolute bottom-3 right-3 z-20"
+              className="group absolute bottom-3 right-3 z-20"
               onWheel={handleMapScaleWheel}
-              title={`Map size: ${mapScale.toFixed(2)}x (scroll to resize)`}
+              title={`Map size: ${mapScale.toFixed(2)}x (scroll or drag corner to resize)`}
             >
-              <div style={{ transform: `scale(${mapScale})`, transformOrigin: "bottom right" }}>
+              <div className="relative" style={{ transform: `scale(${mapScale})`, transformOrigin: "bottom right" }}>
                 <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
+                <CornerResize
+                  scale={mapScale}
+                  onChange={updateMapScale}
+                  min={MAP_SCALE_MIN}
+                  max={MAP_SCALE_MAX}
+                  corner="tl"
+                />
               </div>
             </div>
           )}
@@ -708,10 +724,12 @@ export default function DashcamPlayer({
                 aria-label="Download telemetry CSV"
                 title="Download telemetry CSV (parsed SEI data)"
               >
-                {/* Spreadsheet/table icon — distinct from the archive ZIP button */}
+                {/* Data document with download arrow — distinct from the
+                    ZIP archive box and the 3×2 camera grid icons. */}
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <rect x="3" y="4" width="18" height="16" rx="2" />
-                  <path strokeLinecap="round" d="M3 9h18M3 14h18M9 4v16M15 4v16" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 5v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z" />
+                  <path strokeLinecap="round" d="M8.5 8.5h7M8.5 11.5h7" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 14v4m0 0-2-2m2 2 2-2" />
                 </svg>
               </button>
             )}

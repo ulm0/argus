@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback } from "react";
 import * as api from "@/lib/api";
 import type { AppStatus, VideoEvent, VideoEventsResponse } from "@/lib/types";
 import DashcamPlayer from "@/components/DashcamPlayer";
+import { formatEventReason } from "@/lib/eventReason";
+import { formatMegabytes } from "@/lib/format";
 
 interface Props {
   folder: string;
@@ -143,8 +145,11 @@ export default function VideoEventPage({ folder, event }: Props) {
       {/* Event metadata */}
       <div className="flex flex-wrap items-center gap-3">
         {details.reason && (
-          <span className="rounded bg-[var(--color-accent-subtle)] px-2 py-0.5 text-xs font-medium text-[var(--color-accent-text)]">
-            {details.reason}
+          <span
+            className="rounded bg-[var(--color-accent-subtle)] px-2 py-0.5 text-xs font-medium text-[var(--color-accent-text)]"
+            title={details.reason}
+          >
+            {formatEventReason(details.reason)}
           </span>
         )}
         {details.city && (
@@ -155,8 +160,8 @@ export default function VideoEventPage({ folder, event }: Props) {
             {formatDate(details.datetime)}
           </span>
         )}
-        <span className="text-sm text-[var(--color-text-muted)]">
-          {(details.size_mb).toFixed(1)} MB
+        <span className="text-sm text-[var(--color-text-muted)]" title={`${details.size_mb.toFixed(1)} MB`}>
+          {formatMegabytes(details.size_mb)}
         </span>
         {prevEvent && (
           <a

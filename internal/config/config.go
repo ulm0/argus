@@ -152,7 +152,9 @@ type UpdateConfig struct {
 // ViewerPrefsConfig stores user-facing display preferences for the dashcam viewer.
 // Persisted server-side so they survive app updates and re-flashes.
 type ViewerPrefsConfig struct {
-	SpeedUnit string `yaml:"speed_unit"`
+	SpeedUnit string  `yaml:"speed_unit"`
+	HudScale  float64 `yaml:"hud_scale,omitempty"`
+	MapScale  float64 `yaml:"map_scale,omitempty"`
 }
 
 const defaultSecretKey = "CHANGE-THIS-TO-A-RANDOM-SECRET-KEY-ON-FIRST-INSTALL"
@@ -267,6 +269,12 @@ func (c *Config) setDefaults() {
 	}
 	if c.ViewerPrefs.SpeedUnit == "" {
 		c.ViewerPrefs.SpeedUnit = "kph"
+	}
+	if c.ViewerPrefs.HudScale <= 0 {
+		c.ViewerPrefs.HudScale = 1.0
+	}
+	if c.ViewerPrefs.MapScale <= 0 {
+		c.ViewerPrefs.MapScale = 1.0
 	}
 	if c.Network.SambaEnabled == nil {
 		enabled := true

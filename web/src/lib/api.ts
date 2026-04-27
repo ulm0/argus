@@ -16,6 +16,7 @@ import type {
   ConfigResponse,
   FsckCheckResult,
   FsckHistoryResponse,
+  FsckMode,
   FsckStatus,
   GadgetState,
   HealthStatus,
@@ -431,8 +432,11 @@ export function calculateCleanup(): Promise<CleanupPlan> {
 // Fsck
 // ──────────────────────────────────────────────
 
-export function startFsck(partitions?: string[]): Promise<StatusResponse> {
-  return post<StatusResponse>("/api/fsck/start", partitions ? { partitions } : {});
+export function startFsck(partitions?: string[], mode?: FsckMode): Promise<StatusResponse> {
+  const body: { partitions?: string[]; mode?: FsckMode } = {};
+  if (partitions && partitions.length > 0) body.partitions = partitions;
+  if (mode) body.mode = mode;
+  return post<StatusResponse>("/api/fsck/start", body);
 }
 
 export function getFsckStatus(): Promise<FsckStatus> {

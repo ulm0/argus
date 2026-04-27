@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { usePathname } from "next/navigation";
 import * as api from "@/lib/api";
 import type {
   VideoFolder,
@@ -10,16 +11,20 @@ import type {
   VideoSessionsResponse,
   VideoListResponse,
 } from "@/lib/types";
+import { formatEventReason } from "@/lib/eventReason";
+import { formatMegabytes } from "@/lib/format";
 
 const FOLDER_TABS = ["SavedClips", "SentryClips", "RecentClips"] as const;
 type FolderTab = (typeof FOLDER_TABS)[number];
 
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+// /videos and /videos/{folder} both render this component (see app/videos/page.tsx).
+// Pull the folder out of the path so the breadcrumb link in VideoEvent
+// (e.g. /videos/SentryClips) actually lands on the matching tab instead of
+// silently defaulting to SavedClips.
+function tabFromPath(pathname: string | null): FolderTab {
+  if (!pathname) return "SavedClips";
+  const seg = pathname.replace(/^\/videos\/?/, "").split("/").filter(Boolean)[0];
+  return (FOLDER_TABS as readonly string[]).includes(seg) ? (seg as FolderTab) : "SavedClips";
 }
 
 function formatDate(ts: string): string {
@@ -38,8 +43,26 @@ function formatDate(ts: string): string {
 }
 
 export default function VideosListPage() {
+  const pathname = usePathname();
   const [folders, setFolders] = useState<VideoFolder[]>([]);
-  const [activeTab, setActiveTab] = useState<FolderTab>("SavedClips");
+  const [activeTab, setActiveTab] = useState<FolderTab>(() => tabFromPath(pathname));
+
+  // Keep the active tab in sync with the URL when the user clicks the
+  // breadcrumb back to /videos/{folder} from an event detail page.
+  useEffect(() => {
+    const next = tabFromPath(pathname);
+    setActiveTab((prev) => (prev === next ? prev : next));
+  }, [pathname]);
+
+  const selectTab = useCallback((tab: FolderTab) => {
+    setActiveTab(tab);
+    // Reflect the tab in the URL so the breadcrumb stays consistent and
+    // back/forward navigation feels right. We use replaceState rather than
+    // pushState so each tab click doesn't accumulate history entries.
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", `/videos/${tab}`);
+    }
+  }, []);
   const [events, setEvents] = useState<VideoEvent[]>([]);
   const [sessions, setSessions] = useState<SessionGroup[]>([]);
   const [page, setPage] = useState(0);
@@ -199,7 +222,7 @@ export default function VideosListPage() {
           return (
             <button
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => selectTab(tab)}
               className={`flex-1 rounded px-4 py-2 text-sm font-medium transition-all ${
                 activeTab === tab
                   ? "bg-[var(--color-accent)] text-white shadow-sm"
@@ -276,14 +299,17 @@ export default function VideosListPage() {
                       {ev.name}
                     </p>
                     {ev.reason && (
-                      <span className="ml-2 shrink-0 rounded bg-[var(--color-accent-subtle)] px-2 py-0.5 text-xs font-medium text-[var(--color-accent-text)]">
-                        {ev.reason}
+                      <span
+                        className="ml-2 shrink-0 rounded bg-[var(--color-accent-subtle)] px-2 py-0.5 text-xs font-medium text-[var(--color-accent-text)]"
+                        title={ev.reason}
+                      >
+                        {formatEventReason(ev.reason)}
                       </span>
                     )}
                   </div>
                   <div className="mt-1 flex items-center gap-3 text-xs text-[var(--color-text-muted)]">
                     <span>{formatDate(ev.datetime)}</span>
-                    <span>{formatBytes(ev.size_mb * 1024 * 1024)}</span>
+                    <span>{formatMegabytes(ev.size_mb)}</span>
                   </div>
                   {ev.city && (
                     <p className="mt-1 text-xs text-[var(--color-text-muted)]">{ev.city}</p>

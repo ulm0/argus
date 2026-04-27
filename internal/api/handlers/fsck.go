@@ -25,12 +25,19 @@ func NewFsckHandler(cfg *config.Config) *FsckHandler {
 func (h *FsckHandler) Start(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Partitions []string `json:"partitions"`
+		Mode       string   `json:"mode"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Partitions) == 0 {
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if len(req.Partitions) == 0 {
 		req.Partitions = h.cfg.USBPartitions()
 	}
 
-	if err := h.runner.Start(req.Partitions); err != nil {
+	mode := fsck.Mode(req.Mode)
+	if mode != fsck.ModeQuick && mode != fsck.ModeRepair {
+		mode = fsck.ModeQuick
+	}
+
+	if err := h.runner.Start(req.Partitions, mode); err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}

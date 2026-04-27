@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/gorilla/mux"
 
 	"github.com/ulm0/argus/internal/config"
+	"github.com/ulm0/argus/internal/logger"
 	"github.com/ulm0/argus/internal/services/mode"
 	"github.com/ulm0/argus/internal/services/video"
 )
@@ -195,7 +197,13 @@ func (h *VideoHandler) Download(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, videoPath)
 }
 
-// DownloadEvent creates and serves a ZIP of all videos in an event.
+// DownloadEvent streams a ZIP of all videos + metadata for an event.
+//
+// The archive is generated on the fly with archive/zip rather than the
+// external `zip(1)` binary: the previous implementation depended on the
+// host having info-zip installed and tripped over a 0-byte temp file
+// (CreateTemp + Close), which `zip` interpreted as a corrupted update
+// target and rejected with exit status 3.
 func (h *VideoHandler) DownloadEvent(w http.ResponseWriter, r *http.Request) {
 	folder := mux.Vars(r)["folder"]
 	event := mux.Vars(r)["event"]
@@ -206,16 +214,23 @@ func (h *VideoHandler) DownloadEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zipPath, err := h.videoSvc.CreateEventZip(folderPath, event)
+	files, err := h.videoSvc.CollectEventArchiveFiles(folderPath, event)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		code := http.StatusInternalServerError
+		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "no archivable files") {
+			code = http.StatusNotFound
+		}
+		writeJSON(w, code, map[string]string{"error": err.Error()})
 		return
 	}
-	defer os.Remove(zipPath)
 
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, event))
 	w.Header().Set("Content-Type", "application/zip")
-	http.ServeFile(w, r, zipPath)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, event))
+	if err := video.WriteEventZip(w, files); err != nil {
+		// Headers are already flushed; we can't switch to a JSON error here.
+		// Surface the failure in the logs so it isn't silently swallowed.
+		logger.L.WithField("folder", folder).WithField("event", event).WithError(err).Error("event zip stream failed")
+	}
 }
 
 // Thumbnail generates and serves a thumbnail for the first valid camera in an event.

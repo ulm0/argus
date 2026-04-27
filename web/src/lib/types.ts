@@ -291,8 +291,12 @@ export interface CleanupPreviewResponse {
 
 export type FsckStatusValue = "idle" | "running" | "done" | "failed";
 
+export type FsckMode = "quick" | "repair";
+
 export interface FsckCheckResult {
   partition: string;
+  mode?: FsckMode;
+  fs_type?: string;
   started_at: string;
   finished_at?: string;
   status: FsckStatusValue;
@@ -509,6 +513,8 @@ export interface StartupConfigPublic {
 
 export interface ViewerPrefsConfigPublic {
   speed_unit: "kph" | "mph";
+  hud_scale: number;
+  map_scale: number;
 }
 
 export interface StorageInfo {

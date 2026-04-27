@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import * as api from "@/lib/api";
 import type { VideoEvent } from "@/lib/types";
 import DashcamPlayer from "@/components/DashcamPlayer";
+import { formatMegabytes } from "@/lib/format";
 
 interface Props {
   folder: string;
@@ -73,8 +74,8 @@ export default function VideoSessionPage({ folder, session }: Props) {
             {formatDate(details.datetime)}
           </span>
         )}
-        <span className="text-sm text-[var(--color-text-muted)]">
-          {details.size_mb.toFixed(1)} MB
+        <span className="text-sm text-[var(--color-text-muted)]" title={`${details.size_mb.toFixed(1)} MB`}>
+          {formatMegabytes(details.size_mb)}
         </span>
       </div>
 

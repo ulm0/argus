@@ -1,16 +1,28 @@
 "use client";
 
 import { memo } from "react";
-import { PiArrowFatLeftLight, PiArrowFatRightLight } from "react-icons/pi";
+import {
+  PiArrowFatLeftFill,
+  PiArrowFatLeftLight,
+  PiArrowFatRightFill,
+  PiArrowFatRightLight,
+} from "react-icons/pi";
 import { AutopilotState, GearState } from "@/lib/sei-parser";
 import type { SeiMetadata } from "@/lib/sei-parser";
 import { useSpeedUnit, mpsToUnit } from "@/lib/useSpeedUnit";
+import CornerResize from "./CornerResize";
+
+// Allowed scale range for the HUD overlay; kept in sync with the wheel-based
+// resize logic in DashcamPlayer.
+const HUD_SCALE_MIN = 0.7;
+const HUD_SCALE_MAX = 1.8;
 
 interface ArgusHUDProps {
   sei: SeiMetadata | null;
   visible: boolean;
   scale?: number;
   onScaleWheel?: (e: React.WheelEvent<HTMLDivElement>) => void;
+  onScaleChange?: (next: number) => void;
 }
 
 const GEAR_LABELS: Record<GearState, string> = {
@@ -27,7 +39,7 @@ const AP_LABELS: Record<AutopilotState, string> = {
   [AutopilotState.TACC]: "Cruise",
 };
 
-function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
+function ArgusHUD({ sei, visible, scale = 1, onScaleWheel, onScaleChange }: ArgusHUDProps) {
   const [speedUnit] = useSpeedUnit();
 
   if (!visible) return null;
@@ -52,10 +64,10 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
       className="absolute inset-x-0 top-3 z-20 flex justify-center"
       style={{ transformOrigin: "top center", transform: `scale(${scale})` }}
       onWheel={onScaleWheel}
-      title={`HUD size: ${scale.toFixed(2)}x (scroll to resize)`}
+      title={`HUD size: ${scale.toFixed(2)}x (scroll or drag corner to resize)`}
     >
       <div
-        className="border border-white/[0.10] shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
+        className="group relative border border-white/[0.10] shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
         style={{
           width: "320px",
           padding: "10px 14px 12px",
@@ -64,6 +76,15 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
           background: "rgba(22, 26, 30, 0.78)",
         }}
       >
+        {onScaleChange && (
+          <CornerResize
+            scale={scale}
+            onChange={onScaleChange}
+            min={HUD_SCALE_MIN}
+            max={HUD_SCALE_MAX}
+            corner="br"
+          />
+        )}
         {/* Row 1: corner badges + arrows + speed */}
         <div
           className="grid items-center"
@@ -154,7 +175,15 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
 export default memo(ArgusHUD);
 
 function ArrowBlinker({ side, active }: { side: "left" | "right"; active: boolean }) {
-  const Icon = side === "left" ? PiArrowFatLeftLight : PiArrowFatRightLight;
+  // Use the filled variant when the blinker is on so it reads as a solid green
+  // arrow (matches the in-car cluster behavior); thin outline when idle.
+  const Icon = active
+    ? side === "left"
+      ? PiArrowFatLeftFill
+      : PiArrowFatRightFill
+    : side === "left"
+      ? PiArrowFatLeftLight
+      : PiArrowFatRightLight;
   return (
     <span
       className={active ? "text-[#25c05a]" : "text-white/30"}
