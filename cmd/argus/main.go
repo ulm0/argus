@@ -32,6 +32,7 @@ func main() {
 		cmd.NewSetupCmd(&templates),
 		cmd.NewRemoveCmd(),
 		cmd.NewUpgradeCmd(),
+		cmd.NewRefreshServiceCmd(&templates),
 		cmd.NewVersionCmd(),
 	)
 

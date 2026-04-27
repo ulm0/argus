@@ -561,20 +561,8 @@ func setupConfigureSysctl() error {
 func setupInstallService(installDir string, templates *embed.FS) error {
 	setupLog("Installing systemd service...")
 
-	targetUser := currentUser()
-
-	// Read the service template from the embedded FS; it is always present in the binary.
-	data, err := templates.ReadFile("templates/argus.service")
-	if err != nil {
-		return fmt.Errorf("read service template: %w", err)
-	}
-
-	rendered := strings.ReplaceAll(string(data), "__GADGET_DIR__", installDir)
-	rendered = strings.ReplaceAll(rendered, "__TARGET_USER__", targetUser)
-	rendered = strings.ReplaceAll(rendered, "__MNT_DIR__", "/mnt/gadget")
-
-	if err := os.WriteFile("/etc/systemd/system/argus.service", []byte(rendered), 0644); err != nil {
-		return fmt.Errorf("write service file: %w", err)
+	if err := writeServiceUnit(installDir, templates); err != nil {
+		return err
 	}
 
 	if err := setupCopyBinary(); err != nil {
@@ -590,6 +578,63 @@ func setupInstallService(installDir string, templates *embed.FS) error {
 
 	setupLog("Service installed and enabled")
 	return nil
+}
+
+// writeServiceUnit renders the embedded systemd unit template and writes it
+// to /etc/systemd/system/argus.service. The caller is responsible for
+// running `systemctl daemon-reload` afterwards.
+func writeServiceUnit(installDir string, templates *embed.FS) error {
+	targetUser := currentUser()
+
+	data, err := templates.ReadFile("templates/argus.service")
+	if err != nil {
+		return fmt.Errorf("read service template: %w", err)
+	}
+
+	rendered := strings.ReplaceAll(string(data), "__GADGET_DIR__", installDir)
+	rendered = strings.ReplaceAll(rendered, "__TARGET_USER__", targetUser)
+	rendered = strings.ReplaceAll(rendered, "__MNT_DIR__", "/mnt/gadget")
+
+	if err := os.WriteFile("/etc/systemd/system/argus.service", []byte(rendered), 0644); err != nil {
+		return fmt.Errorf("write service file: %w", err)
+	}
+	return nil
+}
+
+// RefreshServiceUnit re-renders /etc/systemd/system/argus.service from the
+// binary's embedded template and runs `systemctl daemon-reload`. Used by
+// `argus upgrade` to keep the unit file in sync with the binary across
+// upgrades. The install directory is read from the existing unit's
+// `WorkingDirectory=` line, falling back to the default if absent.
+func RefreshServiceUnit(templates *embed.FS) error {
+	installDir := readInstallDirFromExistingUnit()
+	if installDir == "" {
+		installDir = setupDefaultDir()
+	}
+	if err := writeServiceUnit(installDir, templates); err != nil {
+		return err
+	}
+	if err := runCmd("systemctl", "daemon-reload"); err != nil {
+		return fmt.Errorf("daemon-reload: %w", err)
+	}
+	return nil
+}
+
+// readInstallDirFromExistingUnit parses /etc/systemd/system/argus.service
+// for `WorkingDirectory=...` and returns the value, or "" if the file is
+// missing or the key is absent.
+func readInstallDirFromExistingUnit() string {
+	data, err := os.ReadFile("/etc/systemd/system/argus.service")
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "WorkingDirectory=") {
+			return strings.TrimPrefix(line, "WorkingDirectory=")
+		}
+	}
+	return ""
 }
 
 func setupCopyBinary() error {

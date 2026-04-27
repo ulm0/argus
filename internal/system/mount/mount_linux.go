@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/ulm0/argus/internal/logger"
+	"golang.org/x/sys/unix"
 )
 
 func (m *Manager) mountLoopReadOnlyUserImpl(source, target, fsType string, uid, gid int) error {
@@ -79,24 +80,16 @@ func inPID1Namespace(fn func() error) error {
 	}
 	defer selfNsFd.Close()
 
-	if err := setns(int(nsFd.Fd()), 0); err != nil {
+	if err := unix.Setns(int(nsFd.Fd()), 0); err != nil {
 		logger.L.WithError(err).Warn("setns failed, running in current namespace")
 		return fn()
 	}
 
 	result := fn()
 
-	if err := setns(int(selfNsFd.Fd()), 0); err != nil {
+	if err := unix.Setns(int(selfNsFd.Fd()), 0); err != nil {
 		logger.L.WithError(err).Error("failed to restore mount namespace")
 	}
 
 	return result
-}
-
-func setns(fd int, nstype int) error {
-	_, _, errno := syscall.RawSyscall(308, uintptr(fd), uintptr(nstype), 0)
-	if errno != 0 {
-		return errno
-	}
-	return nil
 }
