@@ -63,7 +63,7 @@ export default function DashcamPlayer({
 
   // SEI / HUD state
   const [hudEnabled, setHudEnabled] = useState(false);
-  const [mapEnabled, setMapEnabled] = useState(false);
+  const [mapEnabled, setMapEnabled] = useState(true);
   const [seiFrames, setSeiFrames] = useState<SeiFrame[]>([]);
   const [currentSei, setCurrentSei] = useState<SeiMetadata | null>(null);
   const [seiLoading, setSeiLoading] = useState(false);
@@ -117,7 +117,7 @@ export default function DashcamPlayer({
   useEffect(() => {
     try {
       const hudOn = localStorage.getItem("seiOverlayEnabled") !== "false";
-      const mapOn = localStorage.getItem("mapOverlayEnabled") === "true";
+      const mapOn = localStorage.getItem("mapOverlayEnabled") !== "false";
       setHudEnabled(hudOn);
       setMapEnabled(mapOn);
       if ((hudOn || mapOn) && activeFile && !isEncrypted) {
