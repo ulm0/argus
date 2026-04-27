@@ -76,12 +76,12 @@ export default function DashcamPlayer({
     return streamUrlFn(activeFile);
   }, [activeFile, isEncrypted, streamUrlFn]);
 
-  // Restore HUD toggle from localStorage and load telemetry if it was enabled
+  // Restore HUD toggle from localStorage; default is enabled
   useEffect(() => {
     try {
-      const saved = localStorage.getItem("seiOverlayEnabled") === "true";
-      setHudEnabled(saved);
-      if (saved && activeFile && !isEncrypted) {
+      const enabled = localStorage.getItem("seiOverlayEnabled") !== "false";
+      setHudEnabled(enabled);
+      if (enabled && activeFile && !isEncrypted) {
         loadTelemetry(activeFile);
       }
     } catch {
