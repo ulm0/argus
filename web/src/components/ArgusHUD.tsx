@@ -44,10 +44,7 @@ function ArgusHUD({ sei, visible }: ArgusHUDProps) {
   const apLabel = AP_LABELS[apState] ?? "";
 
   return (
-    <div
-      className="pointer-events-none absolute left-1/2 top-3 z-20 flex -translate-x-1/2 flex-col items-center gap-1.5"
-      style={{ transform: "translateX(-50%) translateZ(3px)" }}
-    >
+    <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
       <div
         className="border border-white/[0.14] shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
         style={{
@@ -91,7 +88,7 @@ function ArgusHUD({ sei, visible }: ArgusHUDProps) {
             >
               {speed}
             </span>
-            <span className="mt-1 text-xs text-white/80">{speedUnit}</span>
+            <span className="mt-1 text-xs text-white/80">{speedUnit.toUpperCase()}</span>
           </div>
 
           {/* Right blinker */}
@@ -131,15 +128,13 @@ function ArgusHUD({ sei, visible }: ArgusHUDProps) {
 
           {/* Autopilot */}
           <div
-            style={{
-              gridArea: "autopilot",
-              maxHeight: apLabel ? "16px" : "0",
-              opacity: apLabel ? 1 : 0,
-              transition: "opacity 0.25s ease, max-height 0.25s ease",
-            }}
-            className="overflow-hidden text-center text-[11px] font-semibold tracking-wide text-[#32c759]"
+            style={{ gridArea: "autopilot" }}
+            className="text-center text-[11px] font-semibold tracking-wide"
           >
-            {apLabel}
+            {apLabel
+              ? <span className="text-[#32c759]">{apLabel}</span>
+              : <span className="text-white/20">—</span>
+            }
           </div>
 
           {/* Throttle pedal */}
@@ -225,16 +220,20 @@ function PedalIndicator({
         strokeWidth={1.5}
       >
         {icon === "brake" ? (
+          /* Disc brake: outer ring + hub + 3 vanes */
           <>
             <circle cx="12" cy="12" r="8" />
-            <line x1="8" y1="12" x2="16" y2="12" />
+            <circle cx="12" cy="12" r="3" />
+            <line x1="12" y1="9" x2="12" y2="4" />
+            <line x1="14.6" y1="13.5" x2="18.9" y2="16" />
+            <line x1="9.4" y1="13.5" x2="5.1" y2="16" />
           </>
         ) : (
-          <>
-            <circle cx="12" cy="12" r="8" />
-            <line x1="12" y1="8" x2="12" y2="16" />
-            <line x1="8" y1="12" x2="16" y2="12" />
-          </>
+          /* Lightning bolt: power / acceleration */
+          <polygon
+            points="13,3 8,13 12,13 11,21 16,11 12,11"
+            fill="rgba(136,136,136,0.4)"
+          />
         )}
       </svg>
     </div>

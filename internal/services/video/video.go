@@ -542,6 +542,11 @@ func ParseSessionFromFilename(filename string) (session, camera string, ok bool)
 	return m[1], m[2], true
 }
 
+// countFolderItems counts the event-level items in a TeslaCam folder without
+// recursing into subdirectories. For SavedClips/SentryClips each event is a
+// subdirectory; for RecentClips videos are top-level files.
+// Avoids the O(N) directory reads that the old recursive walk caused on large
+// folders (e.g. 1325 SentryClips events → 1325 extra ReadDir calls).
 func countVideoFiles(dir string) int {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -550,15 +555,9 @@ func countVideoFiles(dir string) int {
 	count := 0
 	for _, e := range entries {
 		if e.IsDir() {
-			// Count subdirectory video files
-			subEntries, _ := os.ReadDir(filepath.Join(dir, e.Name()))
-			for _, se := range subEntries {
-				if !se.IsDir() && isVideoFile(se.Name()) {
-					count++
-				}
-			}
+			count++ // each subdirectory is one event
 		} else if isVideoFile(e.Name()) {
-			count++
+			count++ // top-level video file (RecentClips)
 		}
 	}
 	return count
