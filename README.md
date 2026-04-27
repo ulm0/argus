@@ -141,7 +141,7 @@ All runtime settings are in `~/.argus/config.yaml`.
 - `installation.boot_random_chime_on_start: false`
 - `disk_images.boot_fsck_enabled: true`
 - `system.watchdog_enabled: true`
-- `system.watchdog_timeout_sec: 60`
+- `system.watchdog_timeout_sec: 10`
 - `system.reapply_sysctl_on_start: true`
 
 ### Web-configurable startup and reliability

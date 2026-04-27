@@ -417,8 +417,10 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			cfg.System.ReapplySysctlOnStart = *p.ReapplySysctlOnStart
 		}
 		if p.WatchdogTimeoutSec != nil {
-			if *p.WatchdogTimeoutSec <= 0 {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "watchdog_timeout_sec must be > 0"})
+			// Floor of 2s: the keepalive ticks at half the timeout, so a
+			// value of 1 would yield a zero-duration ticker and panic.
+			if *p.WatchdogTimeoutSec < 2 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "watchdog_timeout_sec must be >= 2"})
 				return
 			}
 			cfg.System.WatchdogTimeoutSec = *p.WatchdogTimeoutSec

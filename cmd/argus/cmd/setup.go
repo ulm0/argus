@@ -75,7 +75,7 @@ system:
   samba_conf: /etc/samba/smb.conf
   reapply_sysctl_on_start: true
   watchdog_enabled: true
-  watchdog_timeout_sec: 60
+  watchdog_timeout_sec: 10
 
 web:
   secret_key: CHANGE-THIS-TO-A-RANDOM-SECRET-KEY-ON-FIRST-INSTALL

@@ -76,7 +76,7 @@ export default function SettingsPage() {
   const [bootRandomChimeOnStart, setBootRandomChimeOnStart] = useState(false);
   const [bootFsckEnabled, setBootFsckEnabled] = useState(true);
   const [watchdogEnabled, setWatchdogEnabled] = useState(false);
-  const [watchdogTimeoutSec, setWatchdogTimeoutSec] = useState(60);
+  const [watchdogTimeoutSec, setWatchdogTimeoutSec] = useState(10);
   const [reapplySysctlOnStart, setReapplySysctlOnStart] = useState(false);
 
   // Editable states — Webhook
@@ -557,7 +557,7 @@ export default function SettingsPage() {
           <input
             id="watchdog-timeout-sec"
             type="number"
-            min={1}
+            min={2}
             className={inputCls}
             value={watchdogTimeoutSec}
             onChange={(e) => setWatchdogTimeoutSec(Number(e.target.value))}

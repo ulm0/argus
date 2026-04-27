@@ -265,7 +265,9 @@ func (c *Config) setDefaults() {
 		c.LogLevel = "debug"
 	}
 	if c.System.WatchdogTimeoutSec <= 0 {
-		c.System.WatchdogTimeoutSec = 60
+		// 10s is well within the BCM2835 ~15s hardware limit on the Pi while
+		// still leaving ~5s of slack between keepalives.
+		c.System.WatchdogTimeoutSec = 10
 	}
 	if c.ViewerPrefs.SpeedUnit == "" {
 		c.ViewerPrefs.SpeedUnit = "kph"
