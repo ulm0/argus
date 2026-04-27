@@ -7,11 +7,14 @@ import {
   useRef,
   useState,
 } from "react";
+import dynamic from "next/dynamic";
 import type { CameraName, VideoEvent } from "@/lib/types";
 import { CAMERA_LABELS } from "@/lib/types";
 import { findSeiAtTime, downloadCsv } from "@/lib/sei-parser";
 import type { SeiFrame, SeiMetadata } from "@/lib/sei-parser";
 import ArgusHUD from "./ArgusHUD";
+
+const MapOverlay = dynamic(() => import("./MapOverlay"), { ssr: false });
 
 interface DashcamPlayerProps {
   event: VideoEvent;
@@ -60,6 +63,7 @@ export default function DashcamPlayer({
 
   // SEI / HUD state
   const [hudEnabled, setHudEnabled] = useState(false);
+  const [mapEnabled, setMapEnabled] = useState(false);
   const [seiFrames, setSeiFrames] = useState<SeiFrame[]>([]);
   const [currentSei, setCurrentSei] = useState<SeiMetadata | null>(null);
   const [seiLoading, setSeiLoading] = useState(false);
@@ -109,12 +113,14 @@ export default function DashcamPlayer({
     return event.camera_videos[cam] ?? "";
   }, [clips, clipIndex, event.camera_videos]);
 
-  // Restore HUD toggle from localStorage; default is enabled
+  // Restore HUD + map toggles from localStorage
   useEffect(() => {
     try {
-      const enabled = localStorage.getItem("seiOverlayEnabled") !== "false";
-      setHudEnabled(enabled);
-      if (enabled && activeFile && !isEncrypted) {
+      const hudOn = localStorage.getItem("seiOverlayEnabled") !== "false";
+      const mapOn = localStorage.getItem("mapOverlayEnabled") === "true";
+      setHudEnabled(hudOn);
+      setMapEnabled(mapOn);
+      if ((hudOn || mapOn) && activeFile && !isEncrypted) {
         loadTelemetry(activeFile);
       }
     } catch {
@@ -135,7 +141,7 @@ export default function DashcamPlayer({
     setCurrentSei(null);
     setSeiLoading(false);
 
-    if (hudEnabled && activeFile && !isEncrypted) {
+    if ((hudEnabled || mapEnabled) && activeFile && !isEncrypted) {
       loadTelemetry(activeFile);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -325,7 +331,7 @@ export default function DashcamPlayer({
 
       if (next && activeFile && !isEncrypted) {
         loadTelemetry(activeFile);
-      } else if (!next) {
+      } else if (!next && !mapEnabled) {
         abortSei();
         setSeiFrames([]);
         setCurrentSei(null);
@@ -334,7 +340,26 @@ export default function DashcamPlayer({
 
       return next;
     });
-  }, [activeFile, isEncrypted, loadTelemetry, abortSei]);
+  }, [activeFile, isEncrypted, loadTelemetry, abortSei, mapEnabled]);
+
+  // Toggle map overlay
+  const toggleMap = useCallback(() => {
+    setMapEnabled((prev) => {
+      const next = !prev;
+      try { localStorage.setItem("mapOverlayEnabled", String(next)); } catch {}
+
+      if (next && activeFile && !isEncrypted && seiFrames.length === 0) {
+        loadTelemetry(activeFile);
+      } else if (!next && !hudEnabled) {
+        abortSei();
+        setSeiFrames([]);
+        setCurrentSei(null);
+        setSeiLoading(false);
+      }
+
+      return next;
+    });
+  }, [activeFile, isEncrypted, loadTelemetry, abortSei, hudEnabled, seiFrames.length]);
 
   // Switch camera — no-op in composed mode
   const switchCamera = useCallback((cam: CameraName) => {
@@ -451,6 +476,13 @@ export default function DashcamPlayer({
               );
             })}
           </div>
+
+          {/* Map overlay — bottom-right of composed grid */}
+          {mapEnabled && seiFrames.length > 0 && (
+            <div className="absolute bottom-3 right-3 z-20 pointer-events-none">
+              <MapOverlay seiFrames={seiFrames} currentSei={currentSei} />
+            </div>
+          )}
         </div>
       ) : (
         // ── Single camera view ──
@@ -480,6 +512,13 @@ export default function DashcamPlayer({
 
           {/* Tesla HUD Overlay */}
           <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} />
+
+          {/* Map overlay — bottom-right */}
+          {mapEnabled && seiFrames.length > 0 && (
+            <div className="absolute bottom-3 right-3 z-20 pointer-events-none">
+              <MapOverlay seiFrames={seiFrames} currentSei={currentSei} />
+            </div>
+          )}
 
           {/* Telemetry loading overlay */}
           {seiLoading && (
@@ -620,6 +659,21 @@ export default function DashcamPlayer({
                 <rect x="2"  y="13" width="6" height="9" rx="1" />
                 <rect x="9"  y="13" width="6" height="9" rx="1" />
                 <rect x="16" y="13" width="6" height="9" rx="1" />
+              </svg>
+            </button>
+
+            {/* Map toggle */}
+            <button
+              onClick={toggleMap}
+              className={`rounded p-1.5 transition-colors ${
+                mapEnabled ? "text-[var(--color-accent)]" : "text-zinc-400 hover:text-white"
+              }`}
+              aria-label="Toggle map overlay"
+              title="Map"
+            >
+              <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 10.5a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
               </svg>
             </button>
 
