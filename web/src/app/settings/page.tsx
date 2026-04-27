@@ -82,7 +82,6 @@ export default function SettingsPage() {
   const [webhookURL, setWebhookURL] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
 
-<<<<<<< HEAD
   // Network — AP basic
   const [apStatus, setApStatus] = useState<APStatus | null>(null);
   const [apSSID, setApSSID] = useState("");
@@ -683,7 +682,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-<<<<<<< HEAD
       {/* ── Access Point ───────────────────────── */}
       <div className={cardCls}>
         <SectionHeader
