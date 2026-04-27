@@ -8,6 +8,7 @@ import { useSpeedUnit, mpsToUnit } from "@/lib/useSpeedUnit";
 interface ArgusHUDProps {
   sei: SeiMetadata | null;
   visible: boolean;
+  scale?: number;
 }
 
 const GEAR_LABELS: Record<GearState, string> = {
@@ -24,7 +25,7 @@ const AP_LABELS: Record<AutopilotState, string> = {
   [AutopilotState.TACC]: "Traffic-Aware Cruise",
 };
 
-function ArgusHUD({ sei, visible }: ArgusHUDProps) {
+function ArgusHUD({ sei, visible, scale = 1 }: ArgusHUDProps) {
   const [speedUnit] = useSpeedUnit();
 
   if (!visible) return null;
@@ -44,7 +45,10 @@ function ArgusHUD({ sei, visible }: ArgusHUDProps) {
   const apLabel = AP_LABELS[apState] ?? "";
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
+    <div
+      className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center"
+      style={{ transformOrigin: "top center", transform: `scale(${scale})` }}
+    >
       <div
         className="border border-white/[0.14] shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
         style={{
