@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import type React from "react";
 import * as api from "@/lib/api";
-import type { ConfigResponse } from "@/lib/types";
+import type { ConfigResponse, APStatus, WifiStatus, WifiNetwork, TelegramStatus, SambaStatus } from "@/lib/types";
 import { useSpeedUnit } from "@/lib/useSpeedUnit";
 import type { SpeedUnit } from "@/lib/useSpeedUnit";
 
@@ -82,6 +82,30 @@ export default function SettingsPage() {
   const [webhookURL, setWebhookURL] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
 
+  // Network — AP basic
+  const [apStatus, setApStatus] = useState<APStatus | null>(null);
+  const [apSSID, setApSSID] = useState("");
+  const [apPass, setApPass] = useState("");
+
+  // Network — WiFi client
+  const [wifiStatus, setWifiStatus] = useState<WifiStatus | null>(null);
+  const [wifiNetworks, setWifiNetworks] = useState<WifiNetwork[]>([]);
+  const [wifiSSID, setWifiSSID] = useState("");
+  const [wifiPass, setWifiPass] = useState("");
+  const [scanning, setScanning] = useState(false);
+
+  // Notifications — Telegram
+  const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
+  const [tgBotToken, setTgBotToken] = useState("");
+  const [tgChatID, setTgChatID] = useState("");
+  const [tgOffline, setTgOffline] = useState("queue");
+  const [tgQuality, setTgQuality] = useState("hd");
+
+  // File sharing — Samba
+  const [sambaStatus, setSambaStatus] = useState<SambaStatus | null>(null);
+  const [sambaPass, setSambaPass] = useState("");
+  const [sambaPassConfirm, setSambaPassConfirm] = useState("");
+
   // Display preferences (localStorage only)
   const [speedUnit, setSpeedUnit] = useSpeedUnit();
 
@@ -103,9 +127,26 @@ export default function SettingsPage() {
       const data = await api.getWebhookStatus();
       setWebhookEnabled(data.enabled);
       setWebhookURL(data.url);
-    } catch {
-      // non-fatal: webhook section will show defaults
+    } catch {}
+  }, []);
+
+  const loadNetwork = useCallback(async () => {
+    const [ap, wifi, tg, smb] = await Promise.allSettled([
+      api.getAPStatus(),
+      api.getWifiStatus(),
+      api.getTelegramStatus(),
+      api.getSambaStatus(),
+    ]);
+    if (ap.status === "fulfilled") {
+      setApStatus(ap.value);
+      setApSSID(ap.value.ssid || "");
     }
+    if (wifi.status === "fulfilled") {
+      setWifiStatus(wifi.value);
+      if (wifi.value.connection?.ssid) setWifiSSID(wifi.value.connection.ssid);
+    }
+    if (tg.status === "fulfilled") setTelegramStatus(tg.value);
+    if (smb.status === "fulfilled") setSambaStatus(smb.value);
   }, []);
 
   const loadConfig = useCallback(async () => {
@@ -158,10 +199,103 @@ export default function SettingsPage() {
     }
   }, [webhookEnabled, webhookURL, webhookSecret, showToast, loadWebhook]);
 
+  const saveAP = useCallback(async () => {
+    setSaving("ap-basic");
+    try {
+      await api.configureAP({ ssid: apSSID, passphrase: apPass });
+      setApPass("");
+      showToast("Access point configuration saved");
+      const data = await api.getAPStatus();
+      setApStatus(data);
+      setApSSID(data.ssid || "");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    } finally {
+      setSaving(null);
+    }
+  }, [apSSID, apPass, showToast]);
+
+  const forceAP = useCallback(async (mode: "auto" | "on" | "off") => {
+    try {
+      await api.forceAP(mode);
+      showToast(`AP mode: ${mode}`);
+      setApStatus(await api.getAPStatus());
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    }
+  }, [showToast]);
+
+  const connectWifi = useCallback(async () => {
+    setSaving("wifi");
+    try {
+      await api.configureWifi(wifiSSID, wifiPass);
+      setWifiPass("");
+      showToast("WiFi configuration saved");
+      setWifiStatus(await api.getWifiStatus());
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    } finally {
+      setSaving(null);
+    }
+  }, [wifiSSID, wifiPass, showToast]);
+
+  const scanWifi = useCallback(async () => {
+    setScanning(true);
+    try {
+      const res = await api.scanWifi();
+      setWifiNetworks(res.networks || []);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Scan failed", false);
+    } finally {
+      setScanning(false);
+    }
+  }, [showToast]);
+
+  const saveTelegram = useCallback(async () => {
+    setSaving("telegram");
+    try {
+      await api.configureTelegram(tgBotToken, tgChatID, tgOffline, tgQuality);
+      setTgBotToken("");
+      showToast("Telegram configuration saved");
+      setTelegramStatus(await api.getTelegramStatus());
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    } finally {
+      setSaving(null);
+    }
+  }, [tgBotToken, tgChatID, tgOffline, tgQuality, showToast]);
+
+  const testTelegram = useCallback(async () => {
+    try {
+      await api.testTelegram();
+      showToast("Test message sent");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Test failed", false);
+    }
+  }, [showToast]);
+
+  const saveSambaPassword = useCallback(async () => {
+    if (!sambaPass) { showToast("Password is required", false); return; }
+    if (sambaPass !== sambaPassConfirm) { showToast("Passwords do not match", false); return; }
+    setSaving("samba");
+    try {
+      await api.setSambaPassword(sambaPass);
+      setSambaPass("");
+      setSambaPassConfirm("");
+      showToast("Samba password updated");
+      setSambaStatus(await api.getSambaStatus());
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    } finally {
+      setSaving(null);
+    }
+  }, [sambaPass, sambaPassConfirm, showToast]);
+
   useEffect(() => {
     loadConfig();
     loadWebhook();
-  }, [loadConfig, loadWebhook]);
+    loadNetwork();
+  }, [loadConfig, loadWebhook, loadNetwork]);
 
   const saveSection = useCallback(
     async (section: string, patch: Parameters<typeof api.patchConfig>[0]) => {
@@ -544,6 +678,214 @@ export default function SettingsPage() {
             }
           >
             {saving === "ap" ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Access Point ───────────────────────── */}
+      <div className={cardCls}>
+        <SectionHeader
+          title="Access Point"
+          description="Configure the Pi's WiFi hotspot and force mode."
+        />
+        {apStatus && (
+          <div className="mb-4 flex flex-wrap gap-2 text-xs text-[var(--color-text-muted)]">
+            <span className={`rounded px-2 py-0.5 font-semibold ${apStatus.active ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"}`}>
+              {apStatus.active ? "Active" : "Inactive"}
+            </span>
+            {apStatus.active && apStatus.client_count > 0 && (
+              <span>{apStatus.client_count} client{apStatus.client_count !== 1 ? "s" : ""} connected</span>
+            )}
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className={fieldLabel} htmlFor="ap-ssid">SSID</label>
+            <input id="ap-ssid" type="text" className={inputCls} value={apSSID} onChange={(e) => setApSSID(e.target.value)} />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="ap-pass">Passphrase</label>
+            <input id="ap-pass" type="password" className={inputCls} value={apPass} onChange={(e) => setApPass(e.target.value)} placeholder="Leave blank to keep current" />
+          </div>
+        </div>
+        <div className="mt-5 flex flex-wrap gap-2">
+          <button className={btnPrimaryCls} disabled={saving === "ap-basic"} onClick={saveAP}>
+            {saving === "ap-basic" ? "Saving…" : "Save"}
+          </button>
+          {(["on", "off", "auto"] as const).map((m) => (
+            <button key={m} className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold capitalize text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]" onClick={() => forceAP(m)}>
+              Force {m}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── WiFi Client ─────────────────────────── */}
+      <div className={cardCls}>
+        <SectionHeader
+          title="WiFi Client"
+          description="Connect the Pi to an existing WiFi network."
+        />
+        {wifiStatus?.connection?.connected && (
+          <p className="mb-4 text-sm text-[var(--color-success)]">
+            Connected to <strong>{wifiStatus.connection.ssid}</strong>
+            {wifiStatus.connection.ip ? ` · ${wifiStatus.connection.ip}` : ""}
+          </p>
+        )}
+        <div className="mb-4">
+          <button className={btnPrimaryCls} disabled={scanning} onClick={scanWifi}>
+            {scanning ? "Scanning…" : "Scan Networks"}
+          </button>
+        </div>
+        {wifiNetworks.length > 0 && (
+          <div className="mb-4 max-h-40 overflow-y-auto rounded border border-[var(--color-border)]">
+            {wifiNetworks.map((n) => (
+              <button
+                key={n.ssid}
+                onClick={() => setWifiSSID(n.ssid)}
+                className={`flex w-full items-center justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--color-bg-tertiary)] ${wifiSSID === n.ssid ? "bg-[var(--color-bg-tertiary)]" : ""}`}
+              >
+                <span className="font-medium text-[var(--color-text-primary)]">{n.ssid}</span>
+                <span className="flex items-center gap-3 text-xs text-[var(--color-text-muted)]">
+                  <span>{n.security}</span>
+                  <span className="tabular-nums">{n.signal}%</span>
+                  {n.in_use && <span className="rounded bg-[var(--color-success-bg)] px-1.5 py-0.5 text-[var(--color-success)]">Connected</span>}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className={fieldLabel} htmlFor="wifi-ssid">SSID</label>
+            <input id="wifi-ssid" type="text" className={inputCls} value={wifiSSID} onChange={(e) => setWifiSSID(e.target.value)} />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="wifi-pass">Password</label>
+            <input id="wifi-pass" type="password" className={inputCls} value={wifiPass} onChange={(e) => setWifiPass(e.target.value)} />
+          </div>
+        </div>
+        <div className="mt-5">
+          <button className={btnPrimaryCls} disabled={saving === "wifi"} onClick={connectWifi}>
+            {saving === "wifi" ? "Connecting…" : "Connect"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Telegram Alerts ─────────────────────── */}
+      <div className={cardCls}>
+        <div className="mb-6 flex items-center justify-between border-b border-[var(--color-border)] pb-3">
+          <div>
+            <h2 className="text-lg font-bold text-[var(--color-text-primary)]">Telegram Alerts</h2>
+            <p className="mt-1 text-sm text-[var(--color-text-muted)]">Send sentry event clips via Telegram bot.</p>
+          </div>
+          {telegramStatus?.bot_configured && (
+            <span className={`inline-flex items-center gap-1 rounded px-2.5 py-0.5 text-xs font-semibold ${telegramStatus.online ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"}`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${telegramStatus.online ? "bg-[var(--color-success)]" : "bg-[var(--color-text-muted)]"}`} />
+              {telegramStatus.online ? "Online" : "Offline"}
+            </span>
+          )}
+        </div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className={fieldLabel} htmlFor="tg-token">Bot Token</label>
+            <input id="tg-token" type="password" className={inputCls} value={tgBotToken} onChange={(e) => setTgBotToken(e.target.value)} placeholder="123456:ABC-DEF…" />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="tg-chat">Chat ID</label>
+            <input id="tg-chat" type="text" className={inputCls} value={tgChatID} onChange={(e) => setTgChatID(e.target.value)} placeholder="-1001234567890" />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="tg-offline">Offline Mode</label>
+            <select id="tg-offline" className={inputCls} value={tgOffline} onChange={(e) => setTgOffline(e.target.value)}>
+              <option value="queue">Queue (send when online)</option>
+              <option value="discard">Discard</option>
+            </select>
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="tg-quality">Video Quality</label>
+            <select id="tg-quality" className={inputCls} value={tgQuality} onChange={(e) => setTgQuality(e.target.value)}>
+              <option value="hd">HD</option>
+              <option value="sd">SD</option>
+              <option value="thumbnail">Thumbnail only</option>
+            </select>
+          </div>
+        </div>
+        {telegramStatus?.queue_size != null && telegramStatus.queue_size > 0 && (
+          <p className="mt-3 text-xs text-[var(--color-text-muted)]">
+            {telegramStatus.queue_size} event{telegramStatus.queue_size !== 1 ? "s" : ""} queued
+          </p>
+        )}
+        <div className="mt-5 flex gap-2">
+          <button className={btnPrimaryCls} disabled={saving === "telegram"} onClick={saveTelegram}>
+            {saving === "telegram" ? "Saving…" : "Save"}
+          </button>
+          <button
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-5 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)] disabled:opacity-50"
+            disabled={!telegramStatus?.bot_configured}
+            onClick={testTelegram}
+          >
+            Send Test
+          </button>
+        </div>
+      </div>
+
+      {/* ── Samba File Sharing ──────────────────── */}
+      <div className={cardCls}>
+        <div className="mb-6 flex items-center justify-between border-b border-[var(--color-border)] pb-3">
+          <div>
+            <h2 className="text-lg font-bold text-[var(--color-text-primary)]">Samba File Sharing</h2>
+            <p className="mt-1 text-sm text-[var(--color-text-muted)]">Access partitions over the network in edit mode.</p>
+          </div>
+          {sambaStatus?.password_set && (
+            <span className="inline-flex items-center gap-1 rounded bg-[var(--color-success-bg)] px-2.5 py-0.5 text-xs font-semibold text-[var(--color-success)]">
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success)]" />
+              Configured
+            </span>
+          )}
+        </div>
+        {sambaStatus && sambaStatus.shares.length > 0 && (
+          <div className="mb-4 overflow-hidden rounded border border-[var(--color-border)]">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-[var(--color-bg-tertiary)]">
+                  <th className="px-3 py-2 text-left font-medium text-[var(--color-text-secondary)]">Share</th>
+                  <th className="px-3 py-2 text-left font-medium text-[var(--color-text-secondary)]">Path</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--color-border-light)]">
+                {sambaStatus.shares.map((s) => (
+                  <tr key={s.name}>
+                    <td className="px-3 py-2">
+                      <span className="font-medium text-[var(--color-text-primary)]">{s.label}</span>
+                      <span className="ml-2 font-mono text-xs text-[var(--color-text-muted)]">\\{s.name}</span>
+                    </td>
+                    <td className="px-3 py-2 font-mono text-xs text-[var(--color-text-muted)]">{s.path}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className={fieldLabel} htmlFor="smb-pass">New Password</label>
+            <input id="smb-pass" type="password" className={inputCls} value={sambaPass} onChange={(e) => setSambaPass(e.target.value)} placeholder="Enter new Samba password" />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="smb-confirm">Confirm Password</label>
+            <input id="smb-confirm" type="password" className={inputCls} value={sambaPassConfirm} onChange={(e) => setSambaPassConfirm(e.target.value)} placeholder="Confirm password" />
+          </div>
+        </div>
+        <div className="mt-5 flex flex-wrap gap-2">
+          <button className={btnPrimaryCls} disabled={saving === "samba"} onClick={saveSambaPassword}>
+            {saving === "samba" ? "Saving…" : "Set Password"}
+          </button>
+          <button className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]" onClick={async () => { await api.restartSamba(); showToast("Samba services restarted"); }}>
+            Restart Services
+          </button>
+          <button className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]" onClick={async () => { await api.regenerateSambaConfig(); showToast("Samba config regenerated"); }}>
+            Regenerate Config
           </button>
         </div>
       </div>
