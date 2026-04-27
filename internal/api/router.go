@@ -210,6 +210,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	// Samba
 	api.HandleFunc("/samba/status", sambaH.Status).Methods("GET")
 	api.HandleFunc("/samba/set-password", sambaH.SetPassword).Methods("POST")
+	api.HandleFunc("/samba/set-enabled", sambaH.SetEnabled).Methods("POST")
 	api.HandleFunc("/samba/restart", sambaH.Restart).Methods("POST")
 	api.HandleFunc("/samba/regenerate", sambaH.Regenerate).Methods("POST")
 

@@ -443,6 +443,7 @@ export interface SambaStatus {
   user: string;
   config_path: string;
   password_set: boolean;
+  enabled: boolean;
   shares: SambaShare[];
 }
 
@@ -506,6 +507,10 @@ export interface StartupConfigPublic {
   reapply_sysctl_on_start: boolean;
 }
 
+export interface ViewerPrefsConfigPublic {
+  speed_unit: "kph" | "mph";
+}
+
 export interface StorageInfo {
   cam_name: string;
   cam_label: string;
@@ -528,6 +533,7 @@ export interface ConfigResponse {
   telegram: TelegramConfigPublic;
   update: UpdateConfigPublic;
   startup: StartupConfigPublic;
+  viewer_prefs: ViewerPrefsConfigPublic;
   log_level: string;
   storage: StorageInfo;
 }

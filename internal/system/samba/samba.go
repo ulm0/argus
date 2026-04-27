@@ -43,6 +43,29 @@ func (m *Manager) RestartSambaServices() error {
 	return nil
 }
 
+// EnableServices enables and starts smbd/nmbd via systemd.
+func (m *Manager) EnableServices() error {
+	for _, svc := range []string{"smbd", "nmbd"} {
+		if err := exec.Command("sudo", "-n", "systemctl", "enable", "--now", svc).Run(); err != nil {
+			return fmt.Errorf("enable %s: %w", svc, err)
+		}
+	}
+	return nil
+}
+
+// DisableServices stops smbd/nmbd and removes their auto-start links.
+// Best-effort across both units; the first encountered error is returned
+// after attempting both so a missing unit doesn't block the other.
+func (m *Manager) DisableServices() error {
+	var firstErr error
+	for _, svc := range []string{"smbd", "nmbd"} {
+		if err := exec.Command("sudo", "-n", "systemctl", "disable", "--now", svc).Run(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("disable %s: %w", svc, err)
+		}
+	}
+	return firstErr
+}
+
 // GenerateConfig writes a Samba configuration file with the USB partition shares.
 func (m *Manager) GenerateConfig() error {
 	const smbTmpl = `[global]

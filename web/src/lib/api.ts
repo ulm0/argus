@@ -35,6 +35,7 @@ import type {
   TelegramStatus,
   UpdateStatus,
   UpdateConfigPublic,
+  ViewerPrefsConfigPublic,
   VideoEvent,
   VideoEventsResponse,
   VideoListResponse,
@@ -531,6 +532,10 @@ export function setSambaPassword(password: string): Promise<StatusResponse> {
   return post<StatusResponse>("/api/samba/set-password", { password });
 }
 
+export function setSambaEnabled(enabled: boolean): Promise<{ enabled: boolean }> {
+  return post<{ enabled: boolean }>("/api/samba/set-enabled", { enabled });
+}
+
 export function restartSamba(): Promise<StatusResponse> {
   return post<StatusResponse>("/api/samba/restart");
 }
@@ -556,6 +561,7 @@ type ConfigPatch = {
   telegram?: Partial<TelegramConfigPublic>;
   update?: Partial<UpdateConfigPublic>;
   startup?: Partial<StartupConfigPublic>;
+  viewer_prefs?: Partial<ViewerPrefsConfigPublic>;
   log_level?: string;
 };
 

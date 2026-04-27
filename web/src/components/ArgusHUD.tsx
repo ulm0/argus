@@ -1,6 +1,7 @@
 "use client";
 
 import { memo } from "react";
+import { PiArrowFatLeftLight, PiArrowFatRightLight } from "react-icons/pi";
 import { AutopilotState, GearState } from "@/lib/sei-parser";
 import type { SeiMetadata } from "@/lib/sei-parser";
 import { useSpeedUnit, mpsToUnit } from "@/lib/useSpeedUnit";
@@ -37,7 +38,12 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
   const leftBlinker = sei?.blinkerOnLeft ?? false;
   const rightBlinker = sei?.blinkerOnRight ?? false;
   const brakeOn = sei?.brakeApplied ?? false;
-  const throttleOn = (sei?.acceleratorPedalPosition ?? 0) > 0.02;
+  // acceleratorPedalPosition can come as 0..1 (fraction) or 0..100 (percent)
+  const rawThrottle = sei?.acceleratorPedalPosition ?? 0;
+  const throttlePct = Math.max(
+    0,
+    Math.min(100, rawThrottle <= 1.2 ? rawThrottle * 100 : rawThrottle),
+  );
   const apState = sei?.autopilotState ?? AutopilotState.NONE;
   const apLabel = AP_LABELS[apState] || "";
 
@@ -51,9 +57,9 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
       <div
         className="border border-white/[0.10] shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
         style={{
-          width: "230px",
-          padding: "6px 10px 8px",
-          borderRadius: "14px",
+          width: "320px",
+          padding: "10px 14px 12px",
+          borderRadius: "18px",
           backdropFilter: "blur(14px)",
           background: "rgba(22, 26, 30, 0.78)",
         }}
@@ -62,13 +68,13 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
         <div
           className="grid items-center"
           style={{
-            gridTemplateColumns: "20px 14px 1fr 14px 20px",
-            columnGap: "6px",
+            gridTemplateColumns: "32px 22px 1fr 22px 32px",
+            columnGap: "8px",
           }}
         >
           {/* Gear pill */}
           <div
-            className="flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold text-white"
+            className="flex h-7 w-7 items-center justify-center rounded-full text-[12px] font-bold text-white"
             style={{ background: "rgba(45, 101, 255, 0.85)" }}
           >
             {gear}
@@ -80,12 +86,12 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
           {/* Speed */}
           <div className="flex flex-col items-center leading-none">
             <span
-              className="text-[26px] font-bold text-white/95"
-              style={{ fontVariantNumeric: "tabular-nums" }}
+              className="text-[36px] font-bold text-white/95"
+              style={{ fontVariantNumeric: "tabular-nums", lineHeight: "1" }}
             >
               {speed}
             </span>
-            <span className="mt-0.5 text-[10px] font-semibold tracking-wider text-white/70">
+            <span className="mt-1 text-[11px] font-semibold tracking-wider text-white/70">
               {speedUnit.toUpperCase()}
             </span>
           </div>
@@ -95,11 +101,11 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
 
           {/* Steering wheel */}
           <div
-            className="flex h-5 w-5 items-center justify-center rounded-full text-white/70"
+            className="flex h-7 w-7 items-center justify-center rounded-full text-white/75"
             style={{ background: "rgba(255,255,255,0.06)" }}
           >
             <svg
-              className="h-3.5 w-3.5"
+              className="h-4 w-4"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -118,29 +124,27 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
           </div>
         </div>
 
-        {/* Row 2: brake icon + autopilot label + info icon */}
+        {/* Row 2: brake pedal + autopilot label + throttle pedal */}
         <div
           className="mt-1 grid items-center"
-          style={{ gridTemplateColumns: "20px 1fr 20px", columnGap: "6px" }}
+          style={{ gridTemplateColumns: "32px 1fr 32px", columnGap: "8px" }}
         >
+          <PedalIndicator
+            kind="brake"
+            fillPct={brakeOn ? 100 : 0}
+            color="rgba(255, 90, 90, 0.85)"
+          />
           <div
-            className="flex h-4 w-4 items-center justify-center"
-            style={{ color: brakeOn ? "#ff5a5a" : "rgba(255,255,255,0.4)" }}
-          >
-            <BrakeIcon />
-          </div>
-          <div
-            className="truncate text-center text-[11px] font-semibold leading-tight"
+            className="truncate text-center text-[12px] font-semibold leading-tight"
             style={{ color: "#1f6dff" }}
           >
             {apLabel}
           </div>
-          <div
-            className="flex h-4 w-4 items-center justify-center"
-            style={{ color: throttleOn ? "#25c05a" : "rgba(255,255,255,0.4)" }}
-          >
-            <ThrottleIcon />
-          </div>
+          <PedalIndicator
+            kind="throttle"
+            fillPct={throttlePct}
+            color="rgba(120, 220, 120, 0.85)"
+          />
         </div>
       </div>
     </div>
@@ -150,48 +154,76 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
 export default memo(ArgusHUD);
 
 function ArrowBlinker({ side, active }: { side: "left" | "right"; active: boolean }) {
+  const Icon = side === "left" ? PiArrowFatLeftLight : PiArrowFatRightLight;
   return (
     <span
       className={active ? "text-[#25c05a]" : "text-white/30"}
-      style={{ transition: "color 0.1s ease-out", display: "inline-flex", justifyContent: "center" }}
+      style={{
+        transition: "color 0.1s ease-out",
+        display: "inline-flex",
+        justifyContent: "center",
+      }}
     >
-      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-        {side === "left" ? <path d="M15 6l-7 6 7 6V6z" /> : <path d="M9 6l7 6-7 6V6z" />}
-      </svg>
+      <Icon size={22} />
     </span>
   );
 }
 
-function BrakeIcon() {
-  return (
-    <svg
-      className="h-4 w-4"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.6}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="4" y="13" width="16" height="8" rx="2.5" />
-      <rect x="9" y="3" width="6" height="10" rx="1.5" />
-    </svg>
-  );
-}
+function PedalIndicator({
+  kind,
+  fillPct,
+  color,
+}: {
+  kind: "brake" | "throttle";
+  fillPct: number;
+  color: string;
+}) {
+  const clamped = Math.min(100, Math.max(0, fillPct));
 
-function ThrottleIcon() {
   return (
-    <svg
-      className="h-4 w-4"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.6}
-      strokeLinecap="round"
-      strokeLinejoin="round"
+    <div
+      className="relative flex h-7 w-7 items-center justify-center rounded-full"
+      style={{
+        background: "rgba(255,255,255,0.05)",
+        border: "1px solid rgba(255,255,255,0.10)",
+      }}
     >
-      <rect x="10" y="3" width="4" height="6" rx="1.5" />
-      <path d="M14 9 L14 14 Q14 16 16 16 L16 21 Q16 21 14 21 L10 21 Q8 21 8 19 L8 16" />
-    </svg>
+      {/* Proportional fill from bottom */}
+      <div
+        className="absolute inset-0 overflow-hidden rounded-full"
+        aria-hidden="true"
+      >
+        <div
+          className="absolute inset-x-0 bottom-0"
+          style={{
+            height: `${clamped}%`,
+            background: color,
+            transition: "height 0.1s ease-out",
+          }}
+        />
+      </div>
+      {/* Pedal icon */}
+      <svg
+        className="relative z-10 h-4 w-4"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="rgba(230, 230, 230, 0.92)"
+        strokeWidth={1.6}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {kind === "brake" ? (
+          <>
+            <rect x="4" y="13" width="16" height="8" rx="2.5" />
+            <rect x="9" y="3" width="6" height="10" rx="1.5" />
+          </>
+        ) : (
+          <>
+            <rect x="10" y="3" width="4" height="6" rx="1.5" />
+            <path d="M14 9 L14 14 Q14 16 16 16 L16 21 Q16 21 14 21 L10 21 Q8 21 8 19 L8 16" />
+          </>
+        )}
+      </svg>
+    </div>
   );
 }

@@ -25,13 +25,14 @@ func NewConfigHandler(cfg *config.Config) *ConfigHandler {
 // explicit in the API contract.
 type configResponse struct {
 	// Editable fields
-	Network   networkConfigPublic  `json:"network"`
-	OfflineAP offlineAPPublic      `json:"offline_ap"`
-	Web       webConfigPublic      `json:"web"`
-	Telegram  telegramConfigPublic `json:"telegram"`
-	Update    updateConfigPublic   `json:"update"`
-	Startup   startupConfigPublic  `json:"startup"`
-	LogLevel  string               `json:"log_level"`
+	Network     networkConfigPublic     `json:"network"`
+	OfflineAP   offlineAPPublic         `json:"offline_ap"`
+	Web         webConfigPublic         `json:"web"`
+	Telegram    telegramConfigPublic    `json:"telegram"`
+	Update      updateConfigPublic      `json:"update"`
+	Startup     startupConfigPublic     `json:"startup"`
+	ViewerPrefs viewerPrefsConfigPublic `json:"viewer_prefs"`
+	LogLevel    string                  `json:"log_level"`
 
 	// Read-only info (not patchable)
 	Storage storageInfo `json:"storage"`
@@ -82,6 +83,10 @@ type updateConfigPublic struct {
 	AutoUpdate     bool   `json:"auto_update"`
 	CheckOnStartup bool   `json:"check_on_startup"`
 	Channel        string `json:"channel"`
+}
+
+type viewerPrefsConfigPublic struct {
+	SpeedUnit string `json:"speed_unit"`
 }
 
 type startupConfigPublic struct {
@@ -166,6 +171,9 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 			WatchdogTimeoutSec:     cfg.System.WatchdogTimeoutSec,
 			ReapplySysctlOnStart:   cfg.System.ReapplySysctlOnStart,
 		},
+		ViewerPrefs: viewerPrefsConfigPublic{
+			SpeedUnit: cfg.ViewerPrefs.SpeedUnit,
+		},
 		LogLevel: cfg.LogLevel,
 		Storage: storageInfo{
 			CamName:          cfg.DiskImages.CamName,
@@ -187,13 +195,14 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // patchRequest contains only the fields that are allowed to be updated.
 type patchRequest struct {
-	Network   *networkPatch   `json:"network,omitempty"`
-	OfflineAP *offlineAPPatch `json:"offline_ap,omitempty"`
-	Web       *webPatch       `json:"web,omitempty"`
-	Telegram  *telegramPatch  `json:"telegram,omitempty"`
-	Update    *updatePatch    `json:"update,omitempty"`
-	Startup   *startupPatch   `json:"startup,omitempty"`
-	LogLevel  *string         `json:"log_level,omitempty"`
+	Network     *networkPatch     `json:"network,omitempty"`
+	OfflineAP   *offlineAPPatch   `json:"offline_ap,omitempty"`
+	Web         *webPatch         `json:"web,omitempty"`
+	Telegram    *telegramPatch    `json:"telegram,omitempty"`
+	Update      *updatePatch      `json:"update,omitempty"`
+	Startup     *startupPatch     `json:"startup,omitempty"`
+	ViewerPrefs *viewerPrefsPatch `json:"viewer_prefs,omitempty"`
+	LogLevel    *string           `json:"log_level,omitempty"`
 }
 
 type networkPatch struct {
@@ -241,6 +250,10 @@ type updatePatch struct {
 	AutoUpdate     *bool   `json:"auto_update,omitempty"`
 	CheckOnStartup *bool   `json:"check_on_startup,omitempty"`
 	Channel        *string `json:"channel,omitempty"`
+}
+
+type viewerPrefsPatch struct {
+	SpeedUnit *string `json:"speed_unit,omitempty"`
 }
 
 type startupPatch struct {
@@ -403,6 +416,17 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			cfg.System.WatchdogTimeoutSec = *p.WatchdogTimeoutSec
+		}
+	}
+
+	if p := req.ViewerPrefs; p != nil {
+		if p.SpeedUnit != nil {
+			unit := strings.TrimSpace(strings.ToLower(*p.SpeedUnit))
+			if unit != "kph" && unit != "mph" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid speed_unit (must be 'kph' or 'mph')"})
+				return
+			}
+			cfg.ViewerPrefs.SpeedUnit = unit
 		}
 	}
 

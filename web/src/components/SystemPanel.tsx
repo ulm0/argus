@@ -246,9 +246,13 @@ export default function SystemPanel() {
             <span className="text-xs font-medium tracking-wider text-[var(--color-text-muted)]">
               Samba
             </span>
-            <StatusBadge active={!!samba?.password_set} activeLabel="Configured" inactiveLabel="Not Set" />
+            {samba && !samba.enabled ? (
+              <StatusBadge active={false} activeLabel="Disabled" inactiveLabel="Disabled" />
+            ) : (
+              <StatusBadge active={!!samba?.password_set} activeLabel="Configured" inactiveLabel="Not Set" />
+            )}
           </div>
-          {samba && (
+          {samba && samba.enabled && (
             <p className="mt-2 text-xs text-[var(--color-text-secondary)]">
               {samba.shares.length} share{samba.shares.length !== 1 ? "s" : ""}
             </p>

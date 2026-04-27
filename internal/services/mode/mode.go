@@ -184,9 +184,11 @@ func (s *Service) SwitchToEdit() error {
 		}
 	}
 
-	sm := samba.NewManager(s.cfg)
-	if err := sm.RestartSambaServices(); err != nil {
-		logger.L.WithError(err).Warn("restart Samba after edit mode")
+	if s.cfg.SambaEnabled() {
+		sm := samba.NewManager(s.cfg)
+		if err := sm.RestartSambaServices(); err != nil {
+			logger.L.WithError(err).Warn("restart Samba after edit mode")
+		}
 	}
 
 	return s.writeStateFile("edit")

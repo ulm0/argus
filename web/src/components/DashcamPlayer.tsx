@@ -21,6 +21,7 @@ interface DashcamPlayerProps {
   event: VideoEvent;
   streamUrlFn: (cameraFile: string) => string;
   telemetryUrlFn: (cameraFile: string) => string;
+  downloadZipUrl?: string;
   onDelete?: () => void;
 }
 
@@ -40,6 +41,7 @@ export default function DashcamPlayer({
   event,
   streamUrlFn,
   telemetryUrlFn,
+  downloadZipUrl,
   onDelete,
 }: DashcamPlayerProps) {
   const cameras = useMemo<CameraName[]>(
@@ -684,16 +686,32 @@ export default function DashcamPlayer({
           </div>
 
           <div className="flex items-center gap-1">
+            {/* Event ZIP download (all camera videos + metadata) */}
+            {downloadZipUrl && (
+              <a
+                href={downloadZipUrl}
+                className="rounded p-1.5 text-zinc-400 hover:text-white transition-colors"
+                aria-label="Download event ZIP"
+                title="Download event ZIP (all cameras + metadata)"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M9.75 11.625l2.25 2.25 2.25-2.25M12 13.875V6.75M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
+                </svg>
+              </a>
+            )}
+
             {/* CSV telemetry export */}
             {hudEnabled && seiFrames.length > 0 && (
               <button
                 onClick={() => downloadCsv(seiFrames, `${activeFile?.replace(/\.mp4$/i, "") ?? "telemetry"}.csv`)}
                 className="rounded p-1.5 text-zinc-400 hover:text-white transition-colors"
                 aria-label="Download telemetry CSV"
-                title="Download telemetry CSV"
+                title="Download telemetry CSV (parsed SEI data)"
               >
+                {/* Spreadsheet/table icon — distinct from the archive ZIP button */}
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                  <rect x="3" y="4" width="18" height="16" rx="2" />
+                  <path strokeLinecap="round" d="M3 9h18M3 14h18M9 4v16M15 4v16" />
                 </svg>
               </button>
             )}
