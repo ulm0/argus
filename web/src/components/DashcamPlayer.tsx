@@ -677,6 +677,7 @@ export default function DashcamPlayer({
               </svg>
             </button>
 
+
             {/* HUD Overlay toggle */}
             <button
               onClick={toggleHud}
