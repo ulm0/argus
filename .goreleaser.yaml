@@ -50,6 +50,15 @@ upx:
       - linux
     goarch:
       - arm64
+    compress: best
+    lzma: false
+    brute: true
+  - enabled: true
+    ids:
+      - argus
+    goos:
+      - linux
+    goarch:
       - arm
     goarm:
       - "6"

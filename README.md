@@ -1,6 +1,6 @@
 # Argus
 
-![GitHub Release](https://img.shields.io/github/v/release/ulm0/argus?sort=semver&display_name=tag&style=flat-square) ![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/ulm0/argus/release.yml?style=flat-square) [![License](https://img.shields.io/github/license/ulm0/argus?style=flat-square)](https://github.com/ulm0/argus/blob/main/LICENSE) ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/ulm0/argus/total?style=flat-square) 
+[![GitHub Release](https://img.shields.io/github/v/release/ulm0/argus?sort=semver&display_name=tag&style=flat-square)](https://github.com/ulm0/argus/releases/latest) [![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/ulm0/argus/release.yml?style=flat-square)](https://github.com/ulm0/argus/actions/workflows/release.yml) [![License](https://img.shields.io/github/license/ulm0/argus?style=flat-square)](https://github.com/ulm0/argus/blob/main/LICENSE) ![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/ulm0/argus/total?style=flat-square) 
 
 Argus is an edge-optimized Tesla Dashcam and Sentry Mode manager implemented as a **single Go binary** with an embedded web UI. It is designed for unattended, in-car operation with low CPU and RAM footprint.
 
