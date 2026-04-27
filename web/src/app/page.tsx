@@ -196,25 +196,6 @@ export default function HomePage() {
         )}
       </div>
 
-      {/* Recording capacity */}
-      {analytics?.recording_estimate && Object.keys(analytics.recording_estimate).length > 0 && (
-        <div className={cardCls}>
-          <h2 className="mb-4 text-sm font-semibold text-[var(--color-text-primary)]">
-            Recording Capacity
-          </h2>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {Object.entries(analytics.recording_estimate).map(([label, hours]) => (
-              <div key={label} className="rounded bg-[var(--color-bg-tertiary)] p-3 text-center">
-                <p className="text-xl font-bold tabular-nums text-[var(--color-text-primary)]">
-                  {Math.round(hours as number)}h
-                </p>
-                <p className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">{label}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Health alerts */}
       {health?.alerts && health.alerts.length > 0 && (
         <div className={`${cardCls} border-l-2 border-[var(--color-warning)]`}>
