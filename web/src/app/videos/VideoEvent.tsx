@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import * as api from "@/lib/api";
-import type { AppStatus, VideoEvent } from "@/lib/types";
+import type { AppStatus, VideoEvent, VideoEventsResponse } from "@/lib/types";
 import DashcamPlayer from "@/components/DashcamPlayer";
 
 interface Props {
@@ -16,6 +16,7 @@ export default function VideoEventPage({ folder, event }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [deleted, setDeleted] = useState(false);
+  const [nextEventName, setNextEventName] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -27,6 +28,50 @@ export default function VideoEventPage({ folder, event }: Props) {
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load event"))
       .finally(() => setLoading(false));
+  }, [folder, event]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadNextEvent = async () => {
+      setNextEventName(null);
+
+      try {
+        let page = 0;
+        let foundCurrent = false;
+
+        while (!cancelled) {
+          const res = (await api.getVideos(folder, page)) as VideoEventsResponse;
+          const pageEvents = res.events ?? [];
+
+          if (foundCurrent) {
+            if (pageEvents.length > 0) {
+              if (!cancelled) setNextEventName(pageEvents[0].name);
+            }
+            return;
+          }
+
+          const currentIndex = pageEvents.findIndex((ev) => ev.name === event);
+          if (currentIndex >= 0) {
+            if (currentIndex + 1 < pageEvents.length) {
+              if (!cancelled) setNextEventName(pageEvents[currentIndex + 1].name);
+              return;
+            }
+            foundCurrent = true;
+          }
+
+          if (!res.has_next) return;
+          page += 1;
+        }
+      } catch {
+        // Leave nextEventName as null when lookup fails.
+      }
+    };
+
+    void loadNextEvent();
+    return () => {
+      cancelled = true;
+    };
   }, [folder, event]);
 
   const handleDelete = useCallback(async () => {
@@ -118,6 +163,21 @@ export default function VideoEventPage({ folder, event }: Props) {
           className="ml-auto rounded-sm border border-[var(--color-border)] px-3 py-1 text-xs font-medium text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-tertiary)] transition-colors"
         >
           Download ZIP
+        </a>
+        <a
+          href={
+            nextEventName
+              ? `/videos/${encodeURIComponent(folder)}/${encodeURIComponent(nextEventName)}`
+              : undefined
+          }
+          aria-disabled={!nextEventName}
+          className={`rounded-sm px-3 py-1 text-xs font-medium transition-colors ${
+            nextEventName
+              ? "bg-[var(--color-accent)] text-white hover:opacity-90"
+              : "cursor-not-allowed bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"
+          }`}
+        >
+          Next Event
         </a>
       </div>
 

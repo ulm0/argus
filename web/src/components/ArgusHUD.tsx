@@ -21,9 +21,9 @@ const GEAR_LABELS: Record<GearState, string> = {
 
 const AP_LABELS: Record<AutopilotState, string> = {
   [AutopilotState.NONE]: "",
-  [AutopilotState.SELF_DRIVING]: "Full Self-Driving",
+  [AutopilotState.SELF_DRIVING]: "Self Driving",
   [AutopilotState.AUTOSTEER]: "Autosteer",
-  [AutopilotState.TACC]: "Traffic-Aware Cruise",
+  [AutopilotState.TACC]: "Cruise",
 };
 
 function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
@@ -36,14 +36,8 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
   const wheelAngle = sei ? sei.steeringWheelAngle : 0;
   const leftBlinker = sei?.blinkerOnLeft ?? false;
   const rightBlinker = sei?.blinkerOnRight ?? false;
-  const brakeOn = sei?.brakeApplied ?? false;
-  const throttle = sei
-    ? Math.min(100, Math.max(0, sei.acceleratorPedalPosition <= 1.2
-        ? sei.acceleratorPedalPosition * 100
-        : sei.acceleratorPedalPosition))
-    : 0;
   const apState = sei?.autopilotState ?? AutopilotState.NONE;
-  const apLabel = AP_LABELS[apState] ?? "";
+  const apLabel = AP_LABELS[apState] ?? "—";
 
   return (
     <div
@@ -53,61 +47,62 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
       title={`HUD size: ${scale.toFixed(2)}x (scroll to resize)`}
     >
       <div
-        className="border border-white/[0.14] shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
+        className="border border-white/[0.14] shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
         style={{
-          padding: "6px 10px 8px",
-          borderRadius: "18px",
+          width: "260px",
+          minHeight: "108px",
+          padding: "10px 12px 8px",
+          borderRadius: "14px",
           backdropFilter: "blur(14px)",
-          background: "rgba(10, 10, 12, 0.38)",
+          background: "rgba(20, 22, 24, 0.72)",
         }}
       >
         <div
-          className="items-center"
+          className="grid items-center"
           style={{
-            display: "grid",
-            gridTemplateColumns: "auto 1fr 32px 3ch 32px 1fr auto",
-            gridTemplateRows: "auto auto",
+            gridTemplateColumns: "24px 1fr 24px",
+            gridTemplateRows: "20px auto 20px",
             gridTemplateAreas:
-              '"gear . left speed right . wheel" "brake . autopilot autopilot autopilot . throttle"',
-            columnGap: "8px",
-            rowGap: "8px",
+              '"leftTop topRow rightTop" "leftMid center rightMid" "leftBottom autopilot rightBottom"',
+            columnGap: "10px",
+            rowGap: "4px",
           }}
         >
-          {/* Gear */}
-          <div
-            style={{ gridArea: "gear" }}
-            className="rounded-md bg-white/10 px-3 py-1.5 text-xs font-extrabold text-white/95"
-          >
+          <div style={{ gridArea: "leftTop" }} className="flex h-5 w-5 items-center justify-center rounded-full bg-[#2d65ff]/25 text-[10px] font-bold text-[#6da1ff]">
             {gear}
           </div>
 
-          {/* Left blinker */}
-          <Blinker side="left" active={leftBlinker} />
-
-          {/* Speed */}
-          <div
-            style={{ gridArea: "speed", transform: "translateY(16px)" }}
-            className="flex flex-col items-center leading-none"
-          >
-            <span
-              className="text-[28px] font-extrabold text-white/95"
-              style={{ fontVariantNumeric: "tabular-nums" }}
-            >
-              {speed}
-            </span>
-            <span className="mt-1 text-xs text-white/80">{speedUnit.toUpperCase()}</span>
+          <div style={{ gridArea: "leftMid" }} className="flex items-center justify-center text-white/55">
+            <SmallDotIcon />
           </div>
 
-          {/* Right blinker */}
-          <Blinker side="right" active={rightBlinker} />
+          <div style={{ gridArea: "leftBottom" }} />
 
-          {/* Steering wheel */}
           <div
-            style={{ gridArea: "wheel", transform: "translateY(16px)" }}
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/[0.18] bg-black/30"
+            style={{ gridArea: "topRow" }}
+            className="flex items-center justify-center gap-6 pt-0.5"
+          >
+            <ArrowBlinker side="left" active={leftBlinker} />
+            <ArrowBlinker side="right" active={rightBlinker} />
+          </div>
+
+          <div style={{ gridArea: "center" }} className="flex flex-col items-center leading-none">
+            <span className="text-[42px] font-bold text-white/95" style={{ fontVariantNumeric: "tabular-nums" }}>
+              {speed}
+            </span>
+            <span className="mt-0.5 text-[11px] font-semibold tracking-wide text-white/75">{speedUnit.toUpperCase()}</span>
+          </div>
+
+          <div style={{ gridArea: "autopilot" }} className="truncate text-center text-[11px] font-semibold text-[#1f6dff]">
+            {apLabel}
+          </div>
+
+          <div
+            style={{ gridArea: "rightTop" }}
+            className="flex h-5 w-5 items-center justify-center text-white/55"
           >
             <svg
-              className="h-[26px] w-[26px] text-white/90"
+              className="h-4 w-4"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -125,32 +120,11 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
             </svg>
           </div>
 
-          {/* Brake pedal */}
-          <PedalIndicator
-            gridArea="brake"
-            fill={brakeOn ? 100 : 0}
-            color="rgba(255, 90, 90, 0.75)"
-            icon="brake"
-          />
+          <div style={{ gridArea: "rightMid" }} />
 
-          {/* Autopilot */}
-          <div
-            style={{ gridArea: "autopilot" }}
-            className="text-center text-[11px] font-semibold tracking-wide"
-          >
-            {apLabel
-              ? <span className="text-[#32c759]">{apLabel}</span>
-              : <span className="text-white/20">—</span>
-            }
+          <div style={{ gridArea: "rightBottom" }} className="flex h-5 w-5 items-center justify-center text-white/55">
+            <InfoIcon />
           </div>
-
-          {/* Throttle pedal */}
-          <PedalIndicator
-            gridArea="throttle"
-            fill={throttle}
-            color="rgba(120, 255, 120, 0.7)"
-            icon="throttle"
-          />
         </div>
       </div>
     </div>
@@ -159,24 +133,13 @@ function ArgusHUD({ sei, visible, scale = 1, onScaleWheel }: ArgusHUDProps) {
 
 export default memo(ArgusHUD);
 
-function Blinker({ side, active }: { side: "left" | "right"; active: boolean }) {
+function ArrowBlinker({ side, active }: { side: "left" | "right"; active: boolean }) {
   return (
     <div
-      style={{
-        gridArea: side,
-        transform: "translateY(16px)",
-      }}
-      className={`
-        grid h-6 w-8 place-items-center rounded-[10px] border text-sm
-        transition-all
-        ${active
-          ? "border-[rgba(120,255,120,0.45)] bg-[rgba(120,255,120,0.18)] opacity-100 animate-pulse"
-          : "border-white/[0.15] opacity-40"
-        }
-      `}
+      className={`flex items-center justify-center ${active ? "text-[#25c05a]" : "text-white/35"}`}
     >
       <svg
-        className="h-4 w-4 text-white/90"
+        className="h-4 w-4"
         viewBox="0 0 24 24"
         fill="currentColor"
       >
@@ -190,58 +153,20 @@ function Blinker({ side, active }: { side: "left" | "right"; active: boolean }) 
   );
 }
 
-function PedalIndicator({
-  gridArea,
-  fill,
-  color,
-  icon,
-}: {
-  gridArea: string;
-  fill: number;
-  color: string;
-  icon: "brake" | "throttle";
-}) {
-  const clampedFill = Math.min(100, Math.max(0, fill));
-
+function SmallDotIcon() {
   return (
-    <div
-      style={{ gridArea }}
-      className="relative flex h-8 w-8 items-center justify-center rounded-full"
-    >
-      <div className="absolute inset-1 rounded-full bg-black/40" />
-      <div className="absolute inset-1 overflow-hidden rounded-full">
-        <div
-          className="absolute inset-x-0 bottom-0"
-          style={{
-            height: `${clampedFill}%`,
-            background: color,
-            transition: "height 0.1s ease-out",
-          }}
-        />
-      </div>
-      <svg
-        className="relative z-10 h-6 w-6"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="rgba(190,190,190,0.9)"
-        strokeWidth={1.5}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      >
-        {icon === "brake" ? (
-          /* Brake: wide rectangular pad + centered stem */
-          <>
-            <rect x="4" y="13" width="16" height="8" rx="2.5" />
-            <rect x="9" y="3"  width="6"  height="10" rx="1.5" />
-          </>
-        ) : (
-          /* Gas: narrow stem, angled knee, narrower vertical pad */
-          <>
-            <rect x="10" y="3" width="4" height="6" rx="1.5" />
-            <path d="M14 9 L14 14 Q14 16 16 16 L16 21 Q16 21 14 21 L10 21 Q8 21 8 19 L8 16" />
-          </>
-        )}
-      </svg>
-    </div>
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" />
+    </svg>
+  );
+}
+
+function InfoIcon() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7}>
+      <circle cx="12" cy="12" r="9" />
+      <line x1="12" y1="10" x2="12" y2="16" />
+      <circle cx="12" cy="7.2" r="1" fill="currentColor" stroke="none" />
+    </svg>
   );
 }
