@@ -233,42 +233,29 @@ export interface SystemMetrics {
 }
 
 // Cleanup
-
-export interface AgePolicy {
-  enabled: boolean;
-  max_days: number;
-}
-
-export interface SizePolicy {
-  enabled: boolean;
-  max_gb: number;
-}
-
-export interface CountPolicy {
-  enabled: boolean;
-  max_count: number;
-}
+//
+// One dial per folder: keep the last N events, optionally also at boot.
+// Legacy multi-policy configs (age/size/count) are migrated server-side.
 
 export interface CleanupPolicy {
   enabled: boolean;
   boot_cleanup: boolean;
-  age_based?: AgePolicy;
-  size_based?: SizePolicy;
-  count_based?: CountPolicy;
+  keep_last: number;
 }
 
-export interface FileToDelete {
-  path: string;
+export interface EventToDelete {
+  folder: string;
   name: string;
+  path: string;
+  files: string[];
   size: number;
   modified: string;
-  reason: string;
 }
 
 export interface CleanupPlan {
   total_count: number;
   total_size: number;
-  breakdown_by_folder: Record<string, FileToDelete[]>;
+  breakdown_by_folder: Record<string, EventToDelete[]>;
 }
 
 export interface CleanupReport {

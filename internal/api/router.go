@@ -70,6 +70,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	logsH := handlers.NewLogsHandler(cfg)
 
 	updateH := handlers.NewUpdateHandler(cfg)
+	powerH := handlers.NewSystemPowerHandler(cfg)
 
 	// Captive portal detection endpoints (must be at root)
 	r.HandleFunc("/hotspot-detect.html", captiveH.Detect).Methods("GET")
@@ -179,7 +180,6 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	api.HandleFunc("/cleanup/settings", cleanupH.SaveSettings).Methods("POST")
 	api.HandleFunc("/cleanup/preview", cleanupH.Preview).Methods("GET")
 	api.HandleFunc("/cleanup/execute", cleanupH.Execute).Methods("POST")
-	api.HandleFunc("/cleanup/calculate", cleanupH.Calculate).Methods("POST")
 
 	// Fsck
 	api.HandleFunc("/fsck/start", fsckH.Start).Methods("POST")
@@ -216,6 +216,10 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 
 	// Update
 	api.HandleFunc("/update/status", updateH.Status).Methods("GET")
+
+	// System power
+	api.HandleFunc("/system/reboot", powerH.Reboot).Methods("POST")
+	api.HandleFunc("/system/poweroff", powerH.PowerOff).Methods("POST")
 
 	// Config (editable settings)
 	api.HandleFunc("/config", configH.Get).Methods("GET")

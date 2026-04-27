@@ -101,6 +101,7 @@ export default function SystemPanel() {
   const [telegram, setTelegram] = useState<TelegramStatus | null>(null);
   const [samba, setSamba] = useState<SambaStatus | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [powerAction, setPowerAction] = useState<"reboot" | "poweroff" | null>(null);
 
   const loadAll = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -136,6 +137,19 @@ export default function SystemPanel() {
       // silently ignore
     } finally {
       setSwitching(false);
+    }
+  };
+
+  const handlePower = async (action: "reboot" | "poweroff") => {
+    const verb = action === "reboot" ? "reboot" : "shut down";
+    if (!confirm(`Are you sure you want to ${verb} the device?`)) return;
+    setPowerAction(action);
+    try {
+      if (action === "reboot") await api.rebootSystem();
+      else await api.powerOffSystem();
+    } catch {
+      // The request will be cut off as the host goes down — that's expected.
+      // Anything truly fatal will surface when the user reloads the page.
     }
   };
 
@@ -287,6 +301,29 @@ export default function SystemPanel() {
               {samba.shares.length} share{samba.shares.length !== 1 ? "s" : ""}
             </p>
           )}
+        </div>
+
+        {/* Power */}
+        <div className="mt-4 rounded bg-[var(--color-bg-card-nested)] p-4">
+          <span className="text-xs font-medium tracking-wider text-[var(--color-text-muted)]">
+            Power
+          </span>
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => handlePower("reboot")}
+              disabled={powerAction !== null}
+              className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-warning)] hover:text-[var(--color-warning)] disabled:opacity-50"
+            >
+              {powerAction === "reboot" ? "Rebooting..." : "Restart"}
+            </button>
+            <button
+              onClick={() => handlePower("poweroff")}
+              disabled={powerAction !== null}
+              className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-danger)] hover:text-[var(--color-danger)] disabled:opacity-50"
+            >
+              {powerAction === "poweroff" ? "Shutting down..." : "Shut down"}
+            </button>
+          </div>
         </div>
       </div>
     </aside>

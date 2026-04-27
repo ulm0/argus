@@ -7,7 +7,6 @@ import type {
   ChimeGroupsResponse,
   ChimeListResponse,
   ChunkUploadResponse,
-  CleanupPlan,
   CleanupPolicy,
   CleanupPreviewResponse,
   CleanupReport,
@@ -424,10 +423,6 @@ export function executeCleanup(dryRun = false): Promise<CleanupReport> {
   return post<CleanupReport>("/api/cleanup/execute", { dry_run: dryRun });
 }
 
-export function calculateCleanup(): Promise<CleanupPlan> {
-  return post<CleanupPlan>("/api/cleanup/calculate");
-}
-
 // ──────────────────────────────────────────────
 // Fsck
 // ──────────────────────────────────────────────
@@ -522,6 +517,18 @@ export function testTelegram(): Promise<StatusResponse> {
 // ──────────────────────────────────────────────
 export function getUpdateStatus(): Promise<UpdateStatus> {
   return request<UpdateStatus>("/api/update/status");
+}
+
+// ──────────────────────────────────────────────
+// System power
+// ──────────────────────────────────────────────
+
+export function rebootSystem(): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/system/reboot");
+}
+
+export function powerOffSystem(): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/system/poweroff");
 }
 
 // ──────────────────────────────────────────────
