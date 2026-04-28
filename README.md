@@ -57,7 +57,8 @@ Argus is intended to run on **Raspberry Pi OS Lite** for unattended deployments.
 cmd/argus/        Go entrypoint + CLI commands
 internal/         API, services, system integrations
 web/              Next.js frontend source
-config.yaml       Generated runtime configuration
+config.yaml       Reference configuration (see ~/.argus/config.yaml on device)
+scripts/          install-argus.sh (one-command install from GitHub)
 Makefile          Build/test orchestration
 ```
 
@@ -74,16 +75,19 @@ argus version
 
 ## Installation
 
-Install the latest binary and run setup:
+Releases ship a **raw Linux binary** per architecture (no archive). Names match GoReleaser, e.g. `argus_1.2.3_linux_arm64`.
+
+### Raspberry Pi (recommended)
 
 ```bash
-curl -fsSL https://github.com/ulm0/argus/releases/latest/download/argus_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/;s/armv7l/armv7/;s/armv6l/armv6').tar.gz | sudo tar -xz -C /usr/local/bin argus
-
+curl -fsSL https://raw.githubusercontent.com/ulm0/argus/main/scripts/install-argus.sh | sudo bash
 argus generate
 sudo argus setup
 ```
 
-Or download manually from the [latest releases page](https://github.com/ulm0/argus/releases/latest).
+This installs the **latest release** binary for your CPU (`arm64` / `armv7` / `armv6`). If you prefer not to pipe from the network, clone the repo and run `sudo bash scripts/install-argus.sh`, or open the [releases page](https://github.com/ulm0/argus/releases/latest) and `sudo install -m 0755` the `argus_*_linux_*` file that matches your Pi.
+
+After setup, upgrades on the device are: `sudo argus upgrade` (same raw binary layout).
 
 ### Setup options
 
