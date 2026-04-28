@@ -26,7 +26,10 @@ when the template changes between versions. Must be run as root.`,
 			if err := RefreshServiceUnit(templates); err != nil {
 				return fmt.Errorf("refresh service unit: %w", err)
 			}
-			fmt.Println("Service unit refreshed. Restart argus to apply: sudo systemctl restart argus")
+			if err := ensureSystemdReleasesWatchdog(); err != nil {
+				return fmt.Errorf("systemd watchdog drop-in: %w", err)
+			}
+			fmt.Println("Refresh complete. Reboot if watchdog.service failed: PID1 must reload system.conf.d before /dev/watchdog is free for the Debian watchdog daemon.")
 			return nil
 		},
 	}

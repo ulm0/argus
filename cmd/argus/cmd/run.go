@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -49,6 +50,12 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 			}
 
 			logger.L.WithField("gadget_dir", cfg.GadgetDir).WithField("port", cfg.Network.WebPort).Info("Argus starting")
+
+			if runtime.GOOS == "linux" {
+				if err := watchdog.ApplyDaemon(cfg.System.WatchdogEnabled, cfg.System.WatchdogTimeoutSec); err != nil {
+					logger.L.WithError(err).Warn("watchdog daemon configure failed")
+				}
+			}
 
 			handlers.SetVersionProvider(func() string { return Version })
 			go checkForUpdate(cfg)
@@ -117,23 +124,12 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-			var wdMgr *watchdog.Manager
-			if cfg.System.WatchdogEnabled {
-				wdMgr = watchdog.NewManager()
-				if err := wdMgr.Start(cfg.System.WatchdogTimeoutSec); err != nil {
-					logger.L.WithError(err).Warn("watchdog start failed")
-				}
-			}
-
 			go func() {
 				sig := <-sigCh
 				logger.L.WithField("signal", sig).Info("received signal, shutting down")
 				runCancel()
 				tgSvc.Stop()
 				webhookSvc.Stop()
-				if wdMgr != nil {
-					wdMgr.Stop()
-				}
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				if err := server.Shutdown(ctx); err != nil {

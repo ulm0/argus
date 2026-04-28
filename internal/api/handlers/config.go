@@ -7,6 +7,7 @@ import (
 
 	"github.com/ulm0/argus/internal/config"
 	"github.com/ulm0/argus/internal/logger"
+	"github.com/ulm0/argus/internal/system/watchdog"
 )
 
 // ConfigHandler exposes config read and partial-update endpoints.
@@ -417,10 +418,9 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			cfg.System.ReapplySysctlOnStart = *p.ReapplySysctlOnStart
 		}
 		if p.WatchdogTimeoutSec != nil {
-			// Floor of 2s: the keepalive ticks at half the timeout, so a
-			// value of 1 would yield a zero-duration ticker and panic.
-			if *p.WatchdogTimeoutSec < 2 {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "watchdog_timeout_sec must be >= 2"})
+			// Match Debian watchdog(8) / TeslaUSB-style minimum (low values risk timing issues on Pi).
+			if *p.WatchdogTimeoutSec < 10 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "watchdog_timeout_sec must be >= 10"})
 				return
 			}
 			cfg.System.WatchdogTimeoutSec = *p.WatchdogTimeoutSec
@@ -469,6 +469,12 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	if err := cfg.Save(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save config: " + err.Error()})
 		return
+	}
+
+	if req.Startup != nil && (req.Startup.WatchdogEnabled != nil || req.Startup.WatchdogTimeoutSec != nil) {
+		if err := watchdog.ApplyDaemon(cfg.System.WatchdogEnabled, cfg.System.WatchdogTimeoutSec); err != nil {
+			logger.L.WithError(err).Warn("watchdog daemon apply failed")
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

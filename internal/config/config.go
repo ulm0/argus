@@ -265,8 +265,9 @@ func (c *Config) setDefaults() {
 		c.LogLevel = "debug"
 	}
 	if c.System.WatchdogTimeoutSec <= 0 {
-		// 10s is well within the BCM2835 ~15s hardware limit on the Pi while
-		// still leaving ~5s of slack between keepalives.
+		// 60s matches TeslaUSB/mphacker guidance for large images; the daemon clamps to hardware max.
+		c.System.WatchdogTimeoutSec = 60
+	} else if c.System.WatchdogTimeoutSec < 10 {
 		c.System.WatchdogTimeoutSec = 10
 	}
 	if c.ViewerPrefs.SpeedUnit == "" {

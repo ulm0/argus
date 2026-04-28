@@ -141,7 +141,7 @@ All runtime settings are in `~/.argus/config.yaml`.
 - `installation.boot_random_chime_on_start: false`
 - `disk_images.boot_fsck_enabled: true`
 - `system.watchdog_enabled: true`
-- `system.watchdog_timeout_sec: 10`
+- `system.watchdog_timeout_sec: 60` (Debian `watchdog` daemon, TeslaUSB-style)
 - `system.reapply_sysctl_on_start: true`
 
 ### Web-configurable startup and reliability
@@ -153,7 +153,7 @@ The Settings page includes a **Startup & Reliability** section:
 - Boot cleanup
 - Random chime on startup
 - Boot fsck checks
-- Watchdog enable + timeout
+- Watchdog via Debian `watchdog.service` (`/etc/watchdog.conf`) + timeout
 - Sysctl profile re-apply on startup
 
 Some changes take effect on next service restart or reboot.
@@ -180,7 +180,7 @@ Some changes take effect on next service restart or reboot.
 - AP fallback on connectivity loss
 - Wi-Fi status monitoring
 - Telegram event queue and delivery
-- Optional watchdog to recover from hangs
+- Optional hardware watchdog (Debian watchdog daemon, like TeslaUSB)
 
 ## Acknowledgements
 

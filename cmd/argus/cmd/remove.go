@@ -72,7 +72,7 @@ Must be run as root (sudo).`,
 			fmt.Println()
 			fmt.Printf("  You may also want to:\n")
 			fmt.Printf("    - Remove the Argus directory: rm -rf %s\n", installDir)
-			fmt.Printf("    - Uninstall packages: sudo apt remove samba hostapd dnsmasq\n")
+			fmt.Printf("    - Uninstall packages: sudo apt remove samba hostapd dnsmasq watchdog\n")
 			fmt.Printf("    - Reboot to fully clear the USB gadget kernel module\n")
 			fmt.Println()
 			return nil
@@ -201,6 +201,15 @@ func removeSamba() {
 func removeSystemConfigs() {
 	_ = os.Remove("/etc/sysctl.d/99-argus.conf")
 	_ = os.Remove("/etc/NetworkManager/conf.d/wifi-roaming.conf")
+	_ = os.Remove("/etc/systemd/system.conf.d/99-argus-no-systemd-watchdog.conf")
+	_ = os.Remove("/etc/watchdog.conf")
+
+	runCmdSilent("systemctl", "stop", "watchdog.service")
+	runCmdSilent("systemctl", "disable", "watchdog.service")
+	runCmdSilent("systemctl", "unmask", "watchdog.service")
+	runCmdSilent("systemctl", "stop", "wd_keepalive.service")
+	runCmdSilent("systemctl", "disable", "wd_keepalive.service")
+	runCmdSilent("systemctl", "unmask", "wd_keepalive.service")
 
 	bootConfig := "/boot/firmware/config.txt"
 	for _, param := range []string{"dtoverlay=dwc2", "dtparam=watchdog=on", "gpu_mem=16"} {

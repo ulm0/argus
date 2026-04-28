@@ -76,7 +76,7 @@ export default function SettingsPage() {
   const [bootRandomChimeOnStart, setBootRandomChimeOnStart] = useState(false);
   const [bootFsckEnabled, setBootFsckEnabled] = useState(true);
   const [watchdogEnabled, setWatchdogEnabled] = useState(false);
-  const [watchdogTimeoutSec, setWatchdogTimeoutSec] = useState(10);
+  const [watchdogTimeoutSec, setWatchdogTimeoutSec] = useState(60);
   const [reapplySysctlOnStart, setReapplySysctlOnStart] = useState(false);
 
   // Editable states — Webhook
@@ -551,13 +551,18 @@ export default function SettingsPage() {
             />
             <span className="text-sm text-[var(--color-text-primary)]">Enable hardware watchdog</span>
           </label>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Uses the Debian <code className="rounded bg-[var(--color-bg-tertiary)] px-1">watchdog</code> daemon (
+            <code className="rounded bg-[var(--color-bg-tertiary)] px-1">/etc/watchdog.conf</code>), same model as TeslaUSB — not
+            the Argus process feeding <code className="rounded bg-[var(--color-bg-tertiary)] px-1">/dev/watchdog</code> directly.
+          </p>
           <label className={fieldLabel} htmlFor="watchdog-timeout-sec">
             Watchdog timeout (seconds)
           </label>
           <input
             id="watchdog-timeout-sec"
             type="number"
-            min={2}
+            min={10}
             className={inputCls}
             value={watchdogTimeoutSec}
             onChange={(e) => setWatchdogTimeoutSec(Number(e.target.value))}

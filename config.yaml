@@ -1,102 +1,142 @@
 # Argus Configuration File
 #
-# EDIT THIS FILE to match your installation.
-# This file is used by the Argus Go binary.
+# Single source of truth for the Go binary. Mirrors internal/config/config.go.
+# `argus setup` writes the same shape under ~/.argus/config.yaml (or --dir).
 #
-# All paths, settings, and credentials are defined here as a single source of truth.
+# Secrets: change samba_password, offline_ap credentials, web.secret_key, and
+# telegram tokens before exposing the device.
 
 # ============================================================================
-# Installation & Paths
+# Installation & paths
 # ============================================================================
 installation:
-  target_user: pi # Linux user owning the disk images (auto-detected from SUDO_USER during setup)
-  mount_dir: /mnt/gadget # Mount directory for USB drives
+  target_user: pi # Linux user owning disk images (setup replaces with SUDO_USER)
+  mount_dir: /mnt/gadget # USB gadget mount root
+  archive_path: "" # Optional path: if set and contains TeslaCam/, listed in media UI
+  boot_present_on_start: true # Call SwitchToPresent once at process start
+  boot_cleanup_on_start: true # Run cleanup before present when boot_cleanup is enabled
+  boot_random_chime_on_start: false # Pick random chime from configured group at boot
+  boot_block_until_ready: true # Block HTTP until boot pipeline finishes
 
 # ============================================================================
-# Disk Images
+# Disk images
 # ============================================================================
 disk_images:
-  cam_name: usb_cam.img # TeslaCam disk image filename
-  lightshow_name: usb_lightshow.img # LightShow disk image filename
-  cam_label: TeslaCam # Filesystem label for TeslaCam drive
-  lightshow_label: Lightshow # Filesystem label for LightShow drive
-  music_name: usb_music.img # Music disk image filename (optional third LUN)
-  music_label: Music # Filesystem label for Music drive (Tesla expects FAT32)
-  part2_enabled: true # create the shared Chimes/LightShow/Wraps partition (LUN1) — required for any of the three sub-features below
-  chimes_enabled: true # custom lock/unlock sounds (folder: Chimes/ inside part2)
-  lightshow_enabled: true # light show sequences (folder: LightShow/ inside part2)
-  wraps_enabled: true # custom vehicle wraps (folder: Wraps/ inside part2)
-  music_enabled: true # create and present music partition (LUN2)
-  music_fs: fat32 # filesystem for music image (fat32 recommended for Tesla)
-  boot_fsck_enabled: true # auto-repair filesystems on boot (recommended)
+  cam_name: usb_cam.img
+  lightshow_name: usb_lightshow.img
+  cam_label: TeslaCam
+  lightshow_label: Lightshow
+  music_name: usb_music.img
+  music_label: Music
+  part2_enabled: true # LightShow / Chimes / Wraps (LUN1)
+  chimes_enabled: true
+  lightshow_enabled: true
+  wraps_enabled: true
+  music_enabled: true # Music LUN2
+  music_fs: fat32
+  boot_fsck_enabled: true
 
 # ============================================================================
-# Setup Configuration (used only during initial setup)
+# Setup (argus setup only — empty strings use interactive / built-in defaults)
 # ============================================================================
-# The TeslaCam partition is mandatory and always auto-sized to fill all
-# remaining disk space after the optional partitions and reserve are accounted for.
 setup:
-  part2_size: ""    # LightShow/Chimes/Wraps image size (e.g. "10G"; default: 10G)
-  part3_size: ""    # Music image size (e.g. "32G"; default: 32G)
-  reserve_size: ""  # Free space to keep on Pi filesystem (default: 5G)
+  part2_size: ""
+  part3_size: ""
+  reserve_size: ""
 
 # ============================================================================
-# Network & Security
+# Network
 # ============================================================================
 network:
-  samba_password: tesla # Samba password for authenticated user (CHANGE THIS!)
-  web_port: 80 # Web interface port (80 required for captive portal - do not change)
+  samba_password: tesla # CHANGE THIS
+  samba_enabled: true # When false, Argus does not manage smbd/nmbd
+  web_port: 80 # Required for captive portal
 
 # ============================================================================
-# Offline Access Point Configuration
+# Offline access point
 # ============================================================================
-# Fallback WiFi access point for in-car/mobile access when STA WiFi is unavailable
 offline_ap:
-  enabled: true # Set to false to disable fallback AP
-  interface: wlan0 # WiFi interface used for AP/STA
-  ssid: Argus # SSID broadcast when AP is active (CHANGE THIS!)
-  passphrase: argus1234 # WPA2 passphrase 8-63 chars (CHANGE THIS!)
-  channel: 6 # 2.4GHz channel (1-11)
-  ipv4_cidr: 192.168.4.1/24 # Static IP for AP interface
-  dhcp_start: 192.168.4.10 # DHCP range start
-  dhcp_end: 192.168.4.50 # DHCP range end
-  check_interval: 20 # Seconds between health checks
-  disconnect_grace: 30 # Seconds offline before starting AP
-  min_rssi: -70 # Minimum RSSI (dBm) to tear down AP
-  stable_seconds: 20 # Seconds of good link before stopping AP
-  ping_target: 8.8.8.8 # Ping target to confirm WAN reachability
-  retry_seconds: 300 # While AP is active, retry STA join every N seconds
-  virtual_interface: uap0 # Virtual AP interface name (concurrent mode always enabled)
-  force_mode: auto # Persistent force mode: auto, force_on, force_off
+  enabled: true
+  interface: wlan0
+  ssid: Argus
+  passphrase: argus1234
+  channel: 6
+  ipv4_cidr: 192.168.4.1/24
+  dhcp_start: 192.168.4.10
+  dhcp_end: 192.168.4.50
+  check_interval: 20
+  disconnect_grace: 30
+  min_rssi: -70
+  stable_seconds: 20
+  ping_target: 8.8.8.8
+  retry_seconds: 300
+  virtual_interface: uap0
+  force_mode: auto # auto | force_on | force_off
 
 # ============================================================================
-# System Configuration File Paths
+# System paths & reliability
 # ============================================================================
 system:
-  config_file: /boot/firmware/config.txt # Raspberry Pi boot configuration
-  samba_conf: /etc/samba/smb.conf # Samba configuration file
+  config_file: /boot/firmware/config.txt
+  samba_conf: /etc/samba/smb.conf
+  reapply_sysctl_on_start: true
+  # Hardware watchdog: Debian watchdog(8) + /etc/watchdog.conf (TeslaUSB-style)
+  watchdog_enabled: true
+  watchdog_timeout_sec: 60 # min 10 when changed via API; maps to watchdog.conf
 
 # ============================================================================
-# Web Application Configuration
+# Web UI & uploads
 # ============================================================================
 web:
-  secret_key: CHANGE-THIS-TO-A-RANDOM-SECRET-KEY-ON-FIRST-INSTALL # Flask secret key (auto-generated if default)
-  max_lock_chime_size: 1048576 # 1 MiB (1024 * 1024 bytes)
-  max_lock_chime_duration: 10.0 # 10 seconds (configurable per Tesla model)
-  min_lock_chime_duration: 0.3 # 300ms minimum
-  speed_range_min: 0.5 # Half speed (audio trimmer)
-  speed_range_max: 2.0 # Double speed (audio trimmer)
-  speed_step: 0.05 # Fine-grained control (audio trimmer)
-  lock_chime_filename: LockChime.wav # Active lock chime filename
-  chimes_folder: Chimes # Folder on part2 where custom chimes are stored
-  lightshow_folder: LightShow # Folder on part2 where light shows are stored
-  max_upload_size_mb: 2048 # Max accepted upload size for music/lightshow (MiB)
-  max_upload_chunk_mb: 16 # Chunk size for streaming uploads (MiB)
+  secret_key: CHANGE-THIS-TO-A-RANDOM-SECRET-KEY-ON-FIRST-INSTALL # Randomized at runtime if still default
+  max_lock_chime_size: 1048576
+  max_lock_chime_duration: 10.0
+  min_lock_chime_duration: 0.3
+  speed_range_min: 0.5
+  speed_range_max: 2.0
+  speed_step: 0.05
+  lock_chime_filename: LockChime.wav
+  chimes_folder: Chimes
+  lightshow_folder: LightShow
+  max_upload_size_mb: 2048
+  max_upload_chunk_mb: 16
 
 # ============================================================================
-# Update Configuration
+# Telegram (optional)
+# ============================================================================
+telegram:
+  enabled: false
+  bot_token: ""
+  chat_id: ""
+  offline_mode: queue
+  max_queue_size: 50
+  video_quality: hd
+
+# ============================================================================
+# Webhook (optional HMAC-signed HTTP callbacks)
+# ============================================================================
+webhook:
+  enabled: false
+  url: ""
+  secret: ""
+
+# ============================================================================
+# Updates
 # ============================================================================
 update:
-  auto_update: false        # Set to true to automatically install new releases
-  check_on_startup: true    # Check for a new version each time the service starts
-  channel: stable           # Release channel (reserved for future use)
+  auto_update: false
+  check_on_startup: true
+  channel: stable
+
+# ============================================================================
+# Viewer prefs (server-persisted HUD / map / speed unit)
+# ============================================================================
+viewer_prefs:
+  speed_unit: kph # kph | mph
+  hud_scale: 1.0
+  map_scale: 1.0
+
+# ============================================================================
+# Logging
+# ============================================================================
+log_level: debug

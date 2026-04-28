@@ -80,14 +80,16 @@ func inPID1Namespace(fn func() error) error {
 	}
 	defer selfNsFd.Close()
 
-	if err := unix.Setns(int(nsFd.Fd()), 0); err != nil {
+	// Linux 3.8+ requires nstype matching the fd; 0 yields EINVAL. Use
+	// CLONE_NEWNS for mount namespaces (see setns(2)).
+	if err := unix.Setns(int(nsFd.Fd()), unix.CLONE_NEWNS); err != nil {
 		logger.L.WithError(err).Warn("setns failed, running in current namespace")
 		return fn()
 	}
 
 	result := fn()
 
-	if err := unix.Setns(int(selfNsFd.Fd()), 0); err != nil {
+	if err := unix.Setns(int(selfNsFd.Fd()), unix.CLONE_NEWNS); err != nil {
 		logger.L.WithError(err).Error("failed to restore mount namespace")
 	}
 

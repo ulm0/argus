@@ -18,11 +18,13 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/ulm0/argus/internal/config"
+	"github.com/ulm0/argus/internal/system/watchdog"
 )
 
 const defaultConfigYAML = `installation:
   target_user: pi # replaced at runtime by the detected non-root user
   mount_dir: /mnt/gadget
+  archive_path: ""
   boot_present_on_start: true
   boot_cleanup_on_start: true
   boot_random_chime_on_start: false
@@ -35,21 +37,22 @@ disk_images:
   lightshow_label: Lightshow
   music_name: usb_music.img
   music_label: Music
-  part2_enabled: true      # set to false to skip the entire Chimes/LightShow/Wraps partition
-  chimes_enabled: true     # custom lock/unlock sounds (lives in part2)
-  lightshow_enabled: true  # light show sequences (lives in part2)
-  wraps_enabled: true      # custom vehicle wraps (lives in part2)
-  music_enabled: true      # set to false to skip the Music partition
+  part2_enabled: true
+  chimes_enabled: true
+  lightshow_enabled: true
+  wraps_enabled: true
+  music_enabled: true
   music_fs: fat32
   boot_fsck_enabled: true
 
 setup:
-  part2_size: ""    # LightShow/Chimes/Wraps image size (e.g. "10G"; default: 10G)
-  part3_size: ""    # Music image size (e.g. "32G"; default: 32G)
-  reserve_size: ""  # Free space to keep on Pi filesystem (default: 5G)
+  part2_size: ""
+  part3_size: ""
+  reserve_size: ""
 
 network:
   samba_password: tesla
+  samba_enabled: true
   web_port: 80
 
 offline_ap:
@@ -75,7 +78,7 @@ system:
   samba_conf: /etc/samba/smb.conf
   reapply_sysctl_on_start: true
   watchdog_enabled: true
-  watchdog_timeout_sec: 10
+  watchdog_timeout_sec: 60
 
 web:
   secret_key: CHANGE-THIS-TO-A-RANDOM-SECRET-KEY-ON-FIRST-INSTALL
@@ -99,10 +102,22 @@ telegram:
   max_queue_size: 50
   video_quality: hd
 
+webhook:
+  enabled: false
+  url: ""
+  secret: ""
+
 update:
   auto_update: false
   check_on_startup: true
   channel: stable
+
+viewer_prefs:
+  speed_unit: kph
+  hud_scale: 1.0
+  map_scale: 1.0
+
+log_level: debug
 `
 
 func NewSetupCmd(templates *embed.FS) *cobra.Command {
@@ -171,7 +186,16 @@ Must be run as root (sudo).`,
 				return err
 			}
 			setupMaskUsbGadgetServices()
-			setupMaskWatchdogServices()
+			if err := ensureSystemdReleasesWatchdog(); err != nil {
+				setupWarn("systemd watchdog drop-in: %v", err)
+			} else {
+				setupLog("systemd configured so PID1 does not hold /dev/watchdog (reboot to apply)")
+			}
+			if err := watchdog.ApplyDaemon(cfg.System.WatchdogEnabled, cfg.System.WatchdogTimeoutSec); err != nil {
+				setupWarn("watchdog daemon: %v (reboot after setup if /dev/watchdog was busy)", err)
+			} else if cfg.System.WatchdogEnabled {
+				setupLog("Debian watchdog.service enabled (TeslaUSB-style)")
+			}
 			setupCleanupForeignGadgets()
 			setupMaskDesktopServices()
 
@@ -268,12 +292,10 @@ func setupDefaultDir() string {
 
 func setupInstallDeps() error {
 	setupLog("Installing system dependencies...")
-	// Note: we deliberately do NOT install the Debian `watchdog` package.
-	// Argus talks to /dev/watchdog directly via ioctl; that package's
-	// userspace daemon would hold the device exclusively and make
-	// `cfg.System.WatchdogEnabled` fail with EBUSY.
+	// Debian `watchdog` package: userspace daemon owns /dev/watchdog (TeslaUSB model).
 	packages := []string{
 		"samba", "hostapd", "dnsmasq", "ffmpeg",
+		"watchdog",
 		"exfat-fuse", "exfatprogs",
 		"dosfstools", "network-manager",
 	}
@@ -692,20 +714,29 @@ func setupMaskUsbGadgetServices() {
 	setupLog("Masked conflicting USB gadget systemd units (best-effort)")
 }
 
-// setupMaskWatchdogServices stops and masks the Debian `watchdog` package's
-// units. Existing installs may have them enabled from before we stopped
-// installing the package; if they're running they hold /dev/watchdog open
-// exclusively and Argus's own watchdog will fail with EBUSY at startup.
-func setupMaskWatchdogServices() {
+// ensureSystemdReleasesWatchdog installs a drop-in so systemd (PID 1) does not
+// open /dev/watchdog (avoids contention with watchdog.service).
+func ensureSystemdReleasesWatchdog() error {
 	if runtime.GOOS != "linux" {
-		return
+		return nil
 	}
-	for _, svc := range []string{"watchdog.service", "wd_keepalive.service"} {
-		runCmdSilent("systemctl", "stop", svc)
-		runCmdSilent("systemctl", "disable", svc)
-		runCmdSilent("systemctl", "mask", svc)
+	const dir = "/etc/systemd/system.conf.d"
+	const path = dir + "/99-argus-no-systemd-watchdog.conf"
+	const content = `# Managed by Argus: PID1 must not open /dev/watchdog when using the
+# Debian watchdog(8) daemon (watchdog.service). RuntimeWatchdogSec would contend
+# for the same device and cause EBUSY.
+[Manager]
+RuntimeWatchdogSec=0
+RebootWatchdogSec=0
+KExecWatchdogSec=0
+`
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("mkdir systemd system.conf.d: %w", err)
 	}
-	setupLog("Masked conflicting watchdog systemd units (best-effort)")
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	return nil
 }
 
 // setupCleanupForeignGadgets removes stale gadget trees under configfs except "argus" (TeslaUSB/setup_usb parity).
