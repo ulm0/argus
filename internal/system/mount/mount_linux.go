@@ -80,6 +80,20 @@ func inPID1Namespace(fn func() error) error {
 	}
 	defer selfNsFd.Close()
 
+	// When already in PID 1's mount namespace (normal for systemd services
+	// without a private mount namespace), setns(..., CLONE_NEWNS) can return
+	// EINVAL. Skip the syscall — mounts apply where we already are.
+	var selfStat, pid1Stat syscall.Stat_t
+	if err := syscall.Fstat(int(selfNsFd.Fd()), &selfStat); err != nil {
+		return fn()
+	}
+	if err := syscall.Fstat(int(nsFd.Fd()), &pid1Stat); err != nil {
+		return fn()
+	}
+	if selfStat.Ino == pid1Stat.Ino && selfStat.Dev == pid1Stat.Dev {
+		return fn()
+	}
+
 	// Linux 3.8+ requires nstype matching the fd; 0 yields EINVAL. Use
 	// CLONE_NEWNS for mount namespaces (see setns(2)).
 	if err := unix.Setns(int(nsFd.Fd()), unix.CLONE_NEWNS); err != nil {
