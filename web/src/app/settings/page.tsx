@@ -553,8 +553,7 @@ export default function SettingsPage() {
           </label>
           <p className="text-xs text-[var(--color-text-muted)]">
             Uses the Debian <code className="rounded bg-[var(--color-bg-tertiary)] px-1">watchdog</code> daemon (
-            <code className="rounded bg-[var(--color-bg-tertiary)] px-1">/etc/watchdog.conf</code>), same model as TeslaUSB — not
-            the Argus process feeding <code className="rounded bg-[var(--color-bg-tertiary)] px-1">/dev/watchdog</code> directly.
+            <code className="rounded bg-[var(--color-bg-tertiary)] px-1">/etc/watchdog.conf</code>).
           </p>
           <label className={fieldLabel} htmlFor="watchdog-timeout-sec">
             Watchdog timeout (seconds)
