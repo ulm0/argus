@@ -32,11 +32,46 @@ func (h *SambaHandler) Status(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"user":              h.cfg.Installation.TargetUser,
-		"config_path":       h.cfg.System.SambaConf,
-		"password_set":      h.cfg.Network.SambaPassword != "",
-		"shares":            shares,
+		"user":         h.cfg.Installation.TargetUser,
+		"config_path":  h.cfg.System.SambaConf,
+		"password_set": h.cfg.Network.SambaPassword != "",
+		"enabled":      h.cfg.SambaEnabled(),
+		"shares":       shares,
 	})
+}
+
+func (h *SambaHandler) SetEnabled(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Enabled == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if *req.Enabled {
+		if err := h.manager.GenerateConfig(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write smb.conf: " + err.Error()})
+			return
+		}
+		if err := h.manager.EnableServices(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	} else {
+		if err := h.manager.DisableServices(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	h.cfg.SetSambaEnabled(*req.Enabled)
+	if err := h.cfg.Save(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "applied but failed to persist config: " + err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": *req.Enabled})
 }
 
 func (h *SambaHandler) SetPassword(w http.ResponseWriter, r *http.Request) {

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os/exec"
 
 	"github.com/spf13/cobra"
 	"github.com/ulm0/argus/internal/updater"
@@ -14,7 +15,8 @@ func NewUpgradeCmd() *cobra.Command {
 		Use:   "upgrade",
 		Short: "Upgrade Argus to the latest release",
 		Long: `Check GitHub for the latest release asset (a raw argus binary),
-download it, replace /usr/local/bin/argus atomically, and restart argus.service.
+download it, replace /usr/local/bin/argus atomically, refresh the systemd
+unit from the new binary's embedded template, and restart argus.service.
 Must be run as root (sudo).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := setupCheckRoot(); err != nil {
@@ -55,6 +57,18 @@ Must be run as root (sudo).`,
 			fmt.Println("[+] Downloading and installing...")
 			if err := updater.Install(release); err != nil {
 				return fmt.Errorf("install: %w", err)
+			}
+
+			// Ask the freshly installed binary to refresh the systemd unit
+			// from its (new) embedded template. We do this with the new
+			// binary because the template lives inside it; the currently
+			// running binary still has the old version embedded.
+			fmt.Println("[+] Refreshing systemd unit from new template...")
+			if out, err := exec.Command("/usr/local/bin/argus", "refresh-service").CombinedOutput(); err != nil {
+				fmt.Printf("    warning: refresh-service failed: %v\n%s\n", err, string(out))
+				fmt.Println("    Run `sudo argus refresh-service` manually to clean up the unit.")
+			} else {
+				_ = exec.Command("systemctl", "restart", "argus.service").Run()
 			}
 
 			fmt.Println()

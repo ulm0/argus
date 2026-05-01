@@ -233,42 +233,29 @@ export interface SystemMetrics {
 }
 
 // Cleanup
-
-export interface AgePolicy {
-  enabled: boolean;
-  max_days: number;
-}
-
-export interface SizePolicy {
-  enabled: boolean;
-  max_gb: number;
-}
-
-export interface CountPolicy {
-  enabled: boolean;
-  max_count: number;
-}
+//
+// One dial per folder: keep the last N events, optionally also at boot.
+// Legacy multi-policy configs (age/size/count) are migrated server-side.
 
 export interface CleanupPolicy {
   enabled: boolean;
   boot_cleanup: boolean;
-  age_based?: AgePolicy;
-  size_based?: SizePolicy;
-  count_based?: CountPolicy;
+  keep_last: number;
 }
 
-export interface FileToDelete {
-  path: string;
+export interface EventToDelete {
+  folder: string;
   name: string;
+  path: string;
+  files: string[];
   size: number;
   modified: string;
-  reason: string;
 }
 
 export interface CleanupPlan {
   total_count: number;
   total_size: number;
-  breakdown_by_folder: Record<string, FileToDelete[]>;
+  breakdown_by_folder: Record<string, EventToDelete[]>;
 }
 
 export interface CleanupReport {
@@ -291,8 +278,12 @@ export interface CleanupPreviewResponse {
 
 export type FsckStatusValue = "idle" | "running" | "done" | "failed";
 
+export type FsckMode = "quick" | "repair";
+
 export interface FsckCheckResult {
   partition: string;
+  mode?: FsckMode;
+  fs_type?: string;
   started_at: string;
   finished_at?: string;
   status: FsckStatusValue;
@@ -443,6 +434,7 @@ export interface SambaStatus {
   user: string;
   config_path: string;
   password_set: boolean;
+  enabled: boolean;
   shares: SambaShare[];
 }
 
@@ -506,6 +498,12 @@ export interface StartupConfigPublic {
   reapply_sysctl_on_start: boolean;
 }
 
+export interface ViewerPrefsConfigPublic {
+  speed_unit: "kph" | "mph";
+  hud_scale: number;
+  map_scale: number;
+}
+
 export interface StorageInfo {
   cam_name: string;
   cam_label: string;
@@ -528,6 +526,7 @@ export interface ConfigResponse {
   telegram: TelegramConfigPublic;
   update: UpdateConfigPublic;
   startup: StartupConfigPublic;
+  viewer_prefs: ViewerPrefsConfigPublic;
   log_level: string;
   storage: StorageInfo;
 }

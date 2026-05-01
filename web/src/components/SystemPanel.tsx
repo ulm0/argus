@@ -33,6 +33,51 @@ function ModeBadge({ mode, label }: { mode: ModeToken; label: string }) {
   );
 }
 
+// SignalStrength renders a 4-bar WiFi indicator colored by RSSI bucket.
+//   ≥ -55 dBm → 4 bars, green   (excellent)
+//   -55 .. -65 → 3 bars, green   (good)
+//   -65 .. -75 → 2 bars, yellow  (fair)
+//   -75 .. -85 → 1 bar,  red     (weak)
+//   < -85      → 0 bars, red     (no usable signal)
+function SignalStrength({ rssi }: { rssi: number }) {
+  let bars: number;
+  let color: string;
+  if (rssi >= -55) {
+    bars = 4;
+    color = "var(--color-success)";
+  } else if (rssi >= -65) {
+    bars = 3;
+    color = "var(--color-success)";
+  } else if (rssi >= -75) {
+    bars = 2;
+    color = "var(--color-warning)";
+  } else if (rssi >= -85) {
+    bars = 1;
+    color = "var(--color-danger)";
+  } else {
+    bars = 0;
+    color = "var(--color-danger)";
+  }
+
+  return (
+    <div className="flex items-center gap-1.5" title={`Signal: ${rssi} dBm`}>
+      <div className="flex items-end gap-0.5">
+        {[1, 2, 3, 4].map((step) => (
+          <div
+            key={step}
+            className="w-1 rounded-full"
+            style={{
+              height: `${step * 2.5 + 3}px`,
+              backgroundColor: step <= bars ? color : "var(--color-border)",
+            }}
+          />
+        ))}
+      </div>
+      <span className="text-[10px] tabular-nums text-[var(--color-text-muted)]">{rssi} dBm</span>
+    </div>
+  );
+}
+
 function StatusBadge({ active, activeLabel, inactiveLabel }: { active: boolean; activeLabel: string; inactiveLabel: string }) {
   return (
     <span
@@ -56,6 +101,7 @@ export default function SystemPanel() {
   const [telegram, setTelegram] = useState<TelegramStatus | null>(null);
   const [samba, setSamba] = useState<SambaStatus | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [powerAction, setPowerAction] = useState<"reboot" | "poweroff" | null>(null);
 
   const loadAll = useCallback(async () => {
     const results = await Promise.allSettled([
@@ -91,6 +137,19 @@ export default function SystemPanel() {
       // silently ignore
     } finally {
       setSwitching(false);
+    }
+  };
+
+  const handlePower = async (action: "reboot" | "poweroff") => {
+    const verb = action === "reboot" ? "reboot" : "shut down";
+    if (!confirm(`Are you sure you want to ${verb} the device?`)) return;
+    setPowerAction(action);
+    try {
+      if (action === "reboot") await api.rebootSystem();
+      else await api.powerOffSystem();
+    } catch {
+      // The request will be cut off as the host goes down — that's expected.
+      // Anything truly fatal will surface when the user reloads the page.
     }
   };
 
@@ -190,22 +249,7 @@ export default function SystemPanel() {
                 <p className="font-mono text-[10px] text-[var(--color-text-muted)]">{wifiStatus.connection.ip}</p>
               )}
               {wifiStatus.connection.signal != null && (
-                <div className="flex items-center gap-1.5">
-                  <div className="flex items-end gap-0.5">
-                    {[25, 50, 75, 100].map((threshold) => (
-                      <div
-                        key={threshold}
-                        className={`w-1 rounded-full ${
-                          (wifiStatus.connection.signal ?? 0) >= threshold
-                            ? "bg-[var(--color-accent)]"
-                            : "bg-[var(--color-border)]"
-                        }`}
-                        style={{ height: `${threshold / 10 + 4}px` }}
-                      />
-                    ))}
-                  </div>
-                  <span className="text-[10px] tabular-nums text-[var(--color-text-muted)]">{wifiStatus.connection.signal}%</span>
-                </div>
+                <SignalStrength rssi={wifiStatus.connection.signal} />
               )}
             </div>
           )}
@@ -246,13 +290,40 @@ export default function SystemPanel() {
             <span className="text-xs font-medium tracking-wider text-[var(--color-text-muted)]">
               Samba
             </span>
-            <StatusBadge active={!!samba?.password_set} activeLabel="Configured" inactiveLabel="Not Set" />
+            {samba && !samba.enabled ? (
+              <StatusBadge active={false} activeLabel="Disabled" inactiveLabel="Disabled" />
+            ) : (
+              <StatusBadge active={!!samba?.password_set} activeLabel="Configured" inactiveLabel="Not Set" />
+            )}
           </div>
-          {samba && (
+          {samba && samba.enabled && (
             <p className="mt-2 text-xs text-[var(--color-text-secondary)]">
               {samba.shares.length} share{samba.shares.length !== 1 ? "s" : ""}
             </p>
           )}
+        </div>
+
+        {/* Power */}
+        <div className="mt-4 rounded bg-[var(--color-bg-card-nested)] p-4">
+          <span className="text-xs font-medium tracking-wider text-[var(--color-text-muted)]">
+            Power
+          </span>
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => handlePower("reboot")}
+              disabled={powerAction !== null}
+              className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-warning)] hover:text-[var(--color-warning)] disabled:opacity-50"
+            >
+              {powerAction === "reboot" ? "Rebooting..." : "Restart"}
+            </button>
+            <button
+              onClick={() => handlePower("poweroff")}
+              disabled={powerAction !== null}
+              className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-danger)] hover:text-[var(--color-danger)] disabled:opacity-50"
+            >
+              {powerAction === "poweroff" ? "Shutting down..." : "Shut down"}
+            </button>
+          </div>
         </div>
       </div>
     </aside>

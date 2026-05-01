@@ -70,6 +70,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	logsH := handlers.NewLogsHandler(cfg)
 
 	updateH := handlers.NewUpdateHandler(cfg)
+	powerH := handlers.NewSystemPowerHandler(cfg)
 
 	// Captive portal detection endpoints (must be at root)
 	r.HandleFunc("/hotspot-detect.html", captiveH.Detect).Methods("GET")
@@ -179,7 +180,6 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	api.HandleFunc("/cleanup/settings", cleanupH.SaveSettings).Methods("POST")
 	api.HandleFunc("/cleanup/preview", cleanupH.Preview).Methods("GET")
 	api.HandleFunc("/cleanup/execute", cleanupH.Execute).Methods("POST")
-	api.HandleFunc("/cleanup/calculate", cleanupH.Calculate).Methods("POST")
 
 	// Fsck
 	api.HandleFunc("/fsck/start", fsckH.Start).Methods("POST")
@@ -210,11 +210,16 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	// Samba
 	api.HandleFunc("/samba/status", sambaH.Status).Methods("GET")
 	api.HandleFunc("/samba/set-password", sambaH.SetPassword).Methods("POST")
+	api.HandleFunc("/samba/set-enabled", sambaH.SetEnabled).Methods("POST")
 	api.HandleFunc("/samba/restart", sambaH.Restart).Methods("POST")
 	api.HandleFunc("/samba/regenerate", sambaH.Regenerate).Methods("POST")
 
 	// Update
 	api.HandleFunc("/update/status", updateH.Status).Methods("GET")
+
+	// System power
+	api.HandleFunc("/system/reboot", powerH.Reboot).Methods("POST")
+	api.HandleFunc("/system/poweroff", powerH.PowerOff).Methods("POST")
 
 	// Config (editable settings)
 	api.HandleFunc("/config", configH.Get).Methods("GET")

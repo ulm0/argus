@@ -1,14 +1,28 @@
 "use client";
 
 import { memo } from "react";
+import {
+  PiArrowFatLeftFill,
+  PiArrowFatLeftLight,
+  PiArrowFatRightFill,
+  PiArrowFatRightLight,
+} from "react-icons/pi";
 import { AutopilotState, GearState } from "@/lib/sei-parser";
 import type { SeiMetadata } from "@/lib/sei-parser";
 import { useSpeedUnit, mpsToUnit } from "@/lib/useSpeedUnit";
+import CornerResize from "./CornerResize";
+
+// Allowed scale range for the HUD overlay; kept in sync with the wheel-based
+// resize logic in DashcamPlayer.
+const HUD_SCALE_MIN = 0.7;
+const HUD_SCALE_MAX = 1.8;
 
 interface ArgusHUDProps {
   sei: SeiMetadata | null;
   visible: boolean;
   scale?: number;
+  onScaleWheel?: (e: React.WheelEvent<HTMLDivElement>) => void;
+  onScaleChange?: (next: number) => void;
 }
 
 const GEAR_LABELS: Record<GearState, string> = {
@@ -20,12 +34,12 @@ const GEAR_LABELS: Record<GearState, string> = {
 
 const AP_LABELS: Record<AutopilotState, string> = {
   [AutopilotState.NONE]: "",
-  [AutopilotState.SELF_DRIVING]: "Full Self-Driving",
+  [AutopilotState.SELF_DRIVING]: "Self Driving",
   [AutopilotState.AUTOSTEER]: "Autosteer",
-  [AutopilotState.TACC]: "Traffic-Aware Cruise",
+  [AutopilotState.TACC]: "Cruise",
 };
 
-function ArgusHUD({ sei, visible, scale = 1 }: ArgusHUDProps) {
+function ArgusHUD({ sei, visible, scale = 1, onScaleWheel, onScaleChange }: ArgusHUDProps) {
   const [speedUnit] = useSpeedUnit();
 
   if (!visible) return null;
@@ -36,117 +50,121 @@ function ArgusHUD({ sei, visible, scale = 1 }: ArgusHUDProps) {
   const leftBlinker = sei?.blinkerOnLeft ?? false;
   const rightBlinker = sei?.blinkerOnRight ?? false;
   const brakeOn = sei?.brakeApplied ?? false;
-  const throttle = sei
-    ? Math.min(100, Math.max(0, sei.acceleratorPedalPosition <= 1.2
-        ? sei.acceleratorPedalPosition * 100
-        : sei.acceleratorPedalPosition))
-    : 0;
+  // acceleratorPedalPosition can come as 0..1 (fraction) or 0..100 (percent)
+  const rawThrottle = sei?.acceleratorPedalPosition ?? 0;
+  const throttlePct = Math.max(
+    0,
+    Math.min(100, rawThrottle <= 1.2 ? rawThrottle * 100 : rawThrottle),
+  );
   const apState = sei?.autopilotState ?? AutopilotState.NONE;
-  const apLabel = AP_LABELS[apState] ?? "";
+  const apLabel = AP_LABELS[apState] || "";
 
   return (
     <div
-      className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center"
+      className="absolute inset-x-0 top-3 z-20 flex justify-center"
       style={{ transformOrigin: "top center", transform: `scale(${scale})` }}
+      onWheel={onScaleWheel}
+      title={`HUD size: ${scale.toFixed(2)}x (scroll or drag corner to resize)`}
     >
       <div
-        className="border border-white/[0.14] shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
+        className="group relative border border-white/[0.10] shadow-[0_12px_32px_rgba(0,0,0,0.35)]"
         style={{
-          padding: "6px 10px 8px",
+          width: "320px",
+          padding: "10px 14px 12px",
           borderRadius: "18px",
           backdropFilter: "blur(14px)",
-          background: "rgba(10, 10, 12, 0.38)",
+          background: "rgba(22, 26, 30, 0.78)",
         }}
       >
+        {onScaleChange && (
+          <CornerResize
+            scale={scale}
+            onChange={onScaleChange}
+            min={HUD_SCALE_MIN}
+            max={HUD_SCALE_MAX}
+            corner="br"
+          />
+        )}
+        {/* Row 1: corner badges + arrows + speed */}
         <div
-          className="items-center"
+          className="grid items-center"
           style={{
-            display: "grid",
-            gridTemplateColumns: "auto 1fr 32px 3ch 32px 1fr auto",
-            gridTemplateRows: "auto auto",
-            gridTemplateAreas:
-              '"gear . left speed right . wheel" "brake . autopilot autopilot autopilot . throttle"',
+            gridTemplateColumns: "32px 22px 1fr 22px 32px",
             columnGap: "8px",
-            rowGap: "8px",
           }}
         >
-          {/* Gear */}
+          {/* Gear pill */}
           <div
-            style={{ gridArea: "gear" }}
-            className="rounded-md bg-white/10 px-3 py-1.5 text-xs font-extrabold text-white/95"
+            className="flex h-7 w-7 items-center justify-center rounded-full text-[12px] font-bold text-white"
+            style={{ background: "rgba(45, 101, 255, 0.85)" }}
           >
             {gear}
           </div>
 
-          {/* Left blinker */}
-          <Blinker side="left" active={leftBlinker} />
+          {/* Left blinker arrow */}
+          <ArrowBlinker side="left" active={leftBlinker} />
 
           {/* Speed */}
-          <div
-            style={{ gridArea: "speed", transform: "translateY(16px)" }}
-            className="flex flex-col items-center leading-none"
-          >
+          <div className="flex flex-col items-center leading-none">
             <span
-              className="text-[28px] font-extrabold text-white/95"
-              style={{ fontVariantNumeric: "tabular-nums" }}
+              className="text-[36px] font-bold text-white/95"
+              style={{ fontVariantNumeric: "tabular-nums", lineHeight: "1" }}
             >
               {speed}
             </span>
-            <span className="mt-1 text-xs text-white/80">{speedUnit.toUpperCase()}</span>
+            <span className="mt-1 text-[11px] font-semibold tracking-wider text-white/70">
+              {speedUnit.toUpperCase()}
+            </span>
           </div>
 
-          {/* Right blinker */}
-          <Blinker side="right" active={rightBlinker} />
+          {/* Right blinker arrow */}
+          <ArrowBlinker side="right" active={rightBlinker} />
 
           {/* Steering wheel */}
           <div
-            style={{ gridArea: "wheel", transform: "translateY(16px)" }}
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-white/[0.18] bg-black/30"
+            className="flex h-7 w-7 items-center justify-center rounded-full text-white/75"
+            style={{ background: "rgba(255,255,255,0.06)" }}
           >
             <svg
-              className="h-[26px] w-[26px] text-white/90"
+              className="h-4 w-4"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth={1.5}
+              strokeWidth={1.6}
               style={{
                 transform: `rotate(${wheelAngle}deg)`,
                 transition: "transform 0.1s ease-out",
               }}
             >
               <circle cx="12" cy="12" r="9" />
-              <circle cx="12" cy="12" r="3" />
-              <line x1="12" y1="3" x2="12" y2="9" />
-              <line x1="3" y1="12" x2="9" y2="12" />
-              <line x1="15" y1="12" x2="21" y2="12" />
+              <circle cx="12" cy="12" r="2.5" />
+              <line x1="12" y1="3" x2="12" y2="9.5" />
+              <line x1="3" y1="12" x2="9.5" y2="12" />
+              <line x1="14.5" y1="12" x2="21" y2="12" />
             </svg>
           </div>
+        </div>
 
-          {/* Brake pedal */}
+        {/* Row 2: brake pedal + autopilot label + throttle pedal */}
+        <div
+          className="mt-1 grid items-center"
+          style={{ gridTemplateColumns: "32px 1fr 32px", columnGap: "8px" }}
+        >
           <PedalIndicator
-            gridArea="brake"
-            fill={brakeOn ? 100 : 0}
-            color="rgba(255, 90, 90, 0.75)"
-            icon="brake"
+            kind="brake"
+            fillPct={brakeOn ? 100 : 0}
+            color="rgba(255, 90, 90, 0.85)"
           />
-
-          {/* Autopilot */}
           <div
-            style={{ gridArea: "autopilot" }}
-            className="text-center text-[11px] font-semibold tracking-wide"
+            className="truncate text-center text-[12px] font-semibold leading-tight"
+            style={{ color: "#1f6dff" }}
           >
-            {apLabel
-              ? <span className="text-[#32c759]">{apLabel}</span>
-              : <span className="text-white/20">—</span>
-            }
+            {apLabel}
           </div>
-
-          {/* Throttle pedal */}
           <PedalIndicator
-            gridArea="throttle"
-            fill={throttle}
-            color="rgba(120, 255, 120, 0.7)"
-            icon="throttle"
+            kind="throttle"
+            fillPct={throttlePct}
+            color="rgba(120, 220, 120, 0.85)"
           />
         </div>
       </div>
@@ -156,83 +174,79 @@ function ArgusHUD({ sei, visible, scale = 1 }: ArgusHUDProps) {
 
 export default memo(ArgusHUD);
 
-function Blinker({ side, active }: { side: "left" | "right"; active: boolean }) {
+function ArrowBlinker({ side, active }: { side: "left" | "right"; active: boolean }) {
+  // Use the filled variant when the blinker is on so it reads as a solid green
+  // arrow (matches the in-car cluster behavior); thin outline when idle.
+  const Icon = active
+    ? side === "left"
+      ? PiArrowFatLeftFill
+      : PiArrowFatRightFill
+    : side === "left"
+      ? PiArrowFatLeftLight
+      : PiArrowFatRightLight;
   return (
-    <div
+    <span
+      className={active ? "text-[#25c05a]" : "text-white/30"}
       style={{
-        gridArea: side,
-        transform: "translateY(16px)",
+        transition: "color 0.1s ease-out",
+        display: "inline-flex",
+        justifyContent: "center",
       }}
-      className={`
-        grid h-6 w-8 place-items-center rounded-[10px] border text-sm
-        transition-all
-        ${active
-          ? "border-[rgba(120,255,120,0.45)] bg-[rgba(120,255,120,0.18)] opacity-100 animate-pulse"
-          : "border-white/[0.15] opacity-40"
-        }
-      `}
     >
-      <svg
-        className="h-4 w-4 text-white/90"
-        viewBox="0 0 24 24"
-        fill="currentColor"
-      >
-        {side === "left" ? (
-          <path d="M14 7l-5 5 5 5V7z" />
-        ) : (
-          <path d="M10 17l5-5-5-5v10z" />
-        )}
-      </svg>
-    </div>
+      <Icon size={22} />
+    </span>
   );
 }
 
 function PedalIndicator({
-  gridArea,
-  fill,
+  kind,
+  fillPct,
   color,
-  icon,
 }: {
-  gridArea: string;
-  fill: number;
+  kind: "brake" | "throttle";
+  fillPct: number;
   color: string;
-  icon: "brake" | "throttle";
 }) {
-  const clampedFill = Math.min(100, Math.max(0, fill));
+  const clamped = Math.min(100, Math.max(0, fillPct));
 
   return (
     <div
-      style={{ gridArea }}
-      className="relative flex h-8 w-8 items-center justify-center rounded-full"
+      className="relative flex h-7 w-7 items-center justify-center rounded-full"
+      style={{
+        background: "rgba(255,255,255,0.05)",
+        border: "1px solid rgba(255,255,255,0.10)",
+      }}
     >
-      <div className="absolute inset-1 rounded-full bg-black/40" />
-      <div className="absolute inset-1 overflow-hidden rounded-full">
+      {/* Proportional fill from bottom */}
+      <div
+        className="absolute inset-0 overflow-hidden rounded-full"
+        aria-hidden="true"
+      >
         <div
           className="absolute inset-x-0 bottom-0"
           style={{
-            height: `${clampedFill}%`,
+            height: `${clamped}%`,
             background: color,
             transition: "height 0.1s ease-out",
           }}
         />
       </div>
+      {/* Pedal icon */}
       <svg
-        className="relative z-10 h-6 w-6"
+        className="relative z-10 h-4 w-4"
         viewBox="0 0 24 24"
         fill="none"
-        stroke="rgba(190,190,190,0.9)"
-        strokeWidth={1.5}
+        stroke="rgba(230, 230, 230, 0.92)"
+        strokeWidth={1.6}
         strokeLinecap="round"
         strokeLinejoin="round"
       >
-        {icon === "brake" ? (
-          /* Brake: wide rectangular pad + centered stem */
+        {kind === "brake" ? (
           <>
             <rect x="4" y="13" width="16" height="8" rx="2.5" />
-            <rect x="9" y="3"  width="6"  height="10" rx="1.5" />
+            <rect x="9" y="3" width="6" height="10" rx="1.5" />
           </>
         ) : (
-          /* Gas: narrow stem, angled knee, narrower vertical pad */
           <>
             <rect x="10" y="3" width="4" height="6" rx="1.5" />
             <path d="M14 9 L14 14 Q14 16 16 16 L16 21 Q16 21 14 21 L10 21 Q8 21 8 19 L8 16" />

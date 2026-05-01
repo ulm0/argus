@@ -9,6 +9,7 @@ import (
 	"syscall"
 
 	"github.com/ulm0/argus/internal/logger"
+	"golang.org/x/sys/unix"
 )
 
 func (m *Manager) mountLoopReadOnlyUserImpl(source, target, fsType string, uid, gid int) error {
@@ -79,24 +80,32 @@ func inPID1Namespace(fn func() error) error {
 	}
 	defer selfNsFd.Close()
 
-	if err := setns(int(nsFd.Fd()), 0); err != nil {
+	// When already in PID 1's mount namespace (normal for systemd services
+	// without a private mount namespace), setns(..., CLONE_NEWNS) can return
+	// EINVAL. Skip the syscall — mounts apply where we already are.
+	var selfStat, pid1Stat syscall.Stat_t
+	if err := syscall.Fstat(int(selfNsFd.Fd()), &selfStat); err != nil {
+		return fn()
+	}
+	if err := syscall.Fstat(int(nsFd.Fd()), &pid1Stat); err != nil {
+		return fn()
+	}
+	if selfStat.Ino == pid1Stat.Ino && selfStat.Dev == pid1Stat.Dev {
+		return fn()
+	}
+
+	// Linux 3.8+ requires nstype matching the fd; 0 yields EINVAL. Use
+	// CLONE_NEWNS for mount namespaces (see setns(2)).
+	if err := unix.Setns(int(nsFd.Fd()), unix.CLONE_NEWNS); err != nil {
 		logger.L.WithError(err).Warn("setns failed, running in current namespace")
 		return fn()
 	}
 
 	result := fn()
 
-	if err := setns(int(selfNsFd.Fd()), 0); err != nil {
+	if err := unix.Setns(int(selfNsFd.Fd()), unix.CLONE_NEWNS); err != nil {
 		logger.L.WithError(err).Error("failed to restore mount namespace")
 	}
 
 	return result
-}
-
-func setns(fd int, nstype int) error {
-	_, _, errno := syscall.RawSyscall(308, uintptr(fd), uintptr(nstype), 0)
-	if errno != 0 {
-		return errno
-	}
-	return nil
 }

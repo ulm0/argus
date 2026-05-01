@@ -61,8 +61,12 @@ func (o *Optimizer) setTXQueueLen(iface string, length int) {
 }
 
 func (o *Optimizer) enableRTSCTS(iface string) {
+	// brcmfmac (Pi Zero 2 W / Pi 4 onboard WiFi) does not expose RTS
+	// threshold control via nl80211 and returns EOPNOTSUPP. Logging at
+	// debug level keeps noise out of production logs while preserving
+	// the optimization attempt for hardware that supports it.
 	if err := exec.Command("iw", "dev", iface, "set", "rts", "500").Run(); err != nil {
-		logger.L.WithError(err).Warn("enable RTS/CTS failed")
+		logger.L.WithError(err).Debug("enable RTS/CTS not supported by driver")
 	}
 }
 

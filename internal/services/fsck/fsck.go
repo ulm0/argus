@@ -21,9 +21,18 @@ const (
 	StatusFailed  Status = "failed"
 )
 
+type Mode string
+
+const (
+	ModeQuick  Mode = "quick"
+	ModeRepair Mode = "repair"
+)
+
 type CheckResult struct {
-	Partition string    `json:"partition"`
-	StartedAt time.Time `json:"started_at"`
+	Partition  string    `json:"partition"`
+	Mode       Mode      `json:"mode,omitempty"`
+	FSType     string    `json:"fs_type,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at,omitempty"`
 	Status     Status    `json:"status"`
 	Output     string    `json:"output,omitempty"`
@@ -71,13 +80,18 @@ func (r *Runner) saveHistory() {
 	os.WriteFile(r.historyFile, data, 0644)
 }
 
-// Start begins an fsck check on the specified partitions.
-func (r *Runner) Start(partitions []string) error {
+// Start begins an fsck check on the specified partitions in the requested mode.
+// Empty mode is treated as ModeQuick (read-only check).
+func (r *Runner) Start(partitions []string, mode Mode) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if r.running {
 		return fmt.Errorf("fsck is already running")
+	}
+
+	if mode != ModeQuick && mode != ModeRepair {
+		mode = ModeQuick
 	}
 
 	r.running = true
@@ -101,6 +115,7 @@ func (r *Runner) Start(partitions []string) error {
 
 			result := CheckResult{
 				Partition: part,
+				Mode:      mode,
 				StartedAt: time.Now(),
 				Status:    StatusRunning,
 			}
@@ -112,36 +127,46 @@ func (r *Runner) Start(partitions []string) error {
 			imgPath := r.resolveImagePath(part)
 			if imgPath == "" {
 				result.Status = StatusFailed
-				result.ErrorMsg = "unknown partition: " + part
+				result.ErrorMsg = "unknown or disabled partition: " + part
 				result.FinishedAt = time.Now()
 				result.ExitCode = -1
 			} else {
-				cmd := exec.Command("fsck.fat", "-n", "-v", imgPath)
-
-				r.mu.Lock()
-				r.currentCmd = cmd
-				r.mu.Unlock()
-
-				output, err := cmd.CombinedOutput()
-
-				r.mu.Lock()
-				r.currentCmd = nil
-				r.mu.Unlock()
-
-				result.Output = string(output)
-				result.FinishedAt = time.Now()
-
+				fsType := r.resolveFSType(part)
+				bin, args, err := buildFsckCommand(fsType, mode, imgPath)
+				result.FSType = fsType
 				if err != nil {
-					if exitErr, ok := err.(*exec.ExitError); ok {
-						result.ExitCode = exitErr.ExitCode()
-					} else {
-						result.ExitCode = -1
-					}
 					result.Status = StatusFailed
 					result.ErrorMsg = err.Error()
+					result.FinishedAt = time.Now()
+					result.ExitCode = -1
 				} else {
-					result.ExitCode = 0
-					result.Status = StatusDone
+					cmd := exec.Command(bin, args...)
+
+					r.mu.Lock()
+					r.currentCmd = cmd
+					r.mu.Unlock()
+
+					output, runErr := cmd.CombinedOutput()
+
+					r.mu.Lock()
+					r.currentCmd = nil
+					r.mu.Unlock()
+
+					result.Output = string(output)
+					result.FinishedAt = time.Now()
+
+					if runErr != nil {
+						if exitErr, ok := runErr.(*exec.ExitError); ok {
+							result.ExitCode = exitErr.ExitCode()
+						} else {
+							result.ExitCode = -1
+						}
+						result.Status = StatusFailed
+						result.ErrorMsg = runErr.Error()
+					} else {
+						result.ExitCode = 0
+						result.Status = StatusDone
+					}
 				}
 			}
 
@@ -233,5 +258,47 @@ func (r *Runner) resolveImagePath(partition string) string {
 		return ""
 	default:
 		return ""
+	}
+}
+
+// resolveFSType returns the on-disk filesystem type for a partition, matching
+// the layout produced by `argus setup` (see cmd/argus/cmd/setup.go).
+//   - part1 (TeslaCam)         → exfat (videos may exceed 4 GB, FAT32 cannot hold them)
+//   - part2 (LightShow/Chimes) → vfat
+//   - part3 (Music)            → cfg.DiskImages.MusicFS (defaults to fat32 → vfat)
+func (r *Runner) resolveFSType(partition string) string {
+	switch partition {
+	case "part1":
+		return "exfat"
+	case "part2":
+		return "vfat"
+	case "part3":
+		if r.cfg.DiskImages.MusicFS == "exfat" {
+			return "exfat"
+		}
+		return "vfat"
+	default:
+		return ""
+	}
+}
+
+// buildFsckCommand picks the right fsck binary and flags for a (fsType, mode) pair.
+// Quick mode is read-only (-n); Repair applies fixes non-interactively (-y / -a).
+func buildFsckCommand(fsType string, mode Mode, imgPath string) (string, []string, error) {
+	switch fsType {
+	case "exfat":
+		// exfatprogs: -n no-action (check only), -y repair without prompts.
+		if mode == ModeRepair {
+			return "fsck.exfat", []string{"-y", imgPath}, nil
+		}
+		return "fsck.exfat", []string{"-n", imgPath}, nil
+	case "vfat", "fat", "fat32", "fat16", "fat12":
+		// dosfstools: -n no-action, -a auto-repair without prompts. -v verbose.
+		if mode == ModeRepair {
+			return "fsck.fat", []string{"-a", "-v", imgPath}, nil
+		}
+		return "fsck.fat", []string{"-n", "-v", imgPath}, nil
+	default:
+		return "", nil, fmt.Errorf("no fsck handler for filesystem type %q", fsType)
 	}
 }

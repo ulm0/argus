@@ -1,6 +1,7 @@
 package video
 
 import (
+	"archive/zip"
 	"crypto/md5"
 	"encoding/binary"
 	"encoding/json"
@@ -485,38 +486,94 @@ func computeStartingClipIndex(clips []string, datetime string) int {
 	return best
 }
 
-// CreateEventZip creates a ZIP archive of all videos in an event.
-func (s *Service) CreateEventZip(folderPath, eventName string) (string, error) {
+// EventArchiveFile is a single file scheduled to be added to an event archive.
+type EventArchiveFile struct {
+	Path string // absolute source path on disk
+	Name string // entry name inside the archive
+}
+
+// CollectEventArchiveFiles returns all video and metadata files that belong
+// to an event, sorted by archive name. Returns an error if the event
+// directory is missing or contains nothing archivable. Performing this scan
+// up-front lets HTTP callers respond with a JSON error before they start
+// streaming the ZIP body.
+func (s *Service) CollectEventArchiveFiles(folderPath, eventName string) ([]EventArchiveFile, error) {
 	eventDir := filepath.Join(folderPath, filepath.Clean(eventName))
 	if !strings.HasPrefix(eventDir, folderPath+string(filepath.Separator)) {
-		return "", fmt.Errorf("invalid event name: path traversal detected")
+		return nil, fmt.Errorf("invalid event name: path traversal detected")
 	}
 
 	entries, err := os.ReadDir(eventDir)
 	if err != nil {
-		return "", err
+		return nil, fmt.Errorf("read event dir: %w", err)
 	}
 
-	// Use a randomly-named temp file to avoid name-collision races.
-	tmpFile, err := os.CreateTemp("", "argus-event-*.zip")
-	if err != nil {
-		return "", fmt.Errorf("create temp zip: %w", err)
-	}
-	zipPath := tmpFile.Name()
-	tmpFile.Close()
-
-	args := []string{"-j", zipPath}
+	var files []EventArchiveFile
 	for _, e := range entries {
-		if !e.IsDir() && isVideoFile(e.Name()) {
-			args = append(args, filepath.Join(eventDir, e.Name()))
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !isVideoFile(name) && !isEventMetadataFile(name) {
+			continue
+		}
+		files = append(files, EventArchiveFile{
+			Path: filepath.Join(eventDir, name),
+			Name: name,
+		})
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("event %q has no archivable files", eventName)
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+	return files, nil
+}
+
+// WriteEventZip streams a DEFLATE-compressed ZIP of files into w. The caller
+// must invoke CollectEventArchiveFiles first to validate the event; mid-
+// stream errors here cannot be surfaced to the HTTP client (headers will
+// already be flushed) and should be logged instead.
+func WriteEventZip(w io.Writer, files []EventArchiveFile) error {
+	zw := zip.NewWriter(w)
+	for _, f := range files {
+		if err := addFileToZip(zw, f); err != nil {
+			_ = zw.Close()
+			return fmt.Errorf("zip %q: %w", f.Name, err)
 		}
 	}
+	return zw.Close()
+}
 
-	if err := exec.Command("zip", args...).Run(); err != nil {
-		os.Remove(zipPath)
-		return "", err
+func addFileToZip(zw *zip.Writer, f EventArchiveFile) error {
+	info, err := os.Stat(f.Path)
+	if err != nil {
+		return err
 	}
-	return zipPath, nil
+	header, err := zip.FileInfoHeader(info)
+	if err != nil {
+		return err
+	}
+	header.Name = f.Name
+	header.Method = zip.Deflate
+	src, err := os.Open(f.Path)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := zw.CreateHeader(header)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(dst, src)
+	return err
+}
+
+func isEventMetadataFile(name string) bool {
+	switch strings.ToLower(name) {
+	case "event.json", "thumb.png":
+		return true
+	}
+	return false
 }
 
 // FormatFileSize returns a human-readable file size string.

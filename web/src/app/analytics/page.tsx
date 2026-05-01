@@ -6,6 +6,7 @@ import type {
   CompleteAnalytics,
   PartitionUsage,
   VideoStats,
+  FsckMode,
   FsckStatus,
   FsckCheckResult,
   SystemMetrics,
@@ -94,10 +95,10 @@ export default function AnalyticsPage() {
     return () => clearInterval(interval);
   }, [fsckRunning, showToast]);
 
-  const handleStartFsck = async () => {
+  const handleStartFsck = async (partitions: string[] | undefined, mode: FsckMode) => {
     try {
-      await api.startFsck();
-      showToast("Check started");
+      await api.startFsck(partitions, mode);
+      showToast(`${mode === "repair" ? "Repair" : "Check"} started`);
       setFsckRunning(true);
       setFsckStatus(await api.getFsckStatus());
     } catch (e) {
@@ -305,13 +306,18 @@ export default function AnalyticsPage() {
 
       {/* Fsck Controls */}
       <section className="rounded bg-[var(--color-bg-card)] p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">Filesystem Check</h2>
+        <div className="flex items-baseline justify-between gap-4">
+          <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">Filesystem Check</h2>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Quick = read-only verification · Repair = applies non-interactive fixes
+          </p>
+        </div>
 
         {fsckStatus?.running && (
           <div className="mt-4 rounded-sm bg-[var(--color-accent-subtle)] p-4">
             <div className="flex items-center justify-between">
               <p className="text-sm font-medium text-[var(--color-accent)]">
-                Running on {fsckStatus.partition}
+                Running on {fsckStatus.partition || "…"}
               </p>
               <button onClick={handleCancelFsck} className="rounded bg-[var(--color-danger-bg)] px-3 py-1.5 text-sm font-medium text-[var(--color-danger)] transition-colors hover:opacity-80">
                 Cancel
@@ -320,12 +326,41 @@ export default function AnalyticsPage() {
           </div>
         )}
 
-        <div className="mt-4 flex gap-3">
-          <button onClick={handleStartFsck} disabled={fsckRunning} className="rounded bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[var(--color-accent-hover)] disabled:opacity-50">
-            Quick Check
+        {/* Per-partition controls */}
+        <div className="mt-4 space-y-2">
+          {partitionUsage.map((p) => (
+            <div key={p.name} className="flex flex-wrap items-center justify-between gap-3 rounded-sm bg-[var(--color-bg-card-nested)] px-3 py-2">
+              <div className="text-sm">
+                <span className="font-medium text-[var(--color-text-primary)]">{p.label || p.name}</span>
+                <span className="ml-2 text-xs text-[var(--color-text-muted)]">{p.name}</span>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleStartFsck([p.name], "quick")}
+                  disabled={fsckRunning}
+                  className="rounded bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-[var(--color-accent-hover)] disabled:opacity-50"
+                >
+                  Quick Check
+                </button>
+                <button
+                  onClick={() => handleStartFsck([p.name], "repair")}
+                  disabled={fsckRunning}
+                  className="rounded-sm border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] disabled:opacity-50"
+                >
+                  Repair
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* All-partitions controls */}
+        <div className="mt-4 flex flex-wrap gap-3 border-t border-[var(--color-border)] pt-4">
+          <button onClick={() => handleStartFsck(undefined, "quick")} disabled={fsckRunning} className="rounded bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-[var(--color-accent-hover)] disabled:opacity-50">
+            Quick Check (all)
           </button>
-          <button onClick={handleStartFsck} disabled={fsckRunning} className="rounded-sm border border-[var(--color-border)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] disabled:opacity-50">
-            Repair
+          <button onClick={() => handleStartFsck(undefined, "repair")} disabled={fsckRunning} className="rounded-sm border border-[var(--color-border)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] disabled:opacity-50">
+            Repair (all)
           </button>
         </div>
 
@@ -333,17 +368,45 @@ export default function AnalyticsPage() {
           <div className="mt-6">
             <h3 className="text-sm font-semibold text-[var(--color-text-secondary)]">History</h3>
             <div className="mt-2 space-y-2">
-              {fsckHistory.slice(0, 5).map((h, i) => (
-                <div key={i} className="flex items-center justify-between rounded-sm bg-[var(--color-bg-card-nested)] px-3 py-2 text-sm">
-                  <div>
-                    <span className="font-medium text-[var(--color-text-primary)]">{h.partition}</span>
-                    <span className="ml-2 text-xs text-[var(--color-text-muted)]">{formatDate(h.started_at)}</span>
-                  </div>
-                  <span className={`rounded px-2 py-0.5 text-xs font-medium ${h.status === "done" ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" : h.status === "failed" ? "bg-[var(--color-danger-bg)] text-[var(--color-danger)]" : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"}`}>
-                    {h.status}
-                  </span>
-                </div>
-              ))}
+              {fsckHistory.slice().reverse().slice(0, 10).map((h, i) => {
+                const detail = (h.output || "").trim() || h.error || "";
+                return (
+                  <details key={i} className="group rounded-sm bg-[var(--color-bg-card-nested)] px-3 py-2 text-sm">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-baseline gap-2">
+                        <span className="font-medium text-[var(--color-text-primary)]">{h.partition}</span>
+                        {h.fs_type && (
+                          <span className="rounded bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
+                            {h.fs_type}
+                          </span>
+                        )}
+                        {h.mode && (
+                          <span className="rounded bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
+                            {h.mode}
+                          </span>
+                        )}
+                        <span className="text-xs text-[var(--color-text-muted)]">{formatDate(h.started_at)}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] tabular-nums text-[var(--color-text-muted)]">
+                          exit {h.exit_code}
+                        </span>
+                        <span className={`rounded px-2 py-0.5 text-xs font-medium ${h.status === "done" ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" : h.status === "failed" ? "bg-[var(--color-danger-bg)] text-[var(--color-danger)]" : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"}`}>
+                          {h.status}
+                        </span>
+                        <span className="text-xs text-[var(--color-text-muted)] transition-transform group-open:rotate-180">▾</span>
+                      </div>
+                    </summary>
+                    {detail ? (
+                      <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-black/30 p-2 text-[11px] leading-snug text-[var(--color-text-secondary)]">
+                        {detail}
+                      </pre>
+                    ) : (
+                      <p className="mt-2 text-xs italic text-[var(--color-text-muted)]">No output captured.</p>
+                    )}
+                  </details>
+                );
+              })}
             </div>
           </div>
         )}

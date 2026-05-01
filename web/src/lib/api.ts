@@ -7,7 +7,6 @@ import type {
   ChimeGroupsResponse,
   ChimeListResponse,
   ChunkUploadResponse,
-  CleanupPlan,
   CleanupPolicy,
   CleanupPreviewResponse,
   CleanupReport,
@@ -16,6 +15,7 @@ import type {
   ConfigResponse,
   FsckCheckResult,
   FsckHistoryResponse,
+  FsckMode,
   FsckStatus,
   GadgetState,
   HealthStatus,
@@ -35,6 +35,7 @@ import type {
   TelegramStatus,
   UpdateStatus,
   UpdateConfigPublic,
+  ViewerPrefsConfigPublic,
   VideoEvent,
   VideoEventsResponse,
   VideoListResponse,
@@ -422,16 +423,15 @@ export function executeCleanup(dryRun = false): Promise<CleanupReport> {
   return post<CleanupReport>("/api/cleanup/execute", { dry_run: dryRun });
 }
 
-export function calculateCleanup(): Promise<CleanupPlan> {
-  return post<CleanupPlan>("/api/cleanup/calculate");
-}
-
 // ──────────────────────────────────────────────
 // Fsck
 // ──────────────────────────────────────────────
 
-export function startFsck(partitions?: string[]): Promise<StatusResponse> {
-  return post<StatusResponse>("/api/fsck/start", partitions ? { partitions } : {});
+export function startFsck(partitions?: string[], mode?: FsckMode): Promise<StatusResponse> {
+  const body: { partitions?: string[]; mode?: FsckMode } = {};
+  if (partitions && partitions.length > 0) body.partitions = partitions;
+  if (mode) body.mode = mode;
+  return post<StatusResponse>("/api/fsck/start", body);
 }
 
 export function getFsckStatus(): Promise<FsckStatus> {
@@ -520,6 +520,18 @@ export function getUpdateStatus(): Promise<UpdateStatus> {
 }
 
 // ──────────────────────────────────────────────
+// System power
+// ──────────────────────────────────────────────
+
+export function rebootSystem(): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/system/reboot");
+}
+
+export function powerOffSystem(): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/system/poweroff");
+}
+
+// ──────────────────────────────────────────────
 // Samba
 // ──────────────────────────────────────────────
 
@@ -529,6 +541,10 @@ export function getSambaStatus(): Promise<SambaStatus> {
 
 export function setSambaPassword(password: string): Promise<StatusResponse> {
   return post<StatusResponse>("/api/samba/set-password", { password });
+}
+
+export function setSambaEnabled(enabled: boolean): Promise<{ enabled: boolean }> {
+  return post<{ enabled: boolean }>("/api/samba/set-enabled", { enabled });
 }
 
 export function restartSamba(): Promise<StatusResponse> {
@@ -556,6 +572,7 @@ type ConfigPatch = {
   telegram?: Partial<TelegramConfigPublic>;
   update?: Partial<UpdateConfigPublic>;
   startup?: Partial<StartupConfigPublic>;
+  viewer_prefs?: Partial<ViewerPrefsConfigPublic>;
   log_level?: string;
 };
 

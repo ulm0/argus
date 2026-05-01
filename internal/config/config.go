@@ -22,6 +22,7 @@ type Config struct {
 	Telegram     TelegramConfig     `yaml:"telegram"`
 	Webhook      WebhookConfig      `yaml:"webhook"`
 	Update       UpdateConfig       `yaml:"update"`
+	ViewerPrefs  ViewerPrefsConfig  `yaml:"viewer_prefs"`
 	LogLevel     string             `yaml:"log_level"`
 
 	// Computed paths (not from YAML)
@@ -77,7 +78,11 @@ type SetupConfig struct {
 
 type NetworkConfig struct {
 	SambaPassword string `yaml:"samba_password"`
-	WebPort       int    `yaml:"web_port"`
+	// SambaEnabled gates whether smbd/nmbd are managed/started by Argus.
+	// Pointer so we can distinguish "unset" (defaults to enabled to preserve
+	// historical behavior on upgrade) from an explicit false.
+	SambaEnabled *bool `yaml:"samba_enabled,omitempty"`
+	WebPort      int   `yaml:"web_port"`
 }
 
 type OfflineAPConfig struct {
@@ -142,6 +147,14 @@ type UpdateConfig struct {
 	AutoUpdate     bool   `yaml:"auto_update"`
 	CheckOnStartup bool   `yaml:"check_on_startup"`
 	Channel        string `yaml:"channel"`
+}
+
+// ViewerPrefsConfig stores user-facing display preferences for the dashcam viewer.
+// Persisted server-side so they survive app updates and re-flashes.
+type ViewerPrefsConfig struct {
+	SpeedUnit string  `yaml:"speed_unit"`
+	HudScale  float64 `yaml:"hud_scale,omitempty"`
+	MapScale  float64 `yaml:"map_scale,omitempty"`
 }
 
 const defaultSecretKey = "CHANGE-THIS-TO-A-RANDOM-SECRET-KEY-ON-FIRST-INSTALL"
@@ -252,8 +265,35 @@ func (c *Config) setDefaults() {
 		c.LogLevel = "debug"
 	}
 	if c.System.WatchdogTimeoutSec <= 0 {
+		// 60s matches TeslaUSB/mphacker guidance for large images; the daemon clamps to hardware max.
 		c.System.WatchdogTimeoutSec = 60
+	} else if c.System.WatchdogTimeoutSec < 10 {
+		c.System.WatchdogTimeoutSec = 10
 	}
+	if c.ViewerPrefs.SpeedUnit == "" {
+		c.ViewerPrefs.SpeedUnit = "kph"
+	}
+	if c.ViewerPrefs.HudScale <= 0 {
+		c.ViewerPrefs.HudScale = 1.0
+	}
+	if c.ViewerPrefs.MapScale <= 0 {
+		c.ViewerPrefs.MapScale = 1.0
+	}
+	if c.Network.SambaEnabled == nil {
+		enabled := true
+		c.Network.SambaEnabled = &enabled
+	}
+}
+
+// SambaEnabled reports whether Argus should run/manage Samba.
+// Defaults to true when the field is unset to preserve existing installs.
+func (c *Config) SambaEnabled() bool {
+	return c.Network.SambaEnabled == nil || *c.Network.SambaEnabled
+}
+
+// SetSambaEnabled records the Samba enabled flag.
+func (c *Config) SetSambaEnabled(enabled bool) {
+	c.Network.SambaEnabled = &enabled
 }
 
 func (c *Config) computePaths() {

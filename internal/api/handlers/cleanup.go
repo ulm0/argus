@@ -94,22 +94,6 @@ func (h *CleanupHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
-func (h *CleanupHandler) Calculate(w http.ResponseWriter, r *http.Request) {
-	partitionPath := h.resolvePartition("part1")
-	if partitionPath == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "partition not available"})
-		return
-	}
-
-	plan, err := h.cleanupSvc.CalculateCleanupPlan(partitionPath)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, plan)
-}
-
 func (h *CleanupHandler) resolvePartition(partition string) string {
 	p := partutil.AccessiblePath(h.cfg, partition)
 	if info, err := os.Stat(p); err == nil && info.IsDir() {

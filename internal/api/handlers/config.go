@@ -7,6 +7,7 @@ import (
 
 	"github.com/ulm0/argus/internal/config"
 	"github.com/ulm0/argus/internal/logger"
+	"github.com/ulm0/argus/internal/system/watchdog"
 )
 
 // ConfigHandler exposes config read and partial-update endpoints.
@@ -25,13 +26,14 @@ func NewConfigHandler(cfg *config.Config) *ConfigHandler {
 // explicit in the API contract.
 type configResponse struct {
 	// Editable fields
-	Network   networkConfigPublic  `json:"network"`
-	OfflineAP offlineAPPublic      `json:"offline_ap"`
-	Web       webConfigPublic      `json:"web"`
-	Telegram  telegramConfigPublic `json:"telegram"`
-	Update    updateConfigPublic   `json:"update"`
-	Startup   startupConfigPublic  `json:"startup"`
-	LogLevel  string               `json:"log_level"`
+	Network     networkConfigPublic     `json:"network"`
+	OfflineAP   offlineAPPublic         `json:"offline_ap"`
+	Web         webConfigPublic         `json:"web"`
+	Telegram    telegramConfigPublic    `json:"telegram"`
+	Update      updateConfigPublic      `json:"update"`
+	Startup     startupConfigPublic     `json:"startup"`
+	ViewerPrefs viewerPrefsConfigPublic `json:"viewer_prefs"`
+	LogLevel    string                  `json:"log_level"`
 
 	// Read-only info (not patchable)
 	Storage storageInfo `json:"storage"`
@@ -82,6 +84,12 @@ type updateConfigPublic struct {
 	AutoUpdate     bool   `json:"auto_update"`
 	CheckOnStartup bool   `json:"check_on_startup"`
 	Channel        string `json:"channel"`
+}
+
+type viewerPrefsConfigPublic struct {
+	SpeedUnit string  `json:"speed_unit"`
+	HudScale  float64 `json:"hud_scale"`
+	MapScale  float64 `json:"map_scale"`
 }
 
 type startupConfigPublic struct {
@@ -166,6 +174,11 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 			WatchdogTimeoutSec:     cfg.System.WatchdogTimeoutSec,
 			ReapplySysctlOnStart:   cfg.System.ReapplySysctlOnStart,
 		},
+		ViewerPrefs: viewerPrefsConfigPublic{
+			SpeedUnit: cfg.ViewerPrefs.SpeedUnit,
+			HudScale:  cfg.ViewerPrefs.HudScale,
+			MapScale:  cfg.ViewerPrefs.MapScale,
+		},
 		LogLevel: cfg.LogLevel,
 		Storage: storageInfo{
 			CamName:          cfg.DiskImages.CamName,
@@ -187,13 +200,14 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 // patchRequest contains only the fields that are allowed to be updated.
 type patchRequest struct {
-	Network   *networkPatch   `json:"network,omitempty"`
-	OfflineAP *offlineAPPatch `json:"offline_ap,omitempty"`
-	Web       *webPatch       `json:"web,omitempty"`
-	Telegram  *telegramPatch  `json:"telegram,omitempty"`
-	Update    *updatePatch    `json:"update,omitempty"`
-	Startup   *startupPatch   `json:"startup,omitempty"`
-	LogLevel  *string         `json:"log_level,omitempty"`
+	Network     *networkPatch     `json:"network,omitempty"`
+	OfflineAP   *offlineAPPatch   `json:"offline_ap,omitempty"`
+	Web         *webPatch         `json:"web,omitempty"`
+	Telegram    *telegramPatch    `json:"telegram,omitempty"`
+	Update      *updatePatch      `json:"update,omitempty"`
+	Startup     *startupPatch     `json:"startup,omitempty"`
+	ViewerPrefs *viewerPrefsPatch `json:"viewer_prefs,omitempty"`
+	LogLevel    *string           `json:"log_level,omitempty"`
 }
 
 type networkPatch struct {
@@ -241,6 +255,12 @@ type updatePatch struct {
 	AutoUpdate     *bool   `json:"auto_update,omitempty"`
 	CheckOnStartup *bool   `json:"check_on_startup,omitempty"`
 	Channel        *string `json:"channel,omitempty"`
+}
+
+type viewerPrefsPatch struct {
+	SpeedUnit *string  `json:"speed_unit,omitempty"`
+	HudScale  *float64 `json:"hud_scale,omitempty"`
+	MapScale  *float64 `json:"map_scale,omitempty"`
 }
 
 type startupPatch struct {
@@ -398,11 +418,42 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			cfg.System.ReapplySysctlOnStart = *p.ReapplySysctlOnStart
 		}
 		if p.WatchdogTimeoutSec != nil {
-			if *p.WatchdogTimeoutSec <= 0 {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "watchdog_timeout_sec must be > 0"})
+			// Match Debian watchdog(8) / TeslaUSB-style minimum (low values risk timing issues on Pi).
+			if *p.WatchdogTimeoutSec < 10 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "watchdog_timeout_sec must be >= 10"})
 				return
 			}
 			cfg.System.WatchdogTimeoutSec = *p.WatchdogTimeoutSec
+		}
+	}
+
+	if p := req.ViewerPrefs; p != nil {
+		if p.SpeedUnit != nil {
+			unit := strings.TrimSpace(strings.ToLower(*p.SpeedUnit))
+			if unit != "kph" && unit != "mph" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid speed_unit (must be 'kph' or 'mph')"})
+				return
+			}
+			cfg.ViewerPrefs.SpeedUnit = unit
+		}
+		// HUD/Map scale bounds mirror the limits enforced in the web client
+		// (see DashcamPlayer / ArgusHUD). Accept a slightly wider envelope
+		// here so future client tweaks don't require a backend update.
+		if p.HudScale != nil {
+			v := *p.HudScale
+			if v < 0.5 || v > 2.5 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hud_scale must be in [0.5, 2.5]"})
+				return
+			}
+			cfg.ViewerPrefs.HudScale = v
+		}
+		if p.MapScale != nil {
+			v := *p.MapScale
+			if v < 0.4 || v > 3.0 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "map_scale must be in [0.4, 3.0]"})
+				return
+			}
+			cfg.ViewerPrefs.MapScale = v
 		}
 	}
 
@@ -418,6 +469,12 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	if err := cfg.Save(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save config: " + err.Error()})
 		return
+	}
+
+	if req.Startup != nil && (req.Startup.WatchdogEnabled != nil || req.Startup.WatchdogTimeoutSec != nil) {
+		if err := watchdog.ApplyDaemon(cfg.System.WatchdogEnabled, cfg.System.WatchdogTimeoutSec); err != nil {
+			logger.L.WithError(err).Warn("watchdog daemon apply failed")
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

@@ -294,6 +294,19 @@ export default function SettingsPage() {
     }
   }, [sambaPass, sambaPassConfirm, showToast]);
 
+  const toggleSambaEnabled = useCallback(async (enabled: boolean) => {
+    setSaving("samba-toggle");
+    try {
+      await api.setSambaEnabled(enabled);
+      showToast(enabled ? "Samba enabled" : "Samba disabled");
+      setSambaStatus(await api.getSambaStatus());
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    } finally {
+      setSaving(null);
+    }
+  }, [showToast]);
+
   useEffect(() => {
     loadConfig();
     loadWebhook();
@@ -538,13 +551,17 @@ export default function SettingsPage() {
             />
             <span className="text-sm text-[var(--color-text-primary)]">Enable hardware watchdog</span>
           </label>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Uses the Debian <code className="rounded bg-[var(--color-bg-tertiary)] px-1">watchdog</code> daemon (
+            <code className="rounded bg-[var(--color-bg-tertiary)] px-1">/etc/watchdog.conf</code>).
+          </p>
           <label className={fieldLabel} htmlFor="watchdog-timeout-sec">
             Watchdog timeout (seconds)
           </label>
           <input
             id="watchdog-timeout-sec"
             type="number"
-            min={1}
+            min={10}
             className={inputCls}
             value={watchdogTimeoutSec}
             onChange={(e) => setWatchdogTimeoutSec(Number(e.target.value))}
@@ -840,14 +857,43 @@ export default function SettingsPage() {
             <h2 className="text-lg font-bold text-[var(--color-text-primary)]">Samba File Sharing</h2>
             <p className="mt-1 text-sm text-[var(--color-text-muted)]">Access partitions over the network in edit mode.</p>
           </div>
-          {sambaStatus?.password_set && (
-            <span className="inline-flex items-center gap-1 rounded bg-[var(--color-success-bg)] px-2.5 py-0.5 text-xs font-semibold text-[var(--color-success)]">
-              <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success)]" />
-              Configured
-            </span>
+          {sambaStatus && (
+            sambaStatus.enabled ? (
+              sambaStatus.password_set ? (
+                <span className="inline-flex items-center gap-1 rounded bg-[var(--color-success-bg)] px-2.5 py-0.5 text-xs font-semibold text-[var(--color-success)]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success)]" />
+                  Configured
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 rounded bg-[var(--color-warning-bg)] px-2.5 py-0.5 text-xs font-semibold text-[var(--color-warning)]">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-warning)]" />
+                  No password
+                </span>
+              )
+            ) : (
+              <span className="inline-flex items-center gap-1 rounded bg-[var(--color-bg-tertiary)] px-2.5 py-0.5 text-xs font-semibold text-[var(--color-text-muted)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-text-muted)]" />
+                Disabled
+              </span>
+            )
           )}
         </div>
-        {sambaStatus && sambaStatus.shares.length > 0 && (
+        <label className="mb-4 flex items-center gap-3">
+          <input
+            type="checkbox"
+            checked={!!sambaStatus?.enabled}
+            disabled={!sambaStatus || saving === "samba-toggle"}
+            onChange={(e) => toggleSambaEnabled(e.target.checked)}
+            className="h-4 w-4 rounded accent-[var(--color-accent)]"
+          />
+          <span className="text-sm text-[var(--color-text-primary)]">
+            Enable Samba file sharing
+            {saving === "samba-toggle" && (
+              <span className="ml-2 text-xs text-[var(--color-text-muted)]">applying…</span>
+            )}
+          </span>
+        </label>
+        {sambaStatus && sambaStatus.enabled && sambaStatus.shares.length > 0 && (
           <div className="mb-4 overflow-hidden rounded border border-[var(--color-border)]">
             <table className="w-full text-sm">
               <thead>
@@ -870,27 +916,29 @@ export default function SettingsPage() {
             </table>
           </div>
         )}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label className={fieldLabel} htmlFor="smb-pass">New Password</label>
-            <input id="smb-pass" type="password" className={inputCls} value={sambaPass} onChange={(e) => setSambaPass(e.target.value)} placeholder="Enter new Samba password" />
+        <fieldset disabled={!sambaStatus?.enabled} className="contents">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className={fieldLabel} htmlFor="smb-pass">New Password</label>
+              <input id="smb-pass" type="password" className={inputCls} value={sambaPass} onChange={(e) => setSambaPass(e.target.value)} placeholder="Enter new Samba password" />
+            </div>
+            <div>
+              <label className={fieldLabel} htmlFor="smb-confirm">Confirm Password</label>
+              <input id="smb-confirm" type="password" className={inputCls} value={sambaPassConfirm} onChange={(e) => setSambaPassConfirm(e.target.value)} placeholder="Confirm password" />
+            </div>
           </div>
-          <div>
-            <label className={fieldLabel} htmlFor="smb-confirm">Confirm Password</label>
-            <input id="smb-confirm" type="password" className={inputCls} value={sambaPassConfirm} onChange={(e) => setSambaPassConfirm(e.target.value)} placeholder="Confirm password" />
+          <div className="mt-5 flex flex-wrap gap-2">
+            <button className={btnPrimaryCls} disabled={saving === "samba"} onClick={saveSambaPassword}>
+              {saving === "samba" ? "Saving…" : "Set Password"}
+            </button>
+            <button className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)] disabled:opacity-50" onClick={async () => { await api.restartSamba(); showToast("Samba services restarted"); }}>
+              Restart Services
+            </button>
+            <button className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)] disabled:opacity-50" onClick={async () => { await api.regenerateSambaConfig(); showToast("Samba config regenerated"); }}>
+              Regenerate Config
+            </button>
           </div>
-        </div>
-        <div className="mt-5 flex flex-wrap gap-2">
-          <button className={btnPrimaryCls} disabled={saving === "samba"} onClick={saveSambaPassword}>
-            {saving === "samba" ? "Saving…" : "Set Password"}
-          </button>
-          <button className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]" onClick={async () => { await api.restartSamba(); showToast("Samba services restarted"); }}>
-            Restart Services
-          </button>
-          <button className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]" onClick={async () => { await api.regenerateSambaConfig(); showToast("Samba config regenerated"); }}>
-            Regenerate Config
-          </button>
-        </div>
+        </fieldset>
       </div>
 
       {/* ── Display Preferences ────────────────── */}

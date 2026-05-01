@@ -14,13 +14,23 @@ import { findSeiAtTime, downloadCsv } from "@/lib/sei-parser";
 import type { SeiFrame, SeiMetadata } from "@/lib/sei-parser";
 import { useMapTheme } from "@/lib/useMapTheme";
 import ArgusHUD from "./ArgusHUD";
+import CornerResize from "./CornerResize";
+import { useViewerScale } from "@/lib/useViewerScale";
 
 const MapOverlay = dynamic(() => import("./MapOverlay"), { ssr: false });
+
+// Bounds for overlay scales. Kept in sync with the server-side validation in
+// internal/api/handlers/config.go (which accepts a slightly wider envelope).
+const HUD_SCALE_MIN = 0.7;
+const HUD_SCALE_MAX = 1.8;
+const MAP_SCALE_MIN = 0.6;
+const MAP_SCALE_MAX = 2.2;
 
 interface DashcamPlayerProps {
   event: VideoEvent;
   streamUrlFn: (cameraFile: string) => string;
   telemetryUrlFn: (cameraFile: string) => string;
+  downloadZipUrl?: string;
   onDelete?: () => void;
 }
 
@@ -40,6 +50,7 @@ export default function DashcamPlayer({
   event,
   streamUrlFn,
   telemetryUrlFn,
+  downloadZipUrl,
   onDelete,
 }: DashcamPlayerProps) {
   const cameras = useMemo<CameraName[]>(
@@ -63,10 +74,21 @@ export default function DashcamPlayer({
   const [viewMode, setViewMode] = useState<"single" | "composed">("composed");
   const [mapTheme] = useMapTheme();
 
-  // SEI / HUD state
+  // SEI / HUD state. Overlay toggles still live in localStorage (per-device
+  // UI preference); overlay *scales* are server-persisted so they survive
+  // app updates and re-flashes.
   const [hudEnabled, setHudEnabled] = useState(false);
-  const [hudScale, setHudScale] = useState(1.0);
+  const [hudScale, updateHudScale] = useViewerScale({
+    kind: "hud",
+    min: HUD_SCALE_MIN,
+    max: HUD_SCALE_MAX,
+  });
   const [mapEnabled, setMapEnabled] = useState(true);
+  const [mapScale, updateMapScale] = useViewerScale({
+    kind: "map",
+    min: MAP_SCALE_MIN,
+    max: MAP_SCALE_MAX,
+  });
   const [seiFrames, setSeiFrames] = useState<SeiFrame[]>([]);
   const [currentSei, setCurrentSei] = useState<SeiMetadata | null>(null);
   const [seiLoading, setSeiLoading] = useState(false);
@@ -116,15 +138,14 @@ export default function DashcamPlayer({
     return event.camera_videos[cam] ?? "";
   }, [clips, clipIndex, event.camera_videos]);
 
-  // Restore HUD + map toggles from localStorage
+  // Restore HUD + map toggles from localStorage. Scales are handled by
+  // useViewerScale (server-persisted with localStorage cache).
   useEffect(() => {
     try {
       const hudOn = localStorage.getItem("seiOverlayEnabled") !== "false";
       const mapOn = localStorage.getItem("mapOverlayEnabled") !== "false";
-      const scale = parseFloat(localStorage.getItem("hudScale") ?? "1") || 1;
       setHudEnabled(hudOn);
       setMapEnabled(mapOn);
-      setHudScale(scale);
       if ((hudOn || mapOn) && activeFile && !isEncrypted) {
         loadTelemetry(activeFile);
       }
@@ -366,15 +387,17 @@ export default function DashcamPlayer({
     });
   }, [activeFile, isEncrypted, loadTelemetry, abortSei, hudEnabled, seiFrames.length]);
 
-  const HUD_SCALES = [0.75, 1.0, 1.25, 1.5];
-  const cycleHudScale = useCallback(() => {
-    setHudScale((prev) => {
-      const idx = HUD_SCALES.indexOf(prev);
-      const next = HUD_SCALES[(idx + 1) % HUD_SCALES.length];
-      try { localStorage.setItem("hudScale", String(next)); } catch {}
-      return next;
-    });
-  }, []);
+  const handleHudScaleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const step = e.deltaY < 0 ? 0.1 : -0.1;
+    updateHudScale(hudScale + step);
+  }, [hudScale, updateHudScale]);
+
+  const handleMapScaleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const step = e.deltaY < 0 ? 0.1 : -0.1;
+    updateMapScale(mapScale + step);
+  }, [mapScale, updateMapScale]);
 
   // Switch camera — no-op in composed mode
   const switchCamera = useCallback((cam: CameraName) => {
@@ -480,7 +503,13 @@ export default function DashcamPlayer({
                     />
                   ) : null}
                   {isMaster && (
-                    <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} scale={hudScale} />
+                    <ArgusHUD
+                      sei={currentSei}
+                      visible={hudEnabled && seiFrames.length > 0}
+                      scale={hudScale}
+                      onScaleWheel={handleHudScaleWheel}
+                      onScaleChange={updateHudScale}
+                    />
                   )}
                   {hasCam && !encrypted && (
                     <div className="absolute bottom-1 left-1 rounded px-1 py-0.5 bg-black/50 text-[9px] font-medium text-white/50">
@@ -494,8 +523,21 @@ export default function DashcamPlayer({
 
           {/* Map overlay — bottom-right of composed grid */}
           {mapEnabled && seiFrames.length > 0 && (
-            <div className="absolute bottom-3 right-3 z-20">
-              <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
+            <div
+              className="group absolute bottom-3 right-3 z-20"
+              onWheel={handleMapScaleWheel}
+              title={`Map size: ${mapScale.toFixed(2)}x (scroll or drag corner to resize)`}
+            >
+              <div className="relative" style={{ transform: `scale(${mapScale})`, transformOrigin: "bottom right" }}>
+                <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
+                <CornerResize
+                  scale={mapScale}
+                  onChange={updateMapScale}
+                  min={MAP_SCALE_MIN}
+                  max={MAP_SCALE_MAX}
+                  corner="tl"
+                />
+              </div>
             </div>
           )}
         </div>
@@ -526,12 +568,31 @@ export default function DashcamPlayer({
           )}
 
           {/* Tesla HUD Overlay */}
-          <ArgusHUD sei={currentSei} visible={hudEnabled && seiFrames.length > 0} scale={hudScale} />
+          <ArgusHUD
+            sei={currentSei}
+            visible={hudEnabled && seiFrames.length > 0}
+            scale={hudScale}
+            onScaleWheel={handleHudScaleWheel}
+            onScaleChange={updateHudScale}
+          />
 
           {/* Map overlay — bottom-right */}
           {mapEnabled && seiFrames.length > 0 && (
-            <div className="absolute bottom-3 right-3 z-20">
-              <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
+            <div
+              className="group absolute bottom-3 right-3 z-20"
+              onWheel={handleMapScaleWheel}
+              title={`Map size: ${mapScale.toFixed(2)}x (scroll or drag corner to resize)`}
+            >
+              <div className="relative" style={{ transform: `scale(${mapScale})`, transformOrigin: "bottom right" }}>
+                <MapOverlay seiFrames={seiFrames} currentSei={currentSei} theme={mapTheme} />
+                <CornerResize
+                  scale={mapScale}
+                  onChange={updateMapScale}
+                  min={MAP_SCALE_MIN}
+                  max={MAP_SCALE_MAX}
+                  corner="tl"
+                />
+              </div>
             </div>
           )}
 
@@ -641,16 +702,34 @@ export default function DashcamPlayer({
           </div>
 
           <div className="flex items-center gap-1">
+            {/* Event ZIP download (all camera videos + metadata) */}
+            {downloadZipUrl && (
+              <a
+                href={downloadZipUrl}
+                className="rounded p-1.5 text-zinc-400 hover:text-white transition-colors"
+                aria-label="Download event ZIP"
+                title="Download event ZIP (all cameras + metadata)"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M9.75 11.625l2.25 2.25 2.25-2.25M12 13.875V6.75M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
+                </svg>
+              </a>
+            )}
+
             {/* CSV telemetry export */}
             {hudEnabled && seiFrames.length > 0 && (
               <button
                 onClick={() => downloadCsv(seiFrames, `${activeFile?.replace(/\.mp4$/i, "") ?? "telemetry"}.csv`)}
                 className="rounded p-1.5 text-zinc-400 hover:text-white transition-colors"
                 aria-label="Download telemetry CSV"
-                title="Download telemetry CSV"
+                title="Download telemetry CSV (parsed SEI data)"
               >
+                {/* Data document with download arrow — distinct from the
+                    ZIP archive box and the 3×2 camera grid icons. */}
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 5v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2Z" />
+                  <path strokeLinecap="round" d="M8.5 8.5h7M8.5 11.5h7" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 14v4m0 0-2-2m2 2 2-2" />
                 </svg>
               </button>
             )}
@@ -691,19 +770,6 @@ export default function DashcamPlayer({
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 10.5c0 7.142-7.5 11.25-7.5 11.25S4.5 17.642 4.5 10.5a7.5 7.5 0 1115 0z" />
               </svg>
             </button>
-
-
-            {/* HUD scale cycle */}
-            {hudEnabled && (
-              <button
-                onClick={cycleHudScale}
-                className="rounded p-1.5 text-zinc-400 hover:text-white transition-colors tabular-nums text-[11px] font-semibold w-8 text-center"
-                aria-label="Cycle HUD size"
-                title={`HUD size: ${hudScale}×`}
-              >
-                {hudScale}×
-              </button>
-            )}
 
             {/* HUD Overlay toggle */}
             <button
