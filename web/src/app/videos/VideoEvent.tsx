@@ -239,6 +239,7 @@ export default function VideoEventPage({ folder, event }: Props) {
           event={details}
           streamUrlFn={(file) => api.streamURL(`${folder}/${event}/${file}`)}
           telemetryUrlFn={(file) => api.telemetryURL(`${folder}/${event}/${file}`)}
+          downloadUrlFn={(file) => api.downloadURL(`${folder}/${event}/${file}`)}
           downloadZipUrl={api.downloadEventURL(folder, event)}
           onDelete={appStatus?.mode === "edit" ? handleDelete : undefined}
         />
