@@ -30,6 +30,7 @@ interface DashcamPlayerProps {
   event: VideoEvent;
   streamUrlFn: (cameraFile: string) => string;
   telemetryUrlFn: (cameraFile: string) => string;
+  downloadUrlFn?: (cameraFile: string) => string;
   downloadZipUrl?: string;
   onDelete?: () => void;
 }
@@ -50,6 +51,7 @@ export default function DashcamPlayer({
   event,
   streamUrlFn,
   telemetryUrlFn,
+  downloadUrlFn,
   downloadZipUrl,
   onDelete,
 }: DashcamPlayerProps) {
@@ -466,7 +468,7 @@ export default function DashcamPlayer({
                 <div
                   key={cam}
                   style={{ gridArea: area }}
-                  className="relative overflow-hidden bg-black"
+                  className="group/cell relative overflow-hidden bg-black"
                 >
                   {!hasCam ? (
                     <div className="absolute inset-0 flex items-center justify-center text-zinc-800 text-[10px] uppercase tracking-widest">
@@ -515,6 +517,19 @@ export default function DashcamPlayer({
                     <div className="absolute bottom-1 left-1 rounded px-1 py-0.5 bg-black/50 text-[9px] font-medium text-white/50">
                       {CAMERA_LABELS[cam]}
                     </div>
+                  )}
+                  {hasCam && !encrypted && file && downloadUrlFn && (
+                    <a
+                      href={downloadUrlFn(file)}
+                      download
+                      className="absolute bottom-1 right-1 rounded p-0.5 bg-black/50 text-white/40 opacity-0 group-hover/cell:opacity-100 hover:!text-white transition-opacity"
+                      title={`Download ${CAMERA_LABELS[cam]}`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12m0 0-4-4m4 4 4-4" />
+                      </svg>
+                    </a>
                   )}
                 </div>
               );
@@ -702,6 +717,21 @@ export default function DashcamPlayer({
           </div>
 
           <div className="flex items-center gap-1">
+            {/* Single video download */}
+            {downloadUrlFn && activeFile && !isEncrypted && (
+              <a
+                href={downloadUrlFn(activeFile)}
+                download
+                className="rounded p-1.5 text-zinc-400 hover:text-white transition-colors"
+                aria-label="Download current video"
+                title="Download video"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12m0 0-4-4m4 4 4-4" />
+                </svg>
+              </a>
+            )}
+
             {/* Event ZIP download (all camera videos + metadata) */}
             {downloadZipUrl && (
               <a
