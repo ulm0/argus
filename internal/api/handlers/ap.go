@@ -4,25 +4,19 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/ulm0/argus/internal/config"
-	"github.com/ulm0/argus/internal/services/ap"
+	system_ap "github.com/ulm0/argus/internal/system/ap"
 )
 
 type APHandler struct {
-	cfg     *config.Config
-	manager *ap.Manager
+	manager *system_ap.Manager
 }
 
-func NewAPHandler(cfg *config.Config) *APHandler {
-	return &APHandler{
-		cfg:     cfg,
-		manager: ap.NewManager(cfg),
-	}
+func NewAPHandler(mgr *system_ap.Manager) *APHandler {
+	return &APHandler{manager: mgr}
 }
 
 func (h *APHandler) Status(w http.ResponseWriter, r *http.Request) {
-	status := h.manager.GetStatus()
-	writeJSON(w, http.StatusOK, status)
+	writeJSON(w, http.StatusOK, h.manager.GetStatus())
 }
 
 func (h *APHandler) Force(w http.ResponseWriter, r *http.Request) {
@@ -34,7 +28,7 @@ func (h *APHandler) Force(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.manager.SetForceMode(req.Mode); err != nil {
+	if err := h.manager.SetForceMode(system_ap.ForceMode(req.Mode)); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -43,7 +37,7 @@ func (h *APHandler) Force(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *APHandler) Configure(w http.ResponseWriter, r *http.Request) {
-	var apCfg ap.APConfig
+	var apCfg system_ap.APConfig
 	if err := json.NewDecoder(r.Body).Decode(&apCfg); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return

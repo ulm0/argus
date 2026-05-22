@@ -18,26 +18,35 @@ import (
 type ForceMode string
 
 const (
-	ForceModeAuto    ForceMode = "auto"
-	ForceModeOn      ForceMode = "force_on"
-	ForceModeOff     ForceMode = "force_off"
+	ForceModeAuto ForceMode = "auto"
+	ForceModeOn   ForceMode = "on"
+	ForceModeOff  ForceMode = "off"
 
 	runtimeDir = "/run/argus-ap"
 )
 
 type Status struct {
+	Enabled     bool      `json:"enabled"`
 	APActive    bool      `json:"ap_active"`
 	ForceMode   ForceMode `json:"force_mode"`
 	SSID        string    `json:"ssid"`
 	StaticIP    string    `json:"static_ip"`
 	DHCPStart   string    `json:"dhcp_range_start"`
 	DHCPEnd     string    `json:"dhcp_range_end"`
+	ClientCount int       `json:"client_count"`
 	Error       string    `json:"error,omitempty"`
 }
 
 type APConfig struct {
-	SSID       string `json:"ssid"`
-	Passphrase string `json:"passphrase"`
+	SSID            string `json:"ssid"`
+	Passphrase      string `json:"passphrase"`
+	Channel         int    `json:"channel"`
+	Interface       string `json:"interface"`
+	IPv4CIDR        string `json:"ipv4_cidr"`
+	DHCPStart       string `json:"dhcp_start"`
+	DHCPEnd         string `json:"dhcp_end"`
+	CheckInterval   int    `json:"check_interval"`
+	DisconnectGrace int    `json:"disconnect_grace"`
 }
 
 type Manager struct {
@@ -67,7 +76,8 @@ func (m *Manager) GetStatus() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return Status{
+	s := Status{
+		Enabled:   m.cfg.OfflineAP.Enabled,
 		APActive:  m.active,
 		ForceMode: m.forceMode,
 		SSID:      m.cfg.OfflineAP.SSID,
@@ -75,6 +85,18 @@ func (m *Manager) GetStatus() Status {
 		DHCPStart: m.cfg.OfflineAP.DHCPStart,
 		DHCPEnd:   m.cfg.OfflineAP.DHCPEnd,
 	}
+	if m.active {
+		s.ClientCount = m.clientCount()
+	}
+	return s
+}
+
+func (m *Manager) clientCount() int {
+	out, err := exec.Command("iw", "dev", m.cfg.OfflineAP.VirtualInterface, "station", "dump").CombinedOutput()
+	if err != nil {
+		return 0
+	}
+	return strings.Count(string(out), "Station")
 }
 
 // SetForceMode sets the AP force mode and persists it.
@@ -230,21 +252,55 @@ func (m *Manager) IsActive() bool {
 	return m.active
 }
 
-// GetAPConfig reads the AP configuration from config.yaml.
+// GetAPConfig reads the AP configuration from config.
 func (m *Manager) GetAPConfig() APConfig {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return APConfig{
-		SSID:       m.cfg.OfflineAP.SSID,
-		Passphrase: m.cfg.OfflineAP.Passphrase,
+		SSID:            m.cfg.OfflineAP.SSID,
+		Passphrase:      m.cfg.OfflineAP.Passphrase,
+		Channel:         m.cfg.OfflineAP.Channel,
+		Interface:       m.cfg.OfflineAP.Interface,
+		IPv4CIDR:        m.cfg.OfflineAP.IPv4CIDR,
+		DHCPStart:       m.cfg.OfflineAP.DHCPStart,
+		DHCPEnd:         m.cfg.OfflineAP.DHCPEnd,
+		CheckInterval:   m.cfg.OfflineAP.CheckInterval,
+		DisconnectGrace: m.cfg.OfflineAP.DisconnectGrace,
 	}
 }
 
-// UpdateAPConfig updates SSID and passphrase in config.yaml and reloads.
-func (m *Manager) UpdateAPConfig(ssid, passphrase string) error {
+// UpdateAPConfig updates AP configuration fields and persists them. Restarts the AP if active.
+func (m *Manager) UpdateAPConfig(apCfg APConfig) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.cfg.OfflineAP.SSID = ssid
-	m.cfg.OfflineAP.Passphrase = passphrase
+	if apCfg.SSID != "" {
+		m.cfg.OfflineAP.SSID = apCfg.SSID
+	}
+	if apCfg.Passphrase != "" {
+		m.cfg.OfflineAP.Passphrase = apCfg.Passphrase
+	}
+	if apCfg.Channel > 0 {
+		m.cfg.OfflineAP.Channel = apCfg.Channel
+	}
+	if apCfg.Interface != "" {
+		m.cfg.OfflineAP.Interface = apCfg.Interface
+	}
+	if apCfg.IPv4CIDR != "" {
+		m.cfg.OfflineAP.IPv4CIDR = apCfg.IPv4CIDR
+	}
+	if apCfg.DHCPStart != "" {
+		m.cfg.OfflineAP.DHCPStart = apCfg.DHCPStart
+	}
+	if apCfg.DHCPEnd != "" {
+		m.cfg.OfflineAP.DHCPEnd = apCfg.DHCPEnd
+	}
+	if apCfg.CheckInterval > 0 {
+		m.cfg.OfflineAP.CheckInterval = apCfg.CheckInterval
+	}
+	if apCfg.DisconnectGrace > 0 {
+		m.cfg.OfflineAP.DisconnectGrace = apCfg.DisconnectGrace
+	}
 
 	if err := m.cfg.Save(); err != nil {
 		return fmt.Errorf("save config: %w", err)
@@ -252,9 +308,8 @@ func (m *Manager) UpdateAPConfig(ssid, passphrase string) error {
 
 	if m.active {
 		m.stopAPLocked()
-		m.startAPLocked()
+		return m.startAPLocked()
 	}
-
 	return nil
 }
 

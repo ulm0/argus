@@ -14,11 +14,12 @@ import (
 	"github.com/ulm0/argus/internal/config"
 	"github.com/ulm0/argus/internal/services/telegram"
 	"github.com/ulm0/argus/internal/services/webhook"
+	system_ap "github.com/ulm0/argus/internal/system/ap"
 )
 
 // NewRouter sets up the gorilla/mux router with all routes and middleware.
 // telegramSvc should be the process-wide instance started in run.go (Sentry watcher + queue); if nil, a new service is used.
-func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, sentryEventsH *handlers.SentryEventsHandler, webhookSvc *webhook.Service) http.Handler {
+func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, sentryEventsH *handlers.SentryEventsHandler, webhookSvc *webhook.Service, apMgr *system_ap.Manager) http.Handler {
 	r := mux.NewRouter()
 
 	r.Use(middleware.RealIP)
@@ -59,7 +60,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	analyticsH := handlers.NewAnalyticsHandler(cfg)
 	cleanupH := handlers.NewCleanupHandler(cfg)
 	fsckH := handlers.NewFsckHandler(cfg)
-	apH := handlers.NewAPHandler(cfg)
+	apH := handlers.NewAPHandler(apMgr)
 	wifiH := handlers.NewWifiHandler(cfg)
 	captiveH := handlers.NewCaptiveHandler(cfg)
 	telegramH := handlers.NewTelegramHandler(cfg, telegramSvc)
