@@ -62,6 +62,7 @@ func (m *Monitor) monitorLoop(ctx context.Context) {
 	grace := time.Duration(m.cfg.OfflineAP.DisconnectGrace) * time.Second
 
 	var disconnectedSince *time.Time
+	var disconnectFired bool
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -81,14 +82,16 @@ func (m *Monitor) monitorLoop(ctx context.Context) {
 					m.onReconnect()
 				}
 				disconnectedSince = nil
+				disconnectFired = false
 			} else {
 				if disconnectedSince == nil {
 					now := time.Now()
 					disconnectedSince = &now
-				} else if time.Since(*disconnectedSince) > grace {
+				} else if !disconnectFired && time.Since(*disconnectedSince) > grace {
 					if m.onDisconnect != nil {
 						logger.L.Warn("WiFi disconnected beyond grace period")
 						m.onDisconnect()
+						disconnectFired = true
 					}
 				}
 			}
@@ -132,7 +135,7 @@ func (m *Monitor) checkWifi() bool {
 }
 
 func (m *Monitor) linkUp() bool {
-	data, err := os.ReadFile("/sys/class/net/wlan0/operstate")
+	data, err := os.ReadFile("/sys/class/net/" + m.cfg.OfflineAP.Interface + "/operstate")
 	if err != nil {
 		return false
 	}
@@ -140,7 +143,7 @@ func (m *Monitor) linkUp() bool {
 }
 
 func (m *Monitor) ipReady() bool {
-	iface, err := net.InterfaceByName("wlan0")
+	iface, err := net.InterfaceByName(m.cfg.OfflineAP.Interface)
 	if err != nil {
 		return false
 	}
@@ -197,7 +200,7 @@ func (m *Monitor) GetCurrentConnection() ConnectionStatus {
 
 // GetRSSI returns the current WiFi signal strength in dBm.
 func (m *Monitor) GetRSSI() int {
-	out, err := exec.Command("iw", "dev", "wlan0", "link").Output()
+	out, err := exec.Command("iw", "dev", m.cfg.OfflineAP.Interface, "link").Output()
 	if err != nil {
 		return 0
 	}
