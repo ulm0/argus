@@ -77,7 +77,7 @@ func (m *Monitor) monitorLoop(ctx context.Context) {
 
 			m.mu.Lock()
 			if ok {
-				if disconnectedSince != nil && m.onReconnect != nil {
+				if disconnectFired && m.onReconnect != nil {
 					logger.L.Info("WiFi reconnected")
 					m.onReconnect()
 				}
