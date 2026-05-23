@@ -137,17 +137,23 @@ func (m *Manager) GetForceMode() ForceMode {
 	return m.forceMode
 }
 
-// StartAP starts the access point on the virtual interface.
+// StartAP starts the access point. No-op when force mode is "off".
 func (m *Manager) StartAP() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.forceMode == ForceModeOff {
+		return nil
+	}
 	return m.startAPLocked()
 }
 
-// StopAP stops the access point.
+// StopAP stops the access point. No-op when force mode is "on".
 func (m *Manager) StopAP() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.forceMode == ForceModeOn {
+		return nil
+	}
 	return m.stopAPLocked()
 }
 
