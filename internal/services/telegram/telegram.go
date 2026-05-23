@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -25,6 +26,19 @@ const (
 
 	onlineCacheTTL = 30 * time.Second
 )
+
+// cameraNumToName maps Tesla's event.json "camera" field to the video filename substring.
+var cameraNumToName = map[int]string{
+	0: "front",
+	1: "fisheye",
+	2: "narrow",
+	3: "left_repeater",
+	4: "right_repeater",
+	5: "left_b_pillar",
+	6: "right_b_pillar",
+	7: "back",
+	8: "cabin",
+}
 
 type SentryEvent struct {
 	EventDir  string    `json:"event_dir"`
@@ -50,6 +64,17 @@ func newEventRingBuf(cap int) eventRingBuf {
 }
 
 func (r *eventRingBuf) Len() int { return r.size }
+
+func (r *eventRingBuf) toSlice() []SentryEvent {
+	if r.size == 0 {
+		return nil
+	}
+	out := make([]SentryEvent, r.size)
+	for i := 0; i < r.size; i++ {
+		out[i] = r.buf[(r.head+i)%len(r.buf)]
+	}
+	return out
+}
 
 // push adds e, silently dropping the oldest entry if the buffer is full.
 func (r *eventRingBuf) push(e SentryEvent) {
@@ -126,6 +151,8 @@ func (s *Service) Start(ctx context.Context) {
 		return
 	}
 
+	s.loadQueue()
+
 	s.watcher = NewSentryWatcher(s.cfg, s.onSentryEvent)
 	go s.watcher.Start(ctx)
 
@@ -193,6 +220,8 @@ func (s *Service) onSentryEvent(event SentryEvent) {
 
 	logger.L.WithField("event", event.EventName).WithField("videos", len(event.Videos)).Info("Telegram: queued sentry event")
 
+	s.saveQueue()
+
 	select {
 	case s.drainCh <- struct{}{}:
 	default:
@@ -235,8 +264,10 @@ func (s *Service) drainQueue() {
 			s.mu.Lock()
 			s.queue.pushFront(event)
 			s.mu.Unlock()
+			s.saveQueue()
 			return
 		}
+		s.saveQueue()
 	}
 }
 
@@ -254,8 +285,9 @@ func (s *Service) sendSentryAlert(event SentryEvent) error {
 		return err
 	}
 
+	camera := triggerCamera(event.EventDir)
 	for _, videoPath := range event.Videos {
-		if strings.Contains(videoPath, "front") {
+		if strings.Contains(videoPath, camera) {
 			if err := s.sendVideo(videoPath, event.EventName); err != nil {
 				logger.L.WithError(err).WithField("video", filepath.Base(videoPath)).Warn("Telegram: failed to send video")
 			}
@@ -350,6 +382,79 @@ func (s *Service) sendVideo(videoPath, caption string) error {
 	}
 
 	return nil
+}
+
+// triggerCamera reads event.json to find which camera detected the threat.
+// Falls back to "front" if the file is missing, malformed, or the camera is unknown.
+func triggerCamera(eventDir string) string {
+	data, err := os.ReadFile(filepath.Join(eventDir, "event.json"))
+	if err != nil {
+		return "front"
+	}
+	var ej map[string]any
+	if err := json.Unmarshal(data, &ej); err != nil {
+		return "front"
+	}
+	camFloat, ok := ej["camera"].(float64)
+	if !ok {
+		return "front"
+	}
+	if name, ok := cameraNumToName[int(camFloat)]; ok {
+		return name
+	}
+	return "front"
+}
+
+func (s *Service) queueFilePath() string {
+	return filepath.Join(s.cfg.GadgetDir, "telegram_queue.json")
+}
+
+func (s *Service) saveQueue() {
+	s.mu.Lock()
+	events := s.queue.toSlice()
+	s.mu.Unlock()
+
+	data, err := json.Marshal(events)
+	if err != nil {
+		logger.L.WithError(err).Warn("Telegram: failed to marshal queue")
+		return
+	}
+
+	tmp := s.queueFilePath() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		logger.L.WithError(err).Warn("Telegram: failed to write queue file")
+		return
+	}
+	if err := os.Rename(tmp, s.queueFilePath()); err != nil {
+		logger.L.WithError(err).Warn("Telegram: failed to save queue file")
+	}
+}
+
+func (s *Service) loadQueue() {
+	data, err := os.ReadFile(s.queueFilePath())
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		logger.L.WithError(err).Warn("Telegram: failed to read queue file")
+		return
+	}
+
+	var events []SentryEvent
+	if err := json.Unmarshal(data, &events); err != nil {
+		logger.L.WithError(err).Warn("Telegram: failed to parse queue file")
+		return
+	}
+
+	s.mu.Lock()
+	for _, e := range events {
+		s.queue.push(e)
+	}
+	s.mu.Unlock()
+
+	if len(events) > 0 {
+		logger.L.WithField("count", len(events)).Info("Telegram: restored queue from disk")
+	}
 }
 
 // isOnline checks connectivity to Telegram's API, caching the result for onlineCacheTTL
