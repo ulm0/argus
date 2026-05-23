@@ -92,6 +92,7 @@ type Service struct {
 	mu       sync.Mutex
 	queue    eventRingBuf
 	stopCh   chan struct{}
+	drainCh  chan struct{}
 	stopOnce sync.Once
 	watcher  *SentryWatcher
 
@@ -112,6 +113,7 @@ func NewService(cfg *config.Config) *Service {
 		cfg:             cfg,
 		queue:           newEventRingBuf(maxQ),
 		stopCh:          make(chan struct{}),
+		drainCh:         make(chan struct{}, 1),
 		httpClient:      &http.Client{Timeout: 15 * time.Second},
 		httpClientVideo: &http.Client{Timeout: 2 * time.Minute},
 	}
@@ -180,16 +182,21 @@ func (s *Service) TestMessage() error {
 }
 
 func (s *Service) onSentryEvent(event SentryEvent) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.cfg.Telegram.OfflineMode == "discard" && !s.isOnline() {
 		logger.L.WithField("event", event.EventName).Debug("Telegram: discarding event (offline, mode=discard)")
 		return
 	}
 
+	s.mu.Lock()
 	s.queue.push(event)
+	s.mu.Unlock()
+
 	logger.L.WithField("event", event.EventName).WithField("videos", len(event.Videos)).Info("Telegram: queued sentry event")
+
+	select {
+	case s.drainCh <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Service) processQueue(ctx context.Context) {
@@ -204,6 +211,8 @@ func (s *Service) processQueue(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.drainQueue()
+		case <-s.drainCh:
+			s.drainQueue()
 		}
 	}
 }
@@ -213,18 +222,21 @@ func (s *Service) drainQueue() {
 		return
 	}
 
-	s.mu.Lock()
-	event, ok := s.queue.pop()
-	s.mu.Unlock()
-	if !ok {
-		return
-	}
-
-	if err := s.sendSentryAlert(event); err != nil {
-		logger.L.WithError(err).WithField("event", event.EventName).Warn("Telegram: failed to send alert")
+	for {
 		s.mu.Lock()
-		s.queue.pushFront(event)
+		event, ok := s.queue.pop()
 		s.mu.Unlock()
+		if !ok {
+			return
+		}
+
+		if err := s.sendSentryAlert(event); err != nil {
+			logger.L.WithError(err).WithField("event", event.EventName).Warn("Telegram: failed to send alert")
+			s.mu.Lock()
+			s.queue.pushFront(event)
+			s.mu.Unlock()
+			return
+		}
 	}
 }
 
