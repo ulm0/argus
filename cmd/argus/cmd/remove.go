@@ -242,6 +242,7 @@ func removeStateFiles(installDir string) {
 		filepath.Join(installDir, "chime_groups.json"),
 		filepath.Join(installDir, "chime_random_config.json"),
 		filepath.Join(installDir, "cleanup_config.json"),
+		filepath.Join(installDir, "telegram_queue.json"),
 		"/tmp/argus_wifi_status.json",
 	}
 	for _, f := range stateFiles {
