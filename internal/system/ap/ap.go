@@ -165,6 +165,12 @@ func (m *Manager) startAPLocked() error {
 	vif := m.cfg.OfflineAP.VirtualInterface
 	iface := m.cfg.OfflineAP.Interface
 
+	// Evict any stale hostapd/dnsmasq left by a previous crash before touching
+	// the interface, so they don't hold the listening socket when we restart.
+	exec.Command("pkill", "-f", "hostapd.*argus").Run()
+	exec.Command("pkill", "-f", "dnsmasq.*argus").Run()
+	time.Sleep(300 * time.Millisecond)
+
 	// Create virtual interface
 	logger.L.WithField("interface", vif).Info("creating virtual AP interface")
 	exec.Command("iw", "dev", vif, "del").Run() // clean up stale
