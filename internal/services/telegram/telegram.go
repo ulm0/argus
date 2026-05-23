@@ -45,6 +45,7 @@ type SentryEvent struct {
 	EventName string    `json:"event_name"`
 	Timestamp time.Time `json:"timestamp"`
 	Videos    []string  `json:"videos"`
+	Type      string    `json:"type"` // "sentry" or "saved"
 }
 
 // eventRingBuf is a fixed-capacity circular buffer for SentryEvents.
@@ -272,10 +273,16 @@ func (s *Service) drainQueue() {
 }
 
 func (s *Service) sendSentryAlert(event SentryEvent) error {
-	msg := fmt.Sprintf("🚨 *Sentry Mode Event*\n\n"+
+	header := "🚨 *Sentry Mode Event*"
+	if event.Type == "saved" {
+		header = "💾 *Saved Clip*"
+	}
+
+	msg := fmt.Sprintf("%s\n\n"+
 		"📅 Time: %s\n"+
 		"📁 Event: `%s`\n"+
 		"📹 Cameras: %d videos",
+		header,
 		event.Timestamp.Format("2006-01-02 15:04:05"),
 		event.EventName,
 		len(event.Videos),
@@ -285,7 +292,10 @@ func (s *Service) sendSentryAlert(event SentryEvent) error {
 		return err
 	}
 
-	camera := triggerCamera(event.EventDir)
+	camera := "front"
+	if event.Type == "sentry" {
+		camera = triggerCamera(event.EventDir)
+	}
 	for _, videoPath := range event.Videos {
 		if strings.Contains(videoPath, camera) {
 			if err := s.sendVideo(videoPath, event.EventName); err != nil {
