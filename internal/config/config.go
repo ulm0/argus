@@ -255,6 +255,12 @@ func (c *Config) setDefaults() {
 	if c.OfflineAP.PingTarget == "" {
 		c.OfflineAP.PingTarget = "8.8.8.8"
 	}
+	if c.OfflineAP.CheckInterval == 0 {
+		c.OfflineAP.CheckInterval = 30
+	}
+	if c.OfflineAP.DisconnectGrace == 0 {
+		c.OfflineAP.DisconnectGrace = 60
+	}
 	if !c.Update.CheckOnStartup {
 		c.Update.CheckOnStartup = true
 	}

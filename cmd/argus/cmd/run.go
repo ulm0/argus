@@ -90,9 +90,9 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 				go boot.RunStartupSequence(runCtx, cfg, modeSvc, chSvc)
 			}
 
+			apMgr := ap.NewManager(cfg)
 			if cfg.OfflineAP.Enabled {
 				wifiMon := wifi.NewMonitor(cfg)
-				apMgr := ap.NewManager(cfg)
 				wifiMon.SetCallbacks(
 					func() { _ = apMgr.StartAP() },
 					func() { _ = apMgr.StopAP() },
@@ -113,7 +113,7 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 				}
 			}()
 
-			router := api.NewRouter(cfg, webFS, tgSvc, sentryEventsH, webhookSvc)
+			router := api.NewRouter(cfg, webFS, tgSvc, sentryEventsH, webhookSvc, apMgr)
 
 			addr := fmt.Sprintf(":%d", cfg.Network.WebPort)
 			server := &http.Server{
