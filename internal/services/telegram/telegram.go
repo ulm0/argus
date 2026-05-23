@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -26,11 +27,25 @@ const (
 	onlineCacheTTL = 30 * time.Second
 )
 
+// cameraNumToName maps Tesla's event.json "camera" field to the video filename substring.
+var cameraNumToName = map[int]string{
+	0: "front",
+	1: "fisheye",
+	2: "narrow",
+	3: "left_repeater",
+	4: "right_repeater",
+	5: "left_b_pillar",
+	6: "right_b_pillar",
+	7: "back",
+	8: "cabin",
+}
+
 type SentryEvent struct {
 	EventDir  string    `json:"event_dir"`
 	EventName string    `json:"event_name"`
 	Timestamp time.Time `json:"timestamp"`
 	Videos    []string  `json:"videos"`
+	Type      string    `json:"type"` // "sentry" or "saved"
 }
 
 // eventRingBuf is a fixed-capacity circular buffer for SentryEvents.
@@ -50,6 +65,17 @@ func newEventRingBuf(cap int) eventRingBuf {
 }
 
 func (r *eventRingBuf) Len() int { return r.size }
+
+func (r *eventRingBuf) toSlice() []SentryEvent {
+	if r.size == 0 {
+		return nil
+	}
+	out := make([]SentryEvent, r.size)
+	for i := 0; i < r.size; i++ {
+		out[i] = r.buf[(r.head+i)%len(r.buf)]
+	}
+	return out
+}
 
 // push adds e, silently dropping the oldest entry if the buffer is full.
 func (r *eventRingBuf) push(e SentryEvent) {
@@ -92,6 +118,7 @@ type Service struct {
 	mu       sync.Mutex
 	queue    eventRingBuf
 	stopCh   chan struct{}
+	drainCh  chan struct{}
 	stopOnce sync.Once
 	watcher  *SentryWatcher
 
@@ -112,6 +139,7 @@ func NewService(cfg *config.Config) *Service {
 		cfg:             cfg,
 		queue:           newEventRingBuf(maxQ),
 		stopCh:          make(chan struct{}),
+		drainCh:         make(chan struct{}, 1),
 		httpClient:      &http.Client{Timeout: 15 * time.Second},
 		httpClientVideo: &http.Client{Timeout: 2 * time.Minute},
 	}
@@ -123,6 +151,8 @@ func (s *Service) Start(ctx context.Context) {
 		logger.L.Debug("Telegram alerting disabled")
 		return
 	}
+
+	s.loadQueue()
 
 	s.watcher = NewSentryWatcher(s.cfg, s.onSentryEvent)
 	go s.watcher.Start(ctx)
@@ -180,16 +210,23 @@ func (s *Service) TestMessage() error {
 }
 
 func (s *Service) onSentryEvent(event SentryEvent) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if s.cfg.Telegram.OfflineMode == "discard" && !s.isOnline() {
 		logger.L.WithField("event", event.EventName).Debug("Telegram: discarding event (offline, mode=discard)")
 		return
 	}
 
+	s.mu.Lock()
 	s.queue.push(event)
+	s.mu.Unlock()
+
 	logger.L.WithField("event", event.EventName).WithField("videos", len(event.Videos)).Info("Telegram: queued sentry event")
+
+	s.saveQueue()
+
+	select {
+	case s.drainCh <- struct{}{}:
+	default:
+	}
 }
 
 func (s *Service) processQueue(ctx context.Context) {
@@ -204,6 +241,8 @@ func (s *Service) processQueue(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.drainQueue()
+		case <-s.drainCh:
+			s.drainQueue()
 		}
 	}
 }
@@ -213,26 +252,37 @@ func (s *Service) drainQueue() {
 		return
 	}
 
-	s.mu.Lock()
-	event, ok := s.queue.pop()
-	s.mu.Unlock()
-	if !ok {
-		return
-	}
-
-	if err := s.sendSentryAlert(event); err != nil {
-		logger.L.WithError(err).WithField("event", event.EventName).Warn("Telegram: failed to send alert")
+	for {
 		s.mu.Lock()
-		s.queue.pushFront(event)
+		event, ok := s.queue.pop()
 		s.mu.Unlock()
+		if !ok {
+			return
+		}
+
+		if err := s.sendSentryAlert(event); err != nil {
+			logger.L.WithError(err).WithField("event", event.EventName).Warn("Telegram: failed to send alert")
+			s.mu.Lock()
+			s.queue.pushFront(event)
+			s.mu.Unlock()
+			s.saveQueue()
+			return
+		}
+		s.saveQueue()
 	}
 }
 
 func (s *Service) sendSentryAlert(event SentryEvent) error {
-	msg := fmt.Sprintf("🚨 *Sentry Mode Event*\n\n"+
+	header := "🚨 *Sentry Mode Event*"
+	if event.Type == "saved" {
+		header = "💾 *Saved Clip*"
+	}
+
+	msg := fmt.Sprintf("%s\n\n"+
 		"📅 Time: %s\n"+
 		"📁 Event: `%s`\n"+
 		"📹 Cameras: %d videos",
+		header,
 		event.Timestamp.Format("2006-01-02 15:04:05"),
 		event.EventName,
 		len(event.Videos),
@@ -242,8 +292,12 @@ func (s *Service) sendSentryAlert(event SentryEvent) error {
 		return err
 	}
 
+	camera := "front"
+	if event.Type == "sentry" {
+		camera = triggerCamera(event.EventDir)
+	}
 	for _, videoPath := range event.Videos {
-		if strings.Contains(videoPath, "front") {
+		if strings.Contains(videoPath, camera) {
 			if err := s.sendVideo(videoPath, event.EventName); err != nil {
 				logger.L.WithError(err).WithField("video", filepath.Base(videoPath)).Warn("Telegram: failed to send video")
 			}
@@ -338,6 +392,79 @@ func (s *Service) sendVideo(videoPath, caption string) error {
 	}
 
 	return nil
+}
+
+// triggerCamera reads event.json to find which camera detected the threat.
+// Falls back to "front" if the file is missing, malformed, or the camera is unknown.
+func triggerCamera(eventDir string) string {
+	data, err := os.ReadFile(filepath.Join(eventDir, "event.json"))
+	if err != nil {
+		return "front"
+	}
+	var ej map[string]any
+	if err := json.Unmarshal(data, &ej); err != nil {
+		return "front"
+	}
+	camFloat, ok := ej["camera"].(float64)
+	if !ok {
+		return "front"
+	}
+	if name, ok := cameraNumToName[int(camFloat)]; ok {
+		return name
+	}
+	return "front"
+}
+
+func (s *Service) queueFilePath() string {
+	return filepath.Join(s.cfg.GadgetDir, "telegram_queue.json")
+}
+
+func (s *Service) saveQueue() {
+	s.mu.Lock()
+	events := s.queue.toSlice()
+	s.mu.Unlock()
+
+	data, err := json.Marshal(events)
+	if err != nil {
+		logger.L.WithError(err).Warn("Telegram: failed to marshal queue")
+		return
+	}
+
+	tmp := s.queueFilePath() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		logger.L.WithError(err).Warn("Telegram: failed to write queue file")
+		return
+	}
+	if err := os.Rename(tmp, s.queueFilePath()); err != nil {
+		logger.L.WithError(err).Warn("Telegram: failed to save queue file")
+	}
+}
+
+func (s *Service) loadQueue() {
+	data, err := os.ReadFile(s.queueFilePath())
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		logger.L.WithError(err).Warn("Telegram: failed to read queue file")
+		return
+	}
+
+	var events []SentryEvent
+	if err := json.Unmarshal(data, &events); err != nil {
+		logger.L.WithError(err).Warn("Telegram: failed to parse queue file")
+		return
+	}
+
+	s.mu.Lock()
+	for _, e := range events {
+		s.queue.push(e)
+	}
+	s.mu.Unlock()
+
+	if len(events) > 0 {
+		logger.L.WithField("count", len(events)).Info("Telegram: restored queue from disk")
+	}
 }
 
 // isOnline checks connectivity to Telegram's API, caching the result for onlineCacheTTL
