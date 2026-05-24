@@ -135,11 +135,13 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Validate that uploadID and filename are single clean path components.
+	// Validate that uploadID is a single clean path component.
 	if strings.ContainsAny(uploadID, "/\\") || strings.Contains(uploadID, "..") {
 		return false, fmt.Errorf("invalid upload ID")
 	}
-	if strings.ContainsAny(filename, "/\\") || strings.Contains(filename, "..") {
+	// Sanitize filename to its base component to neutralize path injection.
+	filename = filepath.Base(filename)
+	if filename == "." || filename == string(filepath.Separator) {
 		return false, fmt.Errorf("invalid filename")
 	}
 
@@ -248,7 +250,9 @@ func (s *Service) CreateDirectory(mountPath, relPath, name string) error {
 
 // MoveFile moves or renames a music file.
 func (s *Service) MoveFile(mountPath, srcRel, destRel, newName string) error {
-	if strings.ContainsAny(newName, "/\\") || strings.Contains(newName, "..") {
+	// filepath.Base neutralizes any path components in newName.
+	newName = filepath.Base(newName)
+	if newName == "." || newName == string(filepath.Separator) {
 		return fmt.Errorf("invalid filename")
 	}
 
@@ -257,7 +261,11 @@ func (s *Service) MoveFile(mountPath, srcRel, destRel, newName string) error {
 	destDir := filepath.Join(musicDir, filepath.Clean(destRel))
 	destPath := filepath.Join(destDir, newName)
 
-	if !strings.HasPrefix(srcPath, musicDir) || !strings.HasPrefix(destPath, musicDir) {
+	musicRoot := musicDir + string(filepath.Separator)
+	if !strings.HasPrefix(srcPath, musicRoot) && srcPath != musicDir {
+		return fmt.Errorf("path traversal detected")
+	}
+	if !strings.HasPrefix(destDir, musicRoot) && destDir != musicDir {
 		return fmt.Errorf("path traversal detected")
 	}
 
