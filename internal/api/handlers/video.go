@@ -261,6 +261,11 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 	if camera == "" {
 		camera = "front"
 	}
+	// camera must be a single clean path component (no traversal, no separators).
+	if strings.ContainsAny(camera, "/\\") || strings.Contains(camera, "..") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid camera"})
+		return
+	}
 
 	// Pick the requested camera if it exists and is not encrypted.
 	// Otherwise fall back to the first non-encrypted camera available.
@@ -284,6 +289,13 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 	videoFullPath := filepath.Join(folderPath, event, videoFile)
 	hash := h.videoSvc.ThumbnailHash(videoFullPath)
 	thumbPath := filepath.Join(h.cfg.ThumbnailDir, folder, event, camera+"_"+hash+".jpg")
+
+	// Ensure the resolved thumbnail path stays within ThumbnailDir.
+	thumbDir := filepath.Clean(h.cfg.ThumbnailDir)
+	if !strings.HasPrefix(filepath.Clean(thumbPath), thumbDir+string(filepath.Separator)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
+		return
+	}
 
 	if _, err := os.Stat(thumbPath); err != nil {
 		width, _ := strconv.Atoi(r.URL.Query().Get("w"))
