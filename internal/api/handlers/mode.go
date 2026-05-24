@@ -77,7 +77,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	if status >= 500 {
 		if m, ok := v.(map[string]string); ok {
 			if errMsg := m["error"]; errMsg != "" {
-				logger.L.WithField("status", status).WithField("detail", errMsg).Error("request error")
+				logger.L.WithField("status", status).Error("request error")
 			}
 		}
 	}

@@ -79,10 +79,13 @@ func (s *Service) UploadFile(data []byte, filename, mountPath string) error {
 		return fmt.Errorf("invalid file type: %s (allowed: .fseq, .mp3, .wav)", ext)
 	}
 
+	// Strip any path components from the filename so it is always a single base name.
+	safeName := filepath.Base(filename)
+
 	showDir := filepath.Join(mountPath, s.cfg.Web.LightshowFolder)
 	os.MkdirAll(showDir, 0755)
 
-	destPath := filepath.Join(showDir, filename)
+	destPath := filepath.Join(showDir, safeName)
 	return os.WriteFile(destPath, data, 0644)
 }
 
@@ -118,6 +121,11 @@ func (s *Service) UploadZip(zipData []byte, mountPath string) (int, error) {
 
 		baseName := filepath.Base(f.Name) // strip paths inside ZIP
 		destPath := filepath.Join(showDir, baseName)
+
+		// Ensure the destination is still within showDir (Zip Slip guard).
+		if !strings.HasPrefix(filepath.Clean(destPath), filepath.Clean(showDir)+string(filepath.Separator)) {
+			continue
+		}
 
 		src, err := f.Open()
 		if err != nil {

@@ -244,6 +244,13 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate event stays within folderPath.
+	eventDir := filepath.Join(folderPath, filepath.Clean(event))
+	if !strings.HasPrefix(eventDir, folderPath+string(filepath.Separator)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid event"})
+		return
+	}
+
 	details, err := h.videoSvc.GetEventDetails(folderPath, event)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -253,7 +260,7 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 	// Tesla pre-generates thumb.png for most events — serve it directly.
 	if details.HasThumbnail {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
-		http.ServeFile(w, r, filepath.Join(folderPath, event, "thumb.png"))
+		http.ServeFile(w, r, filepath.Join(eventDir, "thumb.png"))
 		return
 	}
 
@@ -286,7 +293,7 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	videoFullPath := filepath.Join(folderPath, event, videoFile)
+	videoFullPath := filepath.Join(eventDir, videoFile)
 	hash := h.videoSvc.ThumbnailHash(videoFullPath)
 	thumbPath := filepath.Join(h.cfg.ThumbnailDir, folder, event, camera+"_"+hash+".jpg")
 
