@@ -135,6 +135,14 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Validate that uploadID and filename are single clean path components.
+	if strings.ContainsAny(uploadID, "/\\") || strings.Contains(uploadID, "..") {
+		return false, fmt.Errorf("invalid upload ID")
+	}
+	if strings.ContainsAny(filename, "/\\") || strings.Contains(filename, "..") {
+		return false, fmt.Errorf("invalid filename")
+	}
+
 	musicDir := filepath.Join(mountPath, MusicFolder)
 	uploadDir := filepath.Join(musicDir, ".uploads", uploadID)
 	os.MkdirAll(uploadDir, 0755)
@@ -159,6 +167,9 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 
 	// Assemble final file
 	targetDir := filepath.Join(musicDir, filepath.Clean(relPath))
+	if !strings.HasPrefix(targetDir, musicDir+string(filepath.Separator)) && targetDir != musicDir {
+		return false, fmt.Errorf("invalid path")
+	}
 	os.MkdirAll(targetDir, 0755)
 	destPath := filepath.Join(targetDir, filename)
 	tmpPath := destPath + ".assembling"
@@ -237,6 +248,10 @@ func (s *Service) CreateDirectory(mountPath, relPath, name string) error {
 
 // MoveFile moves or renames a music file.
 func (s *Service) MoveFile(mountPath, srcRel, destRel, newName string) error {
+	if strings.ContainsAny(newName, "/\\") || strings.Contains(newName, "..") {
+		return fmt.Errorf("invalid filename")
+	}
+
 	musicDir := filepath.Join(mountPath, MusicFolder)
 	srcPath := filepath.Join(musicDir, filepath.Clean(srcRel))
 	destDir := filepath.Join(musicDir, filepath.Clean(destRel))
