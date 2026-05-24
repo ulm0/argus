@@ -49,8 +49,9 @@ func (s *Service) ListFiles(mountPath, relPath string) (*ListResult, error) {
 	musicDir := filepath.Join(mountPath, MusicFolder)
 	targetDir := filepath.Join(musicDir, filepath.Clean(relPath))
 
-	// Path traversal protection
-	if !strings.HasPrefix(targetDir, musicDir) {
+	// Path traversal protection: add separator on both sides to prevent
+	// "/Music_evil" from matching a "/Music" prefix.
+	if !strings.HasPrefix(targetDir+string(filepath.Separator), musicDir+string(filepath.Separator)) {
 		return nil, fmt.Errorf("path traversal detected")
 	}
 
@@ -96,10 +97,16 @@ func (s *Service) ListFiles(mountPath, relPath string) (*ListResult, error) {
 
 // SaveFile saves an uploaded file to the music directory.
 func (s *Service) SaveFile(data io.Reader, filename, mountPath, relPath string) error {
-	musicDir := filepath.Join(mountPath, MusicFolder)
-	targetDir := filepath.Join(musicDir, filepath.Clean(relPath))
+	// Sanitize filename to its base component to neutralize path injection.
+	filename = filepath.Base(filename)
+	if filename == "." || filename == string(filepath.Separator) {
+		return fmt.Errorf("invalid filename")
+	}
 
-	if !strings.HasPrefix(targetDir, musicDir) {
+	musicDir := filepath.Join(mountPath, MusicFolder)
+	targetDir := filepath.Clean(filepath.Join(musicDir, relPath))
+
+	if !strings.HasPrefix(targetDir+string(filepath.Separator), musicDir+string(filepath.Separator)) {
 		return fmt.Errorf("path traversal detected")
 	}
 
@@ -167,9 +174,11 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 		return false, nil
 	}
 
-	// Assemble final file
-	targetDir := filepath.Join(musicDir, filepath.Clean(relPath))
-	if !strings.HasPrefix(targetDir, musicDir+string(filepath.Separator)) && targetDir != musicDir {
+	// Assemble final file.
+	// filepath.Clean wraps the whole join so CodeQL's taint tracker sees the
+	// result as sanitized before it reaches the file-system calls below.
+	targetDir := filepath.Clean(filepath.Join(musicDir, relPath))
+	if !strings.HasPrefix(targetDir+string(filepath.Separator), musicDir+string(filepath.Separator)) {
 		return false, fmt.Errorf("invalid path")
 	}
 	os.MkdirAll(targetDir, 0755)
@@ -215,9 +224,9 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 // DeleteFile removes a music file.
 func (s *Service) DeleteFile(mountPath, relPath string) error {
 	musicDir := filepath.Join(mountPath, MusicFolder)
-	targetPath := filepath.Join(musicDir, filepath.Clean(relPath))
+	targetPath := filepath.Clean(filepath.Join(musicDir, relPath))
 
-	if !strings.HasPrefix(targetPath, musicDir) {
+	if !strings.HasPrefix(targetPath+string(filepath.Separator), musicDir+string(filepath.Separator)) {
 		return fmt.Errorf("path traversal detected")
 	}
 	return os.Remove(targetPath)
@@ -226,9 +235,9 @@ func (s *Service) DeleteFile(mountPath, relPath string) error {
 // DeleteDirectory removes a music directory and its contents.
 func (s *Service) DeleteDirectory(mountPath, relPath string) error {
 	musicDir := filepath.Join(mountPath, MusicFolder)
-	targetPath := filepath.Join(musicDir, filepath.Clean(relPath))
+	targetPath := filepath.Clean(filepath.Join(musicDir, relPath))
 
-	if !strings.HasPrefix(targetPath, musicDir) {
+	if !strings.HasPrefix(targetPath+string(filepath.Separator), musicDir+string(filepath.Separator)) {
 		return fmt.Errorf("path traversal detected")
 	}
 	if targetPath == musicDir {
@@ -239,10 +248,16 @@ func (s *Service) DeleteDirectory(mountPath, relPath string) error {
 
 // CreateDirectory creates a new folder in the music directory.
 func (s *Service) CreateDirectory(mountPath, relPath, name string) error {
-	musicDir := filepath.Join(mountPath, MusicFolder)
-	targetDir := filepath.Join(musicDir, filepath.Clean(relPath), name)
+	// Sanitize name to a single path component.
+	name = filepath.Base(name)
+	if name == "." || name == string(filepath.Separator) {
+		return fmt.Errorf("invalid directory name")
+	}
 
-	if !strings.HasPrefix(targetDir, musicDir) {
+	musicDir := filepath.Join(mountPath, MusicFolder)
+	targetDir := filepath.Clean(filepath.Join(musicDir, relPath, name))
+
+	if !strings.HasPrefix(targetDir+string(filepath.Separator), musicDir+string(filepath.Separator)) {
 		return fmt.Errorf("path traversal detected")
 	}
 	return os.MkdirAll(targetDir, 0755)
@@ -256,16 +271,18 @@ func (s *Service) MoveFile(mountPath, srcRel, destRel, newName string) error {
 		return fmt.Errorf("invalid filename")
 	}
 
+	// filepath.Clean wraps the whole join so CodeQL's taint tracker sees
+	// srcPath and destDir as sanitized before they reach os.MkdirAll/os.Rename.
 	musicDir := filepath.Join(mountPath, MusicFolder)
-	srcPath := filepath.Join(musicDir, filepath.Clean(srcRel))
-	destDir := filepath.Join(musicDir, filepath.Clean(destRel))
+	sep := string(filepath.Separator)
+	srcPath := filepath.Clean(filepath.Join(musicDir, srcRel))
+	destDir := filepath.Clean(filepath.Join(musicDir, destRel))
 	destPath := filepath.Join(destDir, newName)
 
-	musicRoot := musicDir + string(filepath.Separator)
-	if !strings.HasPrefix(srcPath, musicRoot) && srcPath != musicDir {
+	if !strings.HasPrefix(srcPath+sep, musicDir+sep) {
 		return fmt.Errorf("path traversal detected")
 	}
-	if !strings.HasPrefix(destDir, musicRoot) && destDir != musicDir {
+	if !strings.HasPrefix(destDir+sep, musicDir+sep) {
 		return fmt.Errorf("path traversal detected")
 	}
 
@@ -276,9 +293,9 @@ func (s *Service) MoveFile(mountPath, srcRel, destRel, newName string) error {
 // ResolvePath returns the full filesystem path for a music file.
 func (s *Service) ResolvePath(mountPath, relPath string) (string, error) {
 	musicDir := filepath.Join(mountPath, MusicFolder)
-	fullPath := filepath.Join(musicDir, filepath.Clean(relPath))
+	fullPath := filepath.Clean(filepath.Join(musicDir, relPath))
 
-	if !strings.HasPrefix(fullPath, musicDir) {
+	if !strings.HasPrefix(fullPath+string(filepath.Separator), musicDir+string(filepath.Separator)) {
 		return "", fmt.Errorf("path traversal detected")
 	}
 
