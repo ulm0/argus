@@ -26,10 +26,23 @@ import (
 var sessionPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})-(.+)\.\w+$`)
 
 const tcPathCacheTTL = 30 * time.Second
+const eventCacheTTL = 30 * time.Second
 
 type mp4CacheEntry struct {
 	valid bool
 	mtime int64
+}
+
+type eventCacheEntry struct {
+	events  []Event
+	hasNext bool
+	expiry  time.Time
+}
+
+type sessionCacheEntry struct {
+	sessions []SessionGroup
+	hasNext  bool
+	expiry   time.Time
 }
 
 type Service struct {
@@ -41,12 +54,20 @@ type Service struct {
 
 	mp4Mu    sync.RWMutex
 	mp4Cache map[string]mp4CacheEntry
+
+	eventMu      sync.RWMutex
+	eventCache   map[string]eventCacheEntry
+
+	sessionMu    sync.RWMutex
+	sessionCache map[string]sessionCacheEntry
 }
 
 func NewService(cfg *config.Config) *Service {
 	return &Service{
-		cfg:      cfg,
-		mp4Cache: make(map[string]mp4CacheEntry),
+		cfg:          cfg,
+		mp4Cache:     make(map[string]mp4CacheEntry),
+		eventCache:   make(map[string]eventCacheEntry),
+		sessionCache: make(map[string]sessionCacheEntry),
 	}
 }
 
@@ -162,6 +183,16 @@ func (s *Service) GetFolders() []Folder {
 
 // GetEvents returns paginated events from a TeslaCam subfolder.
 func (s *Service) GetEvents(folderPath string, page, perPage int) ([]Event, bool) {
+	key := fmt.Sprintf("%s:%d:%d", folderPath, page, perPage)
+
+	s.eventMu.RLock()
+	if entry, ok := s.eventCache[key]; ok && time.Now().Before(entry.expiry) {
+		events, hasNext := entry.events, entry.hasNext
+		s.eventMu.RUnlock()
+		return events, hasNext
+	}
+	s.eventMu.RUnlock()
+
 	entries, err := os.ReadDir(folderPath)
 	if err != nil {
 		return nil, false
@@ -198,6 +229,10 @@ func (s *Service) GetEvents(folderPath string, page, perPage int) ([]Event, bool
 		events = append(events, event)
 	}
 
+	s.eventMu.Lock()
+	s.eventCache[key] = eventCacheEntry{events: events, hasNext: hasNext, expiry: time.Now().Add(eventCacheTTL)}
+	s.eventMu.Unlock()
+
 	return events, hasNext
 }
 
@@ -214,6 +249,16 @@ func (s *Service) GetEventDetails(folderPath, eventName string) (*Event, error) 
 
 // GroupVideosBySession groups videos by their timestamp session for RecentClips.
 func (s *Service) GroupVideosBySession(folderPath string, page, perPage int) ([]SessionGroup, bool) {
+	key := fmt.Sprintf("%s:%d:%d", folderPath, page, perPage)
+
+	s.sessionMu.RLock()
+	if entry, ok := s.sessionCache[key]; ok && time.Now().Before(entry.expiry) {
+		sessions, hasNext := entry.sessions, entry.hasNext
+		s.sessionMu.RUnlock()
+		return sessions, hasNext
+	}
+	s.sessionMu.RUnlock()
+
 	entries, err := os.ReadDir(folderPath)
 	if err != nil {
 		return nil, false
@@ -258,6 +303,11 @@ func (s *Service) GroupVideosBySession(folderPath string, page, perPage int) ([]
 			Timestamp: k,
 		})
 	}
+
+	s.sessionMu.Lock()
+	s.sessionCache[key] = sessionCacheEntry{sessions: groups, hasNext: hasNext, expiry: time.Now().Add(eventCacheTTL)}
+	s.sessionMu.Unlock()
+
 	return groups, hasNext
 }
 
@@ -367,7 +417,31 @@ func (s *Service) DeleteEvent(folderPath, eventName string) error {
 	if !strings.HasPrefix(eventDir, folderPath+string(filepath.Separator)) {
 		return fmt.Errorf("invalid event name: path traversal detected")
 	}
-	return os.RemoveAll(eventDir)
+	if err := os.RemoveAll(eventDir); err != nil {
+		return err
+	}
+	s.invalidateFolderCache(folderPath)
+	return nil
+}
+
+// invalidateFolderCache removes all cached entries for a given folder path.
+func (s *Service) invalidateFolderCache(folderPath string) {
+	prefix := folderPath + ":"
+	s.eventMu.Lock()
+	for key := range s.eventCache {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.eventCache, key)
+		}
+	}
+	s.eventMu.Unlock()
+
+	s.sessionMu.Lock()
+	for key := range s.sessionCache {
+		if strings.HasPrefix(key, prefix) {
+			delete(s.sessionCache, key)
+		}
+	}
+	s.sessionMu.Unlock()
 }
 
 func (s *Service) parseEvent(eventDir, name string) Event {
