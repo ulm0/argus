@@ -28,9 +28,16 @@ var sessionPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})-
 const tcPathCacheTTL = 30 * time.Second
 const eventCacheTTL = 30 * time.Second
 
+// maxCacheEntries bounds each in-memory cache so a client paging with arbitrary
+// page/per_page values (distinct keys) can't grow the maps without limit on a
+// memory-constrained Pi. When the limit is hit the cache is reset wholesale —
+// it is only an optimization, so correctness is unaffected.
+const maxCacheEntries = 512
+
 type mp4CacheEntry struct {
 	valid bool
 	mtime int64
+	size  int64
 }
 
 type eventCacheEntry struct {
@@ -230,6 +237,9 @@ func (s *Service) GetEvents(folderPath string, page, perPage int) ([]Event, bool
 	}
 
 	s.eventMu.Lock()
+	if len(s.eventCache) >= maxCacheEntries {
+		s.eventCache = make(map[string]eventCacheEntry)
+	}
 	s.eventCache[key] = eventCacheEntry{events: events, hasNext: hasNext, expiry: time.Now().Add(eventCacheTTL)}
 	s.eventMu.Unlock()
 
@@ -305,6 +315,9 @@ func (s *Service) GroupVideosBySession(folderPath string, page, perPage int) ([]
 	}
 
 	s.sessionMu.Lock()
+	if len(s.sessionCache) >= maxCacheEntries {
+		s.sessionCache = make(map[string]sessionCacheEntry)
+	}
 	s.sessionCache[key] = sessionCacheEntry{sessions: groups, hasNext: hasNext, expiry: time.Now().Add(eventCacheTTL)}
 	s.sessionMu.Unlock()
 
@@ -338,9 +351,10 @@ func (s *Service) IsValidMP4(path string) bool {
 		return false
 	}
 	mtime := info.ModTime().UnixNano()
+	size := info.Size()
 
 	s.mp4Mu.RLock()
-	if entry, ok := s.mp4Cache[path]; ok && entry.mtime == mtime {
+	if entry, ok := s.mp4Cache[path]; ok && entry.mtime == mtime && entry.size == size {
 		v := entry.valid
 		s.mp4Mu.RUnlock()
 		return v
@@ -355,17 +369,23 @@ func (s *Service) IsValidMP4(path string) bool {
 
 	buf := make([]byte, 12)
 	if _, err := io.ReadFull(f, buf); err != nil {
-		s.mp4Mu.Lock()
-		s.mp4Cache[path] = mp4CacheEntry{valid: false, mtime: mtime}
-		s.mp4Mu.Unlock()
+		s.storeMP4Cache(path, mp4CacheEntry{valid: false, mtime: mtime, size: size})
 		return false
 	}
 
 	valid := string(buf[4:8]) == "ftyp"
-	s.mp4Mu.Lock()
-	s.mp4Cache[path] = mp4CacheEntry{valid: valid, mtime: mtime}
-	s.mp4Mu.Unlock()
+	s.storeMP4Cache(path, mp4CacheEntry{valid: valid, mtime: mtime, size: size})
 	return valid
+}
+
+// storeMP4Cache records an mp4 validity verdict, bounding the cache size.
+func (s *Service) storeMP4Cache(path string, entry mp4CacheEntry) {
+	s.mp4Mu.Lock()
+	if len(s.mp4Cache) >= maxCacheEntries {
+		s.mp4Cache = make(map[string]mp4CacheEntry)
+	}
+	s.mp4Cache[path] = entry
+	s.mp4Mu.Unlock()
 }
 
 // StreamVideo serves a video file with HTTP Range support.
@@ -779,14 +799,23 @@ func scanBoxes(f *os.File, start, length int64) (time.Duration, error) {
 				return 0, fmt.Errorf("read mvhd: %w", err)
 			}
 
+			if len(payload) < 1 {
+				return 0, fmt.Errorf("mvhd too short")
+			}
 			version := payload[0]
 			var timescale uint32
 			var duration uint64
 
 			if version == 0 {
+				if len(payload) < 20 {
+					return 0, fmt.Errorf("mvhd v0 truncated")
+				}
 				timescale = binary.BigEndian.Uint32(payload[12:16])
 				duration = uint64(binary.BigEndian.Uint32(payload[16:20]))
 			} else {
+				if len(payload) < 32 {
+					return 0, fmt.Errorf("mvhd v1 truncated")
+				}
 				timescale = binary.BigEndian.Uint32(payload[20:24])
 				duration = binary.BigEndian.Uint64(payload[24:32])
 			}

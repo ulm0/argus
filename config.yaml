@@ -72,6 +72,9 @@ offline_ap:
   retry_seconds: 300
   virtual_interface: uap0
   force_mode: auto # auto | force_on | force_off
+  # Route AP clients (e.g. the car joining the hotspot) out to the Pi's current
+  # upstream (Bluetooth tethering / WiFi) via NAT. false = admin-only captive AP.
+  share_internet: false
 
 # ============================================================================
 # System paths & reliability

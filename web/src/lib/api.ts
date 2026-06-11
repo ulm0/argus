@@ -2,6 +2,8 @@ import type {
   AppStatus,
   APConfig,
   APStatus,
+  BluetoothDevice,
+  BluetoothStatus,
   ChimeFilenamesResponse,
   ChimeGroup,
   ChimeGroupsResponse,
@@ -42,6 +44,7 @@ import type {
   VideoSessionsResponse,
   VideoStats,
   WebConfigPublic,
+  SavedWifiNetwork,
   WifiScanResponse,
   WifiStatus,
   WrapListResponse,
@@ -466,6 +469,30 @@ export function configureAP(config: Partial<APConfig>): Promise<{ status: string
   return post("/api/ap/configure", config);
 }
 
+export function setAPShareInternet(enabled: boolean): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/ap/share-internet", { enabled });
+}
+
+// ──────────────────────────────────────────────
+// Bluetooth tethering
+// ──────────────────────────────────────────────
+
+export function getBluetoothStatus(): Promise<BluetoothStatus> {
+  return request<BluetoothStatus>("/api/bluetooth/status");
+}
+
+export function getBluetoothDevices(): Promise<{ devices: BluetoothDevice[] }> {
+  return request<{ devices: BluetoothDevice[] }>("/api/bluetooth/devices");
+}
+
+export function bluetoothConnect(mac: string): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/bluetooth/connect", { mac });
+}
+
+export function bluetoothDisconnect(mac: string): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/bluetooth/disconnect", { mac });
+}
+
 // ──────────────────────────────────────────────
 // WiFi
 // ──────────────────────────────────────────────
@@ -484,6 +511,18 @@ export function configureWifi(ssid: string, password: string): Promise<StatusRes
 
 export function dismissWifiStatus(): Promise<StatusResponse> {
   return post<StatusResponse>("/api/wifi/dismiss-status");
+}
+
+export function getSavedWifi(): Promise<{ networks: SavedWifiNetwork[] }> {
+  return request<{ networks: SavedWifiNetwork[] }>("/api/wifi/saved");
+}
+
+export function forgetWifi(uuid: string): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/wifi/forget", { uuid });
+}
+
+export function setWifiAutoConnect(uuid: string, autoconnect: boolean): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/wifi/autoconnect", { uuid, autoconnect });
 }
 
 // ──────────────────────────────────────────────

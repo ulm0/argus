@@ -33,7 +33,8 @@ type Monitor struct {
 	cfg    *config.Config
 	mu     sync.RWMutex
 	status ConnectionStatus
-	stopCh chan struct{}
+	stopCh   chan struct{}
+	stopOnce sync.Once
 	onDisconnect func()
 	onReconnect  func()
 	connInfoExp  time.Time // protected by mu; refreshes getConnectionInfo every 5 min
@@ -256,6 +257,11 @@ func (m *Monitor) ScanNetworks(ctx context.Context, rescan bool) ([]Network, err
 
 // UpdateCredentials changes the WiFi SSID/password using NetworkManager.
 func (m *Monitor) UpdateCredentials(ssid, password string) error {
+	// Reject leading '-' so nmcli can't parse the value as an option flag.
+	if strings.HasPrefix(ssid, "-") || strings.HasPrefix(password, "-") {
+		return fmt.Errorf("SSID and password must not start with '-'")
+	}
+
 	// Check if connection exists
 	out, err := exec.Command("nmcli", "connection", "show").Output()
 	if err != nil {
@@ -296,7 +302,9 @@ func (m *Monitor) ClearWifiChangeStatus() {
 	os.Remove("/tmp/argus_wifi_status.json")
 }
 
-// Stop halts the monitor goroutine.
+// Stop halts the monitor goroutine. Safe to call more than once.
 func (m *Monitor) Stop() {
-	close(m.stopCh)
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+	})
 }

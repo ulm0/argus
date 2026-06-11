@@ -61,3 +61,49 @@ func (h *WifiHandler) DismissStatus(w http.ResponseWriter, r *http.Request) {
 	h.monitor.ClearWifiChangeStatus()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
+
+// SavedNetworks lists stored WiFi profiles the device has joined before.
+func (h *WifiHandler) SavedNetworks(w http.ResponseWriter, r *http.Request) {
+	nets, err := h.monitor.ListSavedNetworks()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if nets == nil {
+		nets = []wifi.SavedNetwork{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"networks": nets})
+}
+
+// ForgetNetwork deletes a saved WiFi profile.
+func (h *WifiHandler) ForgetNetwork(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UUID string `json:"uuid"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if err := h.monitor.ForgetNetwork(req.UUID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// SetAutoConnect toggles auto-join for a saved WiFi profile.
+func (h *WifiHandler) SetAutoConnect(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UUID        string `json:"uuid"`
+		AutoConnect bool   `json:"autoconnect"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if err := h.monitor.SetAutoConnect(req.UUID, req.AutoConnect); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}

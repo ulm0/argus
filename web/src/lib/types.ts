@@ -313,6 +313,22 @@ export interface APStatus {
   force_mode: string;
   channel: number;
   client_count: number;
+  share_internet?: boolean;
+  upstream?: string;
+}
+
+export interface BluetoothDevice {
+  mac: string;
+  name: string;
+  connected: boolean;
+}
+
+export interface BluetoothStatus {
+  available: boolean;
+  tethered: boolean;
+  interface?: string;
+  device_mac?: string;
+  device_name?: string;
 }
 
 export interface APConfig {
@@ -358,6 +374,14 @@ export interface WifiStatus {
 
 export interface WifiScanResponse {
   networks: WifiNetwork[];
+}
+
+export interface SavedWifiNetwork {
+  name: string;
+  uuid: string;
+  autoconnect: boolean;
+  priority: number;
+  active: boolean;
 }
 
 // Telegram

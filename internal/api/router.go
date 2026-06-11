@@ -61,6 +61,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	cleanupH := handlers.NewCleanupHandler(cfg)
 	fsckH := handlers.NewFsckHandler(cfg)
 	apH := handlers.NewAPHandler(apMgr)
+	bluetoothH := handlers.NewBluetoothHandler()
 	wifiH := handlers.NewWifiHandler(cfg)
 	captiveH := handlers.NewCaptiveHandler(cfg)
 	telegramH := handlers.NewTelegramHandler(cfg, telegramSvc)
@@ -94,13 +95,23 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	// AP control
 	api.HandleFunc("/ap/force", apH.Force).Methods("POST")
 	api.HandleFunc("/ap/configure", apH.Configure).Methods("POST")
+	api.HandleFunc("/ap/share-internet", apH.ShareInternet).Methods("POST")
 	api.HandleFunc("/ap/status", apH.Status).Methods("GET")
+
+	// Bluetooth tethering (PAN upstream from a paired phone)
+	api.HandleFunc("/bluetooth/status", bluetoothH.Status).Methods("GET")
+	api.HandleFunc("/bluetooth/devices", bluetoothH.Devices).Methods("GET")
+	api.HandleFunc("/bluetooth/connect", bluetoothH.Connect).Methods("POST")
+	api.HandleFunc("/bluetooth/disconnect", bluetoothH.Disconnect).Methods("POST")
 
 	// WiFi
 	api.HandleFunc("/wifi/configure", wifiH.Configure).Methods("POST")
 	api.HandleFunc("/wifi/scan", wifiH.Scan).Methods("GET")
 	api.HandleFunc("/wifi/dismiss-status", wifiH.DismissStatus).Methods("POST")
 	api.HandleFunc("/wifi/status", wifiH.Status).Methods("GET")
+	api.HandleFunc("/wifi/saved", wifiH.SavedNetworks).Methods("GET")
+	api.HandleFunc("/wifi/forget", wifiH.ForgetNetwork).Methods("POST")
+	api.HandleFunc("/wifi/autoconnect", wifiH.SetAutoConnect).Methods("POST")
 
 	// Videos
 	api.HandleFunc("/videos", videoH.List).Methods("GET")

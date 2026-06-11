@@ -560,9 +560,22 @@ export default function DashcamPlayer({
         // ── Single camera view ──
         <div className="relative w-full bg-black" style={{ aspectRatio: "16/9" }}>
           {isEncrypted ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-zinc-400">
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center text-zinc-400">
               <LockIcon />
-              <p className="text-sm">Encrypted video</p>
+              <p className="text-sm">Encrypted by your Tesla account</p>
+              <p className="max-w-sm text-xs text-zinc-500">
+                This clip was encrypted on the drive (Tesla 2026.20+). View it at{" "}
+                <a
+                  href="https://dashcam.tesla.com"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-400 hover:underline"
+                >
+                  dashcam.tesla.com
+                </a>{" "}
+                with your Tesla account, or turn off Controls → Safety → “Encrypt Dashcam
+                Recordings” for in-Argus playback.
+              </p>
             </div>
           ) : streamSrc ? (
             <video

@@ -72,6 +72,7 @@ offline_ap:
   retry_seconds: 300
   virtual_interface: uap0
   force_mode: auto
+  share_internet: false
 
 system:
   config_file: /boot/firmware/config.txt
@@ -327,7 +328,8 @@ func setupWriteConfig(cfgPath string) error {
 	}
 	setupLog("Creating default config.yaml...")
 	content := strings.Replace(defaultConfigYAML, "target_user: pi", "target_user: "+currentUser(), 1)
-	if err := os.WriteFile(cfgPath, []byte(content), 0644); err != nil {
+	// Config holds secrets — restrict to the owner.
+	if err := os.WriteFile(cfgPath, []byte(content), 0600); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	setupLog("Config created at %s", cfgPath)

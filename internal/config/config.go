@@ -102,6 +102,11 @@ type OfflineAPConfig struct {
 	RetrySeconds     int    `yaml:"retry_seconds"`
 	VirtualInterface string `yaml:"virtual_interface"`
 	ForceMode        string `yaml:"force_mode"`
+	// ShareInternet routes AP clients (e.g. the car joining the Pi's hotspot)
+	// out to whatever upstream the Pi currently has — Bluetooth tethering
+	// (bnep0) or WiFi (wlan0) — via NAT. When false the AP stays a captive
+	// admin-only portal with no internet egress.
+	ShareInternet bool `yaml:"share_internet"`
 }
 
 type SystemConfig struct {
@@ -349,7 +354,9 @@ func (c *Config) Save() error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	tmp := c.ConfigFilePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	// Config contains secrets (Samba password, Telegram bot token, webhook
+	// secret, web secret key) — restrict to the owner.
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("write config temp: %w", err)
 	}
 	if err := os.Rename(tmp, c.ConfigFilePath); err != nil {

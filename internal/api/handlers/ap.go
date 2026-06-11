@@ -36,6 +36,23 @@ func (h *APHandler) Force(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": req.Mode})
 }
 
+func (h *APHandler) ShareInternet(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if err := h.manager.SetShareInternet(req.Enabled); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "share_internet": req.Enabled})
+}
+
 func (h *APHandler) Configure(w http.ResponseWriter, r *http.Request) {
 	var apCfg system_ap.APConfig
 	if err := json.NewDecoder(r.Body).Decode(&apCfg); err != nil {

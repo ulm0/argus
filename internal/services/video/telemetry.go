@@ -199,14 +199,20 @@ func parseMoov(moov []byte) (timescale uint32, durations []float64, err error) {
 	if sttsS+8 > len(moov) {
 		return 0, nil, fmt.Errorf("stts truncated")
 	}
+	// Cap total frame durations so a crafted stts entry (count up to 2^32-1)
+	// can't blow up memory parsing an untrusted file from the mounted USB.
+	const maxFrames = 1 << 20
 	entryCount := binary.BigEndian.Uint32(moov[sttsS+4:])
 	pos := sttsS + 8
 	for i := 0; i < int(entryCount) && pos+8 <= len(moov); i++ {
 		count := binary.BigEndian.Uint32(moov[pos:])
 		delta := binary.BigEndian.Uint32(moov[pos+4:])
 		ms := float64(delta) / float64(timescale) * 1000
-		for j := 0; j < int(count); j++ {
+		for j := 0; j < int(count) && len(durations) < maxFrames; j++ {
 			durations = append(durations, ms)
+		}
+		if len(durations) >= maxFrames {
+			break
 		}
 		pos += 8
 	}
