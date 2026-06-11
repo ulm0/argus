@@ -309,9 +309,8 @@ export interface APStatus {
   enabled: boolean;
   active: boolean;
   ssid: string;
-  interface: string;
+  passphrase: string;
   force_mode: string;
-  channel: number;
   client_count: number;
   share_internet?: boolean;
   upstream?: string;

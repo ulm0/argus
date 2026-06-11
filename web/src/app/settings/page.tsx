@@ -88,6 +88,7 @@ export default function SettingsPage() {
   const [apStatus, setApStatus] = useState<APStatus | null>(null);
   const [apSSID, setApSSID] = useState("");
   const [apPass, setApPass] = useState("");
+  const [showApPass, setShowApPass] = useState(false);
 
   // Network — WiFi client
   const [wifiStatus, setWifiStatus] = useState<WifiStatus | null>(null);
@@ -270,6 +271,15 @@ export default function SettingsPage() {
       showToast(e instanceof Error ? e.message : "Failed to update network", false);
     }
   }, [showToast, refreshSavedWifi]);
+
+  const copyText = useCallback(async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast(`${label} copied`);
+    } catch {
+      showToast("Copy failed — clipboard unavailable", false);
+    }
+  }, [showToast]);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -853,19 +863,76 @@ export default function SettingsPage() {
             <input id="ap-ssid" type="text" className={inputCls} value={apSSID} onChange={(e) => setApSSID(e.target.value)} />
           </div>
           <div>
-            <label className={fieldLabel} htmlFor="ap-pass">Passphrase</label>
+            <label className={fieldLabel} htmlFor="ap-pass">New passphrase</label>
             <input id="ap-pass" type="password" className={inputCls} value={apPass} onChange={(e) => setApPass(e.target.value)} placeholder="Leave blank to keep current" />
           </div>
         </div>
-        <div className="mt-5 flex flex-wrap gap-2">
+
+        {apStatus?.passphrase && (
+          <div className="mt-3">
+            <label className={fieldLabel}>Current passphrase</label>
+            <div className="flex items-center gap-2">
+              <input
+                type={showApPass ? "text" : "password"}
+                className={inputCls}
+                value={apStatus.passphrase}
+                readOnly
+              />
+              <button
+                type="button"
+                onClick={() => setShowApPass((v) => !v)}
+                className="shrink-0 rounded border border-[var(--color-border)] px-3 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]"
+              >
+                {showApPass ? "Hide" : "Show"}
+              </button>
+              <button
+                type="button"
+                onClick={() => copyText(apStatus.passphrase, "Passphrase")}
+                className="shrink-0 rounded border border-[var(--color-border)] px-3 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]"
+              >
+                Copy
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-5">
           <button className={btnPrimaryCls} disabled={saving === "ap-basic"} onClick={saveAP}>
-            {saving === "ap-basic" ? "Saving…" : "Save"}
+            {saving === "ap-basic" ? "Saving…" : "Save SSID / passphrase"}
           </button>
-          {(["on", "off", "auto"] as const).map((m) => (
-            <button key={m} className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold capitalize text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]" onClick={() => forceAP(m)}>
-              Force {m}
-            </button>
-          ))}
+        </div>
+
+        <div className="mt-5">
+          <label className={fieldLabel}>Hotspot mode</label>
+          <div className="flex flex-wrap gap-2">
+            {([
+              { mode: "auto", label: "Auto (fallback)", desc: "On only when WiFi/internet is lost" },
+              { mode: "on", label: "Always on", desc: "Hotspot stays up at all times" },
+              { mode: "off", label: "Always off", desc: "Never start the hotspot" },
+            ] as const).map((o) => {
+              const isActive = apStatus?.force_mode === o.mode;
+              return (
+                <button
+                  key={o.mode}
+                  title={o.desc}
+                  onClick={() => forceAP(o.mode)}
+                  className={`rounded border px-4 py-2.5 text-sm font-semibold transition-all ${
+                    isActive
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white"
+                      : "border-[var(--color-border)] bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+            {apStatus?.force_mode === "on" && "Hotspot is forced on at all times."}
+            {apStatus?.force_mode === "off" && "Hotspot is forced off — it will not start even when WiFi drops."}
+            {(apStatus?.force_mode === "auto" || !apStatus?.force_mode) &&
+              "Hotspot starts automatically when the Pi loses WiFi/internet, and stops when it reconnects."}
+          </p>
         </div>
 
         <label className="mt-5 flex items-start gap-3 rounded border border-[var(--color-border)] p-3">
