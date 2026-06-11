@@ -72,6 +72,7 @@ offline_ap:
   retry_seconds: 300
   virtual_interface: uap0
   force_mode: auto
+  share_internet: false
 
 system:
   config_file: /boot/firmware/config.txt

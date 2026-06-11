@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import type React from "react";
 import * as api from "@/lib/api";
-import type { ConfigResponse, APStatus, WifiStatus, WifiNetwork, SavedWifiNetwork, TelegramStatus, SambaStatus } from "@/lib/types";
+import type { ConfigResponse, APStatus, WifiStatus, WifiNetwork, SavedWifiNetwork, BluetoothStatus, BluetoothDevice, TelegramStatus, SambaStatus } from "@/lib/types";
 import { useSpeedUnit } from "@/lib/useSpeedUnit";
 import type { SpeedUnit } from "@/lib/useSpeedUnit";
 import { useMapTheme } from "@/lib/useMapTheme";
@@ -96,6 +96,8 @@ export default function SettingsPage() {
   const [wifiPass, setWifiPass] = useState("");
   const [scanning, setScanning] = useState(false);
   const [savedWifi, setSavedWifi] = useState<SavedWifiNetwork[]>([]);
+  const [btStatus, setBtStatus] = useState<BluetoothStatus | null>(null);
+  const [btDevices, setBtDevices] = useState<BluetoothDevice[]>([]);
 
   // Notifications — Telegram
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
@@ -135,10 +137,12 @@ export default function SettingsPage() {
   }, []);
 
   const loadNetwork = useCallback(async () => {
-    const [ap, wifi, saved, tg, smb] = await Promise.allSettled([
+    const [ap, wifi, saved, bt, btDev, tg, smb] = await Promise.allSettled([
       api.getAPStatus(),
       api.getWifiStatus(),
       api.getSavedWifi(),
+      api.getBluetoothStatus(),
+      api.getBluetoothDevices(),
       api.getTelegramStatus(),
       api.getSambaStatus(),
     ]);
@@ -151,6 +155,8 @@ export default function SettingsPage() {
       if (wifi.value.connection?.ssid) setWifiSSID(wifi.value.connection.ssid);
     }
     if (saved.status === "fulfilled") setSavedWifi(saved.value.networks || []);
+    if (bt.status === "fulfilled") setBtStatus(bt.value);
+    if (btDev.status === "fulfilled") setBtDevices(btDev.value.devices || []);
     if (tg.status === "fulfilled") setTelegramStatus(tg.value);
     if (smb.status === "fulfilled") setSambaStatus(smb.value);
   }, []);
@@ -161,6 +167,35 @@ export default function SettingsPage() {
       setSavedWifi(res.networks || []);
     } catch {}
   }, []);
+
+  const refreshBluetooth = useCallback(async () => {
+    const [st, dev] = await Promise.allSettled([
+      api.getBluetoothStatus(),
+      api.getBluetoothDevices(),
+    ]);
+    if (st.status === "fulfilled") setBtStatus(st.value);
+    if (dev.status === "fulfilled") setBtDevices(dev.value.devices || []);
+  }, []);
+
+  const connectBluetooth = useCallback(async (mac: string, name: string) => {
+    try {
+      await api.bluetoothConnect(mac);
+      showToast(`Connecting to ${name}…`);
+      await refreshBluetooth();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Bluetooth connect failed", false);
+    }
+  }, [showToast, refreshBluetooth]);
+
+  const disconnectBluetooth = useCallback(async (mac: string, name: string) => {
+    try {
+      await api.bluetoothDisconnect(mac);
+      showToast(`Disconnected ${name}`);
+      await refreshBluetooth();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Bluetooth disconnect failed", false);
+    }
+  }, [showToast, refreshBluetooth]);
 
   const forgetWifi = useCallback(async (uuid: string, name: string) => {
     if (!confirm(`Forget WiFi network "${name}"? The device will no longer auto-join it.`)) return;
@@ -252,6 +287,16 @@ export default function SettingsPage() {
     try {
       await api.forceAP(mode);
       showToast(`AP mode: ${mode}`);
+      setApStatus(await api.getAPStatus());
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    }
+  }, [showToast]);
+
+  const toggleShareInternet = useCallback(async (enabled: boolean) => {
+    try {
+      await api.setAPShareInternet(enabled);
+      showToast(enabled ? "Internet sharing enabled" : "Internet sharing disabled");
       setApStatus(await api.getAPStatus());
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Failed", false);
@@ -768,6 +813,28 @@ export default function SettingsPage() {
             </button>
           ))}
         </div>
+
+        <label className="mt-5 flex items-start gap-3 rounded border border-[var(--color-border)] p-3">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={!!apStatus?.share_internet}
+            onChange={(e) => toggleShareInternet(e.target.checked)}
+          />
+          <span className="text-sm">
+            <span className="font-semibold text-[var(--color-text-primary)]">Share internet to clients</span>
+            <span className="mt-0.5 block text-xs text-[var(--color-text-muted)]">
+              Route devices that join this hotspot (e.g. the car) out to the Pi&apos;s current
+              upstream — Bluetooth tethering or WiFi — via NAT. Off keeps the AP an admin-only portal.
+              {apStatus?.share_internet && apStatus?.upstream && (
+                <span className="text-[var(--color-success)]"> Upstream: {apStatus.upstream}.</span>
+              )}
+              {apStatus?.share_internet && apStatus?.active && !apStatus?.upstream && (
+                <span className="text-[var(--color-danger)]"> No upstream with internet detected.</span>
+              )}
+            </span>
+          </span>
+        </label>
       </div>
 
       {/* ── WiFi Client ─────────────────────────── */}
@@ -851,6 +918,60 @@ export default function SettingsPage() {
                 </div>
               ))}
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── Bluetooth Tethering ─────────────────── */}
+      <div className={cardCls}>
+        <SectionHeader
+          title="Bluetooth Tethering"
+          description="Pull internet from a paired phone over Bluetooth (PAN), then share it to the car via the AP's 'Share internet' toggle."
+        />
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+          <span className={`rounded px-2 py-0.5 font-semibold ${btStatus?.tethered ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"}`}>
+            {btStatus?.tethered ? "Tethered" : "Not tethered"}
+          </span>
+          {btStatus?.tethered && btStatus?.device_name && (
+            <span className="text-[var(--color-text-muted)]">via {btStatus.device_name}</span>
+          )}
+          <button className="ml-auto rounded border border-[var(--color-border)] px-3 py-1 font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]" onClick={refreshBluetooth}>
+            Refresh
+          </button>
+        </div>
+        {btDevices.length === 0 ? (
+          <p className="text-sm text-[var(--color-text-muted)]">
+            No paired devices. Pair your phone with the Pi once (Bluetooth settings), enable
+            its Bluetooth tethering, then it will appear here.
+          </p>
+        ) : (
+          <div className="divide-y divide-[var(--color-border)] rounded border border-[var(--color-border)]">
+            {btDevices.map((d) => (
+              <div key={d.mac} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="truncate font-medium text-[var(--color-text-primary)]">{d.name}</span>
+                  <span className="shrink-0 text-xs text-[var(--color-text-muted)]">{d.mac}</span>
+                  {d.connected && (
+                    <span className="shrink-0 rounded bg-[var(--color-success-bg)] px-1.5 py-0.5 text-xs text-[var(--color-success)]">Connected</span>
+                  )}
+                </span>
+                {d.connected ? (
+                  <button
+                    onClick={() => disconnectBluetooth(d.mac, d.name)}
+                    className="shrink-0 rounded border border-[var(--color-border)] px-2 py-1 text-xs font-semibold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-danger)] hover:text-[var(--color-danger)]"
+                  >
+                    Disconnect
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => connectBluetooth(d.mac, d.name)}
+                    className="shrink-0 rounded border border-[var(--color-border)] px-2 py-1 text-xs font-semibold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]"
+                  >
+                    Connect
+                  </button>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </div>

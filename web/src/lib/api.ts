@@ -2,6 +2,8 @@ import type {
   AppStatus,
   APConfig,
   APStatus,
+  BluetoothDevice,
+  BluetoothStatus,
   ChimeFilenamesResponse,
   ChimeGroup,
   ChimeGroupsResponse,
@@ -465,6 +467,30 @@ export function forceAP(mode: "auto" | "on" | "off"): Promise<StatusResponse> {
 
 export function configureAP(config: Partial<APConfig>): Promise<{ status: string; config: APConfig }> {
   return post("/api/ap/configure", config);
+}
+
+export function setAPShareInternet(enabled: boolean): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/ap/share-internet", { enabled });
+}
+
+// ──────────────────────────────────────────────
+// Bluetooth tethering
+// ──────────────────────────────────────────────
+
+export function getBluetoothStatus(): Promise<BluetoothStatus> {
+  return request<BluetoothStatus>("/api/bluetooth/status");
+}
+
+export function getBluetoothDevices(): Promise<{ devices: BluetoothDevice[] }> {
+  return request<{ devices: BluetoothDevice[] }>("/api/bluetooth/devices");
+}
+
+export function bluetoothConnect(mac: string): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/bluetooth/connect", { mac });
+}
+
+export function bluetoothDisconnect(mac: string): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/bluetooth/disconnect", { mac });
 }
 
 // ──────────────────────────────────────────────

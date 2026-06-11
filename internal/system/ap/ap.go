@@ -26,15 +26,17 @@ const (
 )
 
 type Status struct {
-	Enabled     bool      `json:"enabled"`
-	APActive    bool      `json:"ap_active"`
-	ForceMode   ForceMode `json:"force_mode"`
-	SSID        string    `json:"ssid"`
-	StaticIP    string    `json:"static_ip"`
-	DHCPStart   string    `json:"dhcp_range_start"`
-	DHCPEnd     string    `json:"dhcp_range_end"`
-	ClientCount int       `json:"client_count"`
-	Error       string    `json:"error,omitempty"`
+	Enabled       bool      `json:"enabled"`
+	APActive      bool      `json:"ap_active"`
+	ForceMode     ForceMode `json:"force_mode"`
+	SSID          string    `json:"ssid"`
+	StaticIP      string    `json:"static_ip"`
+	DHCPStart     string    `json:"dhcp_range_start"`
+	DHCPEnd       string    `json:"dhcp_range_end"`
+	ClientCount   int       `json:"client_count"`
+	ShareInternet bool      `json:"share_internet"`
+	Upstream      string    `json:"upstream,omitempty"`
+	Error         string    `json:"error,omitempty"`
 }
 
 type APConfig struct {
@@ -103,16 +105,20 @@ func (m *Manager) GetStatus() Status {
 	defer m.mu.Unlock()
 
 	s := Status{
-		Enabled:   m.cfg.OfflineAP.Enabled,
-		APActive:  m.active,
-		ForceMode: m.forceMode,
-		SSID:      m.cfg.OfflineAP.SSID,
-		StaticIP:  m.cfg.OfflineAP.IPv4CIDR,
-		DHCPStart: m.cfg.OfflineAP.DHCPStart,
-		DHCPEnd:   m.cfg.OfflineAP.DHCPEnd,
+		Enabled:       m.cfg.OfflineAP.Enabled,
+		APActive:      m.active,
+		ForceMode:     m.forceMode,
+		SSID:          m.cfg.OfflineAP.SSID,
+		StaticIP:      m.cfg.OfflineAP.IPv4CIDR,
+		DHCPStart:     m.cfg.OfflineAP.DHCPStart,
+		DHCPEnd:       m.cfg.OfflineAP.DHCPEnd,
+		ShareInternet: m.cfg.OfflineAP.ShareInternet,
 	}
 	if m.active {
 		s.ClientCount = m.clientCount()
+		if m.cfg.OfflineAP.ShareInternet {
+			s.Upstream = upstreamInterface(m.cfg.OfflineAP.VirtualInterface)
+		}
 	}
 	return s
 }
@@ -236,9 +242,11 @@ func (m *Manager) startAPLocked() error {
 		return fmt.Errorf("hostapd exited after start (check channel and country/regulatory domain)")
 	}
 
-	// Write and start dnsmasq
+	// Write and start dnsmasq. In share-internet mode it resolves real domains
+	// (clients reach the internet); otherwise it stays a captive portal that
+	// points every lookup back at the admin UI.
 	dnsmasqConf := filepath.Join(runtimeDir, "dnsmasq.conf")
-	if err := m.writeDnsmasqConf(dnsmasqConf, ip); err != nil {
+	if err := m.writeDnsmasqConf(dnsmasqConf, ip, !m.cfg.OfflineAP.ShareInternet); err != nil {
 		return fmt.Errorf("write dnsmasq config: %w", err)
 	}
 
@@ -253,6 +261,22 @@ func (m *Manager) startAPLocked() error {
 			logger.L.WithError(err).Debug("dnsmasq exited")
 		}
 	}()
+
+	// In share-internet mode, NAT AP clients out to the current upstream
+	// (Bluetooth tethering or WiFi) so a device joining the hotspot — e.g. the
+	// car — gets real internet through the Pi. Best-effort: the AP itself is up
+	// regardless, so a NAT failure is logged, not fatal.
+	if m.cfg.OfflineAP.ShareInternet {
+		if up := upstreamInterface(vif); up != "" {
+			if err := enableNAT(vif, up); err != nil {
+				logger.L.WithError(err).Warn("enable internet sharing NAT failed")
+			} else {
+				logger.L.WithField("upstream", up).Info("AP internet sharing enabled")
+			}
+		} else {
+			logger.L.Warn("share_internet enabled but no upstream interface has internet")
+		}
+	}
 
 	m.active = true
 	m.recordAPStart()
@@ -274,6 +298,9 @@ func (m *Manager) stopAPLocked() error {
 		exec.Command("pkill", "-f", "dnsmasq.*argus").Run()
 	}
 	time.Sleep(500 * time.Millisecond)
+
+	// Remove any NAT rules we installed for internet sharing.
+	disableNAT(m.cfg.OfflineAP.VirtualInterface)
 
 	m.cleanupInterface(m.cfg.OfflineAP.VirtualInterface)
 
@@ -351,6 +378,25 @@ func (m *Manager) UpdateAPConfig(apCfg APConfig) error {
 	return nil
 }
 
+// SetShareInternet toggles routing AP clients to the upstream internet and
+// persists it. Restarts the AP when active so the NAT rules and dnsmasq mode
+// (captive vs. resolving) are reapplied.
+func (m *Manager) SetShareInternet(enabled bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.cfg.OfflineAP.ShareInternet = enabled
+	if err := m.cfg.Save(); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+
+	if m.active {
+		m.stopAPLocked()
+		return m.startAPLocked()
+	}
+	return nil
+}
+
 func (m *Manager) writeHostapdConf(path string) error {
 	const hostapdTmpl = `interface={{.VIF}}
 driver=nl80211
@@ -395,14 +441,14 @@ rsn_pairwise=CCMP
 	})
 }
 
-func (m *Manager) writeDnsmasqConf(path, gatewayIP string) error {
+func (m *Manager) writeDnsmasqConf(path, gatewayIP string, captive bool) error {
 	const dnsmasqTmpl = `interface={{.VIF}}
 bind-interfaces
 dhcp-range={{.DHCPStart}},{{.DHCPEnd}},12h
 dhcp-option=3,{{.GatewayIP}}
 dhcp-option=6,{{.GatewayIP}}
-address=/#/{{.GatewayIP}}
-`
+{{if .Captive}}address=/#/{{.GatewayIP}}
+{{end}}`
 	tmpl, err := template.New("dnsmasq").Parse(dnsmasqTmpl)
 	if err != nil {
 		return err
@@ -419,7 +465,87 @@ address=/#/{{.GatewayIP}}
 		"DHCPStart": m.cfg.OfflineAP.DHCPStart,
 		"DHCPEnd":   m.cfg.OfflineAP.DHCPEnd,
 		"GatewayIP": gatewayIP,
+		"Captive":   captive,
 	})
+}
+
+// upstreamInterface returns the interface that currently carries a default route
+// (i.e. has internet), preferring Bluetooth tethering, then WiFi, then wired. The
+// AP's own virtual interface is always excluded.
+func upstreamInterface(vif string) string {
+	out, err := exec.Command("ip", "route", "show", "default").Output()
+	if err != nil {
+		return ""
+	}
+
+	devs := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		for i, f := range fields {
+			if f == "dev" && i+1 < len(fields) {
+				dev := fields[i+1]
+				if dev != vif {
+					devs[dev] = true
+				}
+			}
+		}
+	}
+
+	for _, pref := range []string{"bnep0", "wlan0", "eth0", "usb0"} {
+		if devs[pref] {
+			return pref
+		}
+	}
+	// Fall back to any remaining default-route device.
+	for dev := range devs {
+		return dev
+	}
+	return ""
+}
+
+// enableNAT masquerades AP-client traffic out through the upstream interface and
+// turns on IPv4 forwarding. Rules are added only if not already present so a
+// restart doesn't stack duplicates.
+func enableNAT(vif, upstream string) error {
+	if err := exec.Command("sysctl", "-w", "net.ipv4.ip_forward=1").Run(); err != nil {
+		return fmt.Errorf("enable ip_forward: %w", err)
+	}
+	rules := natRules(vif, upstream)
+	for _, r := range rules {
+		// -C checks for the rule; if absent (non-zero exit), append it with -A.
+		check := append([]string{"-t", r.table, "-C"}, r.spec...)
+		if exec.Command("iptables", check...).Run() != nil {
+			add := append([]string{"-t", r.table, "-A"}, r.spec...)
+			if err := exec.Command("iptables", add...).Run(); err != nil {
+				return fmt.Errorf("iptables -A %v: %w", r.spec, err)
+			}
+		}
+	}
+	return nil
+}
+
+// disableNAT removes the masquerade/forward rules for vif across every known
+// upstream interface. Best-effort: missing rules are ignored.
+func disableNAT(vif string) {
+	for _, upstream := range []string{"bnep0", "wlan0", "eth0", "usb0"} {
+		for _, r := range natRules(vif, upstream) {
+			del := append([]string{"-t", r.table, "-D"}, r.spec...)
+			exec.Command("iptables", del...).Run()
+		}
+	}
+}
+
+type iptRule struct {
+	table string
+	spec  []string
+}
+
+func natRules(vif, upstream string) []iptRule {
+	return []iptRule{
+		{"nat", []string{"POSTROUTING", "-o", upstream, "-j", "MASQUERADE"}},
+		{"filter", []string{"FORWARD", "-i", upstream, "-o", vif, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"}},
+		{"filter", []string{"FORWARD", "-i", vif, "-o", upstream, "-j", "ACCEPT"}},
+	}
 }
 
 func (m *Manager) recordAPStart() {

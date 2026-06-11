@@ -102,6 +102,11 @@ type OfflineAPConfig struct {
 	RetrySeconds     int    `yaml:"retry_seconds"`
 	VirtualInterface string `yaml:"virtual_interface"`
 	ForceMode        string `yaml:"force_mode"`
+	// ShareInternet routes AP clients (e.g. the car joining the Pi's hotspot)
+	// out to whatever upstream the Pi currently has — Bluetooth tethering
+	// (bnep0) or WiFi (wlan0) — via NAT. When false the AP stays a captive
+	// admin-only portal with no internet egress.
+	ShareInternet bool `yaml:"share_internet"`
 }
 
 type SystemConfig struct {
