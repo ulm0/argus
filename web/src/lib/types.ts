@@ -360,6 +360,14 @@ export interface WifiScanResponse {
   networks: WifiNetwork[];
 }
 
+export interface SavedWifiNetwork {
+  name: string;
+  uuid: string;
+  autoconnect: boolean;
+  priority: number;
+  active: boolean;
+}
+
 // Telegram
 
 export interface TelegramStatus {

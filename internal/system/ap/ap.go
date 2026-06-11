@@ -54,8 +54,34 @@ type Manager struct {
 	mu        sync.Mutex
 	active    bool
 	forceMode ForceMode
-	hostapdCmd *exec.Cmd
 	dnsmasqCmd *exec.Cmd
+}
+
+// cleanupInterface tears down the virtual AP interface, used both on stop and
+// when a startup step fails partway through.
+func (m *Manager) cleanupInterface(vif string) {
+	exec.Command("ip", "link", "set", vif, "down").Run()
+	exec.Command("iw", "dev", vif, "del").Run()
+}
+
+// detectCountry returns the active wireless regulatory country code (e.g. "US")
+// from `iw reg get`, or "" when it is unset/global ("00"). hostapd needs this to
+// bring the radio up on many channels; without it the AP often fails to start.
+func detectCountry() string {
+	out, err := exec.Command("iw", "reg", "get").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "country ") {
+			code := strings.TrimSpace(strings.TrimPrefix(line, "country "))
+			if len(code) >= 2 && code[:2] != "00" {
+				return code[:2]
+			}
+		}
+	}
+	return ""
 }
 
 func NewManager(cfg *config.Config) *Manager {
@@ -178,8 +204,10 @@ func (m *Manager) startAPLocked() error {
 		return fmt.Errorf("create virtual interface: %w", err)
 	}
 
-	// Configure IP address
+	// Configure IP address. Flush first so a stale address left by a previous
+	// run can't make "ip addr add" fail with EEXIST.
 	ip := strings.Split(m.cfg.OfflineAP.IPv4CIDR, "/")[0]
+	exec.Command("ip", "addr", "flush", "dev", vif).Run()
 	if err := exec.Command("ip", "addr", "add", m.cfg.OfflineAP.IPv4CIDR, "dev", vif).Run(); err != nil {
 		logger.L.WithError(err).Warn("ip addr add may have failed")
 	}
@@ -193,13 +221,20 @@ func (m *Manager) startAPLocked() error {
 		return fmt.Errorf("write hostapd config: %w", err)
 	}
 
-	hostapdCmd := exec.Command("hostapd", "-B", hostapdConf)
-	if err := hostapdCmd.Start(); err != nil {
-		return fmt.Errorf("start hostapd: %w", err)
+	// hostapd -B daemonizes and returns 0 once forked, so a config parse error
+	// is caught here, but a post-fork radio failure (bad channel / missing
+	// regulatory domain) is not — the launcher still exits 0. Verify the daemon
+	// is actually alive afterwards so we never report the AP as active while it
+	// is silently broadcasting nothing.
+	if out, err := exec.Command("hostapd", "-B", hostapdConf).CombinedOutput(); err != nil {
+		m.cleanupInterface(vif)
+		return fmt.Errorf("hostapd failed to start: %w (%s)", err, strings.TrimSpace(string(out)))
 	}
-	m.hostapdCmd = hostapdCmd
-	// hostapd is daemonized (-B), reap the launcher process in a goroutine.
-	go hostapdCmd.Wait() //nolint:errcheck
+	time.Sleep(1 * time.Second)
+	if exec.Command("pgrep", "-f", "hostapd.*argus").Run() != nil {
+		m.cleanupInterface(vif)
+		return fmt.Errorf("hostapd exited after start (check channel and country/regulatory domain)")
+	}
 
 	// Write and start dnsmasq
 	dnsmasqConf := filepath.Join(runtimeDir, "dnsmasq.conf")
@@ -230,14 +265,8 @@ func (m *Manager) stopAPLocked() error {
 		return nil
 	}
 
-	// Kill hostapd and dnsmasq via stored process handles when available,
-	// falling back to pkill for externally-spawned processes.
-	if m.hostapdCmd != nil && m.hostapdCmd.Process != nil {
-		m.hostapdCmd.Process.Kill()
-		m.hostapdCmd = nil
-	} else {
-		exec.Command("pkill", "-f", "hostapd.*argus").Run()
-	}
+	// hostapd is daemonized (-B), so the only reliable handle is its cmdline.
+	exec.Command("pkill", "-f", "hostapd.*argus").Run()
 	if m.dnsmasqCmd != nil && m.dnsmasqCmd.Process != nil {
 		m.dnsmasqCmd.Process.Kill()
 		m.dnsmasqCmd = nil
@@ -246,10 +275,7 @@ func (m *Manager) stopAPLocked() error {
 	}
 	time.Sleep(500 * time.Millisecond)
 
-	// Remove virtual interface
-	vif := m.cfg.OfflineAP.VirtualInterface
-	exec.Command("ip", "link", "set", vif, "down").Run()
-	exec.Command("iw", "dev", vif, "del").Run()
+	m.cleanupInterface(m.cfg.OfflineAP.VirtualInterface)
 
 	m.active = false
 	m.clearAPState()
@@ -331,14 +357,15 @@ driver=nl80211
 ssid={{.SSID}}
 hw_mode=g
 channel={{.Channel}}
-wmm_enabled=0
+{{if .Country}}country_code={{.Country}}
+ieee80211d=1
+{{end}}wmm_enabled=0
 macaddr_acl=0
 auth_algs=1
 ignore_broadcast_ssid=0
 wpa=2
 wpa_passphrase={{.Passphrase}}
 wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
 rsn_pairwise=CCMP
 `
 	tmpl, err := template.New("hostapd").Parse(hostapdTmpl)
@@ -352,11 +379,19 @@ rsn_pairwise=CCMP
 	}
 	defer f.Close()
 
+	// channel 0 means ACS (auto-select), which brcmfmac on the Pi does not
+	// support — fall back to a sane fixed 2.4GHz channel.
+	channel := m.cfg.OfflineAP.Channel
+	if channel <= 0 {
+		channel = 6
+	}
+
 	return tmpl.Execute(f, map[string]any{
 		"VIF":        m.cfg.OfflineAP.VirtualInterface,
 		"SSID":       m.cfg.OfflineAP.SSID,
-		"Channel":    m.cfg.OfflineAP.Channel,
+		"Channel":    channel,
 		"Passphrase": m.cfg.OfflineAP.Passphrase,
+		"Country":    detectCountry(),
 	})
 }
 

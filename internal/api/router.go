@@ -101,6 +101,9 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	api.HandleFunc("/wifi/scan", wifiH.Scan).Methods("GET")
 	api.HandleFunc("/wifi/dismiss-status", wifiH.DismissStatus).Methods("POST")
 	api.HandleFunc("/wifi/status", wifiH.Status).Methods("GET")
+	api.HandleFunc("/wifi/saved", wifiH.SavedNetworks).Methods("GET")
+	api.HandleFunc("/wifi/forget", wifiH.ForgetNetwork).Methods("POST")
+	api.HandleFunc("/wifi/autoconnect", wifiH.SetAutoConnect).Methods("POST")
 
 	// Videos
 	api.HandleFunc("/videos", videoH.List).Methods("GET")

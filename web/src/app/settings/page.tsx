@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import type React from "react";
 import * as api from "@/lib/api";
-import type { ConfigResponse, APStatus, WifiStatus, WifiNetwork, TelegramStatus, SambaStatus } from "@/lib/types";
+import type { ConfigResponse, APStatus, WifiStatus, WifiNetwork, SavedWifiNetwork, TelegramStatus, SambaStatus } from "@/lib/types";
 import { useSpeedUnit } from "@/lib/useSpeedUnit";
 import type { SpeedUnit } from "@/lib/useSpeedUnit";
 import { useMapTheme } from "@/lib/useMapTheme";
@@ -95,6 +95,7 @@ export default function SettingsPage() {
   const [wifiSSID, setWifiSSID] = useState("");
   const [wifiPass, setWifiPass] = useState("");
   const [scanning, setScanning] = useState(false);
+  const [savedWifi, setSavedWifi] = useState<SavedWifiNetwork[]>([]);
 
   // Notifications — Telegram
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
@@ -134,9 +135,10 @@ export default function SettingsPage() {
   }, []);
 
   const loadNetwork = useCallback(async () => {
-    const [ap, wifi, tg, smb] = await Promise.allSettled([
+    const [ap, wifi, saved, tg, smb] = await Promise.allSettled([
       api.getAPStatus(),
       api.getWifiStatus(),
+      api.getSavedWifi(),
       api.getTelegramStatus(),
       api.getSambaStatus(),
     ]);
@@ -148,9 +150,37 @@ export default function SettingsPage() {
       setWifiStatus(wifi.value);
       if (wifi.value.connection?.ssid) setWifiSSID(wifi.value.connection.ssid);
     }
+    if (saved.status === "fulfilled") setSavedWifi(saved.value.networks || []);
     if (tg.status === "fulfilled") setTelegramStatus(tg.value);
     if (smb.status === "fulfilled") setSambaStatus(smb.value);
   }, []);
+
+  const refreshSavedWifi = useCallback(async () => {
+    try {
+      const res = await api.getSavedWifi();
+      setSavedWifi(res.networks || []);
+    } catch {}
+  }, []);
+
+  const forgetWifi = useCallback(async (uuid: string, name: string) => {
+    if (!confirm(`Forget WiFi network "${name}"? The device will no longer auto-join it.`)) return;
+    try {
+      await api.forgetWifi(uuid);
+      showToast(`Forgot ${name}`);
+      refreshSavedWifi();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to forget network", false);
+    }
+  }, [showToast, refreshSavedWifi]);
+
+  const toggleWifiAutoConnect = useCallback(async (n: SavedWifiNetwork) => {
+    try {
+      await api.setWifiAutoConnect(n.uuid, !n.autoconnect);
+      refreshSavedWifi();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed to update network", false);
+    }
+  }, [showToast, refreshSavedWifi]);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -790,6 +820,39 @@ export default function SettingsPage() {
             {saving === "wifi" ? "Connecting…" : "Connect"}
           </button>
         </div>
+
+        {savedWifi.length > 0 && (
+          <div className="mt-6 border-t border-[var(--color-border)] pt-4">
+            <p className="mb-1 text-sm font-semibold text-[var(--color-text-primary)]">Saved Networks</p>
+            <p className="mb-3 text-xs text-[var(--color-text-muted)]">
+              Networks this device has joined. Toggle auto-join or forget them.
+            </p>
+            <div className="divide-y divide-[var(--color-border)] rounded border border-[var(--color-border)]">
+              {savedWifi.map((n) => (
+                <div key={n.uuid} className="flex items-center justify-between gap-3 px-3 py-2 text-sm">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate font-medium text-[var(--color-text-primary)]">{n.name}</span>
+                    {n.active && (
+                      <span className="shrink-0 rounded bg-[var(--color-success-bg)] px-1.5 py-0.5 text-xs text-[var(--color-success)]">Connected</span>
+                    )}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-3 text-xs">
+                    <label className="flex items-center gap-1.5 text-[var(--color-text-muted)]">
+                      <input type="checkbox" checked={n.autoconnect} onChange={() => toggleWifiAutoConnect(n)} />
+                      Auto-join
+                    </label>
+                    <button
+                      onClick={() => forgetWifi(n.uuid, n.name)}
+                      className="rounded border border-[var(--color-border)] px-2 py-1 font-semibold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-danger)] hover:text-[var(--color-danger)]"
+                    >
+                      Forget
+                    </button>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Telegram Alerts ─────────────────────── */}

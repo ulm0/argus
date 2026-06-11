@@ -75,7 +75,7 @@ func (h *VideoHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	folderPath := filepath.Join(tcPath, filepath.Clean(folder))
-	if !strings.HasPrefix(folderPath, tcPath) {
+	if !withinBase(folderPath, tcPath) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid folder path"})
 		return
 	}
@@ -84,6 +84,12 @@ func (h *VideoHandler) List(w http.ResponseWriter, r *http.Request) {
 	perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page"))
 	if perPage <= 0 {
 		perPage = 20
+	}
+	if perPage > 100 {
+		perPage = 100
+	}
+	if page < 0 {
+		page = 0
 	}
 
 	mode := r.URL.Query().Get("mode")
@@ -445,6 +451,13 @@ func (h *VideoHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "event": event})
 }
 
+// withinBase reports whether p is base itself or nested under it. The trailing
+// separator prevents sibling-directory escapes that a bare strings.HasPrefix
+// allows (e.g. base="/mnt/TeslaCam" p="/mnt/TeslaCam-evil").
+func withinBase(p, base string) bool {
+	return p == base || strings.HasPrefix(p, base+string(filepath.Separator))
+}
+
 // resolveFolderPath resolves a folder name (from the API) to its absolute path on disk.
 // Folders prefixed with "archive/" are resolved against the archive TeslaCam path.
 func (h *VideoHandler) resolveFolderPath(folder string) string {
@@ -455,7 +468,7 @@ func (h *VideoHandler) resolveFolderPath(folder string) string {
 		}
 		sub := strings.TrimPrefix(folder, "archive/")
 		p := filepath.Join(archivePath, filepath.Clean(sub))
-		if !strings.HasPrefix(p, archivePath) {
+		if !withinBase(p, archivePath) {
 			return ""
 		}
 		return p
@@ -466,7 +479,7 @@ func (h *VideoHandler) resolveFolderPath(folder string) string {
 		return ""
 	}
 	p := filepath.Join(tcPath, filepath.Clean(folder))
-	if !strings.HasPrefix(p, tcPath) {
+	if !withinBase(p, tcPath) {
 		return ""
 	}
 	return p
@@ -485,7 +498,7 @@ func (h *VideoHandler) resolveVideoPath(r *http.Request) string {
 	}
 
 	fullPath := filepath.Join(tcPath, filepath.Clean(wildcard))
-	if !strings.HasPrefix(fullPath, tcPath) {
+	if !withinBase(fullPath, tcPath) {
 		return ""
 	}
 	return fullPath

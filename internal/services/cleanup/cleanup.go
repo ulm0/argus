@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ulm0/argus/internal/config"
@@ -67,6 +68,7 @@ type CleanupReport struct {
 
 type Service struct {
 	cfg        *config.Config
+	mu         sync.RWMutex
 	policies   map[string]FolderPolicy
 	configFile string
 }
@@ -141,13 +143,21 @@ func (s *Service) SavePolicies(policies map[string]FolderPolicy) error {
 		os.Remove(tmp)
 		return err
 	}
+	s.mu.Lock()
 	s.policies = policies
+	s.mu.Unlock()
 	return nil
 }
 
-// GetPolicies returns the current cleanup policies.
+// GetPolicies returns a copy of the current cleanup policies.
 func (s *Service) GetPolicies() map[string]FolderPolicy {
-	return s.policies
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[string]FolderPolicy, len(s.policies))
+	for k, v := range s.policies {
+		out[k] = v
+	}
+	return out
 }
 
 // DetectFolders finds TeslaCam subfolders on the partition.
@@ -172,10 +182,11 @@ func (s *Service) DetectFolders(partitionPath string) []string {
 // them with the knobs already populated.
 func (s *Service) GetPoliciesForDetectedFolders(partitionPath string) map[string]FolderPolicy {
 	folders := s.DetectFolders(partitionPath)
+	policies := s.GetPolicies()
 	result := make(map[string]FolderPolicy)
 
 	for _, folder := range folders {
-		if p, ok := s.policies[folder]; ok {
+		if p, ok := policies[folder]; ok {
 			if p.KeepLast <= 0 {
 				p.KeepLast = defaultKeepLast
 			}
@@ -195,7 +206,7 @@ func (s *Service) CalculateCleanupPlan(partitionPath string) (*CleanupPlan, erro
 		Breakdown: make(map[string][]EventToDelete),
 	}
 
-	for folder, policy := range s.policies {
+	for folder, policy := range s.GetPolicies() {
 		if !policy.Enabled || policy.KeepLast <= 0 {
 			continue
 		}

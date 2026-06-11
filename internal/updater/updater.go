@@ -1,6 +1,9 @@
 package updater
 
 import (
+	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +28,8 @@ const (
 type Release struct {
 	Version     string
 	DownloadURL string
+	ChecksumURL string
+	AssetName   string
 	PublishedAt time.Time
 }
 
@@ -105,10 +110,13 @@ func CheckLatest(currentVersion string) (*Release, error) {
 
 	assetName := assetNameForArch(gr.TagName)
 	downloadURL := ""
+	checksumURL := ""
 	for _, a := range gr.Assets {
-		if a.Name == assetName {
+		switch a.Name {
+		case assetName:
 			downloadURL = a.BrowserDownloadURL
-			break
+		case "checksums.txt":
+			checksumURL = a.BrowserDownloadURL
 		}
 	}
 	if downloadURL == "" {
@@ -118,6 +126,8 @@ func CheckLatest(currentVersion string) (*Release, error) {
 	return &Release{
 		Version:     gr.TagName,
 		DownloadURL: downloadURL,
+		ChecksumURL: checksumURL,
+		AssetName:   assetName,
 		PublishedAt: gr.PublishedAt,
 	}, nil
 }
@@ -147,6 +157,13 @@ func Install(release *Release) error {
 		return fmt.Errorf("sync download: %w", err)
 	}
 	tmp.Close()
+
+	// Verify the downloaded binary against the release checksums before making it
+	// executable and swapping it into the root binary path. Fail closed: an
+	// unverifiable download is never installed.
+	if err := verifyChecksum(tmpPath, release); err != nil {
+		return fmt.Errorf("verify download: %w", err)
+	}
 
 	if err := os.Chmod(tmpPath, 0755); err != nil {
 		return fmt.Errorf("chmod binary: %w", err)
@@ -188,6 +205,62 @@ func assetNameForArch(tag string) string {
 		archSuffix = runtime.GOARCH
 	}
 	return fmt.Sprintf("argus_%s_linux_%s", version, archSuffix)
+}
+
+// verifyChecksum fetches the release checksums.txt, looks up the SHA-256 for the
+// downloaded asset, and compares it to the hash of the file at path.
+func verifyChecksum(path string, release *Release) error {
+	if release.ChecksumURL == "" {
+		return fmt.Errorf("no checksums.txt published for release %s", release.Version)
+	}
+
+	want, err := fetchChecksum(release.ChecksumURL, release.AssetName)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hash binary: %w", err)
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", release.AssetName, got, want)
+	}
+	return nil
+}
+
+// fetchChecksum downloads checksums.txt and returns the hex SHA-256 recorded for
+// assetName. The file uses the standard "<hash>  <filename>" line format.
+func fetchChecksum(url, assetName string) (string, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("checksums download returned %d", resp.StatusCode)
+	}
+
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 1<<20))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) == 2 && fields[1] == assetName {
+			return fields[0], nil
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return "", fmt.Errorf("no checksum entry for %s", assetName)
 }
 
 func downloadTo(url string, dst *os.File) error {

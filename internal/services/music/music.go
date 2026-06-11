@@ -44,13 +44,20 @@ func NewService(cfg *config.Config) *Service {
 	return &Service{cfg: cfg}
 }
 
+// isWithinDir reports whether target is base itself or a path nested under it.
+// Using base+separator guards against sibling-directory escapes that a plain
+// strings.HasPrefix allows (e.g. base="/x/Music" target="/x/Music-evil").
+func isWithinDir(target, base string) bool {
+	return target == base || strings.HasPrefix(target, base+string(filepath.Separator))
+}
+
 // ListFiles returns directory contents at the given relative path.
 func (s *Service) ListFiles(mountPath, relPath string) (*ListResult, error) {
 	musicDir := filepath.Join(mountPath, MusicFolder)
 	targetDir := filepath.Join(musicDir, filepath.Clean(relPath))
 
 	// Path traversal protection
-	if !strings.HasPrefix(targetDir, musicDir) {
+	if !isWithinDir(targetDir, musicDir) {
 		return nil, fmt.Errorf("path traversal detected")
 	}
 
@@ -99,7 +106,7 @@ func (s *Service) SaveFile(data io.Reader, filename, mountPath, relPath string) 
 	musicDir := filepath.Join(mountPath, MusicFolder)
 	targetDir := filepath.Join(musicDir, filepath.Clean(relPath))
 
-	if !strings.HasPrefix(targetDir, musicDir) {
+	if !isWithinDir(targetDir, musicDir) {
 		return fmt.Errorf("path traversal detected")
 	}
 
@@ -204,7 +211,7 @@ func (s *Service) DeleteFile(mountPath, relPath string) error {
 	musicDir := filepath.Join(mountPath, MusicFolder)
 	targetPath := filepath.Join(musicDir, filepath.Clean(relPath))
 
-	if !strings.HasPrefix(targetPath, musicDir) {
+	if !isWithinDir(targetPath, musicDir) {
 		return fmt.Errorf("path traversal detected")
 	}
 	return os.Remove(targetPath)
@@ -215,7 +222,7 @@ func (s *Service) DeleteDirectory(mountPath, relPath string) error {
 	musicDir := filepath.Join(mountPath, MusicFolder)
 	targetPath := filepath.Join(musicDir, filepath.Clean(relPath))
 
-	if !strings.HasPrefix(targetPath, musicDir) {
+	if !isWithinDir(targetPath, musicDir) {
 		return fmt.Errorf("path traversal detected")
 	}
 	if targetPath == musicDir {
@@ -229,7 +236,7 @@ func (s *Service) CreateDirectory(mountPath, relPath, name string) error {
 	musicDir := filepath.Join(mountPath, MusicFolder)
 	targetDir := filepath.Join(musicDir, filepath.Clean(relPath), name)
 
-	if !strings.HasPrefix(targetDir, musicDir) {
+	if !isWithinDir(targetDir, musicDir) {
 		return fmt.Errorf("path traversal detected")
 	}
 	return os.MkdirAll(targetDir, 0755)
@@ -242,7 +249,7 @@ func (s *Service) MoveFile(mountPath, srcRel, destRel, newName string) error {
 	destDir := filepath.Join(musicDir, filepath.Clean(destRel))
 	destPath := filepath.Join(destDir, newName)
 
-	if !strings.HasPrefix(srcPath, musicDir) || !strings.HasPrefix(destPath, musicDir) {
+	if !isWithinDir(srcPath, musicDir) || !isWithinDir(destPath, musicDir) {
 		return fmt.Errorf("path traversal detected")
 	}
 
@@ -255,7 +262,7 @@ func (s *Service) ResolvePath(mountPath, relPath string) (string, error) {
 	musicDir := filepath.Join(mountPath, MusicFolder)
 	fullPath := filepath.Join(musicDir, filepath.Clean(relPath))
 
-	if !strings.HasPrefix(fullPath, musicDir) {
+	if !isWithinDir(fullPath, musicDir) {
 		return "", fmt.Errorf("path traversal detected")
 	}
 

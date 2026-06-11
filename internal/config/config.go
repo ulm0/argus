@@ -349,7 +349,9 @@ func (c *Config) Save() error {
 		return fmt.Errorf("marshal config: %w", err)
 	}
 	tmp := c.ConfigFilePath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	// Config contains secrets (Samba password, Telegram bot token, webhook
+	// secret, web secret key) — restrict to the owner.
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return fmt.Errorf("write config temp: %w", err)
 	}
 	if err := os.Rename(tmp, c.ConfigFilePath); err != nil {

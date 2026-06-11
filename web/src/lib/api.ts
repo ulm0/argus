@@ -42,6 +42,7 @@ import type {
   VideoSessionsResponse,
   VideoStats,
   WebConfigPublic,
+  SavedWifiNetwork,
   WifiScanResponse,
   WifiStatus,
   WrapListResponse,
@@ -484,6 +485,18 @@ export function configureWifi(ssid: string, password: string): Promise<StatusRes
 
 export function dismissWifiStatus(): Promise<StatusResponse> {
   return post<StatusResponse>("/api/wifi/dismiss-status");
+}
+
+export function getSavedWifi(): Promise<{ networks: SavedWifiNetwork[] }> {
+  return request<{ networks: SavedWifiNetwork[] }>("/api/wifi/saved");
+}
+
+export function forgetWifi(uuid: string): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/wifi/forget", { uuid });
+}
+
+export function setWifiAutoConnect(uuid: string, autoconnect: boolean): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/wifi/autoconnect", { uuid, autoconnect });
 }
 
 // ──────────────────────────────────────────────
