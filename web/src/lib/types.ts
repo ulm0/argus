@@ -320,11 +320,14 @@ export interface APStatus {
 export interface BluetoothDevice {
   mac: string;
   name: string;
+  paired: boolean;
   connected: boolean;
 }
 
 export interface BluetoothStatus {
   available: boolean;
+  powered: boolean;
+  discoverable: boolean;
   tethered: boolean;
   interface?: string;
   device_mac?: string;

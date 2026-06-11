@@ -101,6 +101,11 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	// Bluetooth tethering (PAN upstream from a paired phone)
 	api.HandleFunc("/bluetooth/status", bluetoothH.Status).Methods("GET")
 	api.HandleFunc("/bluetooth/devices", bluetoothH.Devices).Methods("GET")
+	api.HandleFunc("/bluetooth/power", bluetoothH.Power).Methods("POST")
+	api.HandleFunc("/bluetooth/discoverable", bluetoothH.Discoverable).Methods("POST")
+	api.HandleFunc("/bluetooth/scan", bluetoothH.Scan).Methods("GET")
+	api.HandleFunc("/bluetooth/pair", bluetoothH.Pair).Methods("POST")
+	api.HandleFunc("/bluetooth/remove", bluetoothH.Remove).Methods("POST")
 	api.HandleFunc("/bluetooth/connect", bluetoothH.Connect).Methods("POST")
 	api.HandleFunc("/bluetooth/disconnect", bluetoothH.Disconnect).Methods("POST")
 
