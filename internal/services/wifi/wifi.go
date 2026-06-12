@@ -19,11 +19,11 @@ type Connection struct {
 }
 
 type Network struct {
-	SSID       string `json:"ssid"`
-	Signal     int    `json:"signal"`
-	Frequency  string `json:"frequency"`
-	Security   string `json:"security"`
-	InUse      bool   `json:"in_use"`
+	SSID      string `json:"ssid"`
+	Signal    int    `json:"signal"`
+	Frequency string `json:"frequency"`
+	Security  string `json:"security"`
+	InUse     bool   `json:"in_use"`
 }
 
 type ChangeStatus struct {

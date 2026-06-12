@@ -132,4 +132,3 @@ func TestWriteGenerateConfig_AtomicWrite(t *testing.T) {
 		t.Fatalf("expected no leftover temp files after success; found %d: %v", len(matches), matches)
 	}
 }
-

@@ -10,13 +10,13 @@ import (
 )
 
 type APStatus struct {
-	Enabled    bool   `json:"enabled"`
-	Active     bool   `json:"active"`
-	SSID       string `json:"ssid"`
-	Interface  string `json:"interface"`
-	ForceMode  string `json:"force_mode"`
-	Channel    int    `json:"channel"`
-	ClientCount int   `json:"client_count"`
+	Enabled     bool   `json:"enabled"`
+	Active      bool   `json:"active"`
+	SSID        string `json:"ssid"`
+	Interface   string `json:"interface"`
+	ForceMode   string `json:"force_mode"`
+	Channel     int    `json:"channel"`
+	ClientCount int    `json:"client_count"`
 }
 
 type APConfig struct {

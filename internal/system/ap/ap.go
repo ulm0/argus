@@ -53,10 +53,10 @@ type APConfig struct {
 }
 
 type Manager struct {
-	cfg       *config.Config
-	mu        sync.Mutex
-	active    bool
-	forceMode ForceMode
+	cfg        *config.Config
+	mu         sync.Mutex
+	active     bool
+	forceMode  ForceMode
 	dnsmasqCmd *exec.Cmd
 }
 

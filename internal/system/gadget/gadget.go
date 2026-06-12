@@ -29,9 +29,9 @@ type Manager struct {
 }
 
 type LUNConfig struct {
-	Number   int
-	File     string
-	ReadOnly bool
+	Number    int
+	File      string
+	ReadOnly  bool
 	Removable bool
 }
 

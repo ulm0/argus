@@ -22,12 +22,12 @@ const (
 )
 
 type Status struct {
-	Running    bool      `json:"running"`
-	Partition  int       `json:"partition,omitempty"`
-	Mode       Mode      `json:"mode,omitempty"`
-	StartedAt  time.Time `json:"started_at,omitempty"`
-	Progress   string    `json:"progress,omitempty"`
-	Error      string    `json:"error,omitempty"`
+	Running   bool      `json:"running"`
+	Partition int       `json:"partition,omitempty"`
+	Mode      Mode      `json:"mode,omitempty"`
+	StartedAt time.Time `json:"started_at,omitempty"`
+	Progress  string    `json:"progress,omitempty"`
+	Error     string    `json:"error,omitempty"`
 }
 
 type HistoryEntry struct {

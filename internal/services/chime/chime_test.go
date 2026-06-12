@@ -79,7 +79,7 @@ func TestValidateTeslaWAV_Valid(t *testing.T) {
 		channels   uint16
 		dataSize   uint32
 	}{
-		{"44100_mono", 44100, 1, 44100 * 2},      // ~1s mono
+		{"44100_mono", 44100, 1, 44100 * 2},       // ~1s mono
 		{"48000_mono", 48000, 1, 48000 * 2},       // ~1s mono
 		{"44100_stereo", 44100, 2, 44100 * 2 * 2}, // ~1s stereo
 		{"48000_stereo", 48000, 2, 48000 * 2 * 2}, // ~1s stereo

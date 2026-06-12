@@ -20,13 +20,13 @@ const maxConcurrentEvents = 3
 // On Linux with inotify (via fsnotify), this would be event-driven.
 // For portability, we use a polling approach that checks for new directories.
 type SentryWatcher struct {
-	cfg       *config.Config
-	callback  func(SentryEvent)
+	cfg        *config.Config
+	callback   func(SentryEvent)
 	seenSentry map[string]bool
 	seenSaved  map[string]bool
-	stopCh    chan struct{}
-	stopOnce  sync.Once
-	sem       chan struct{}
+	stopCh     chan struct{}
+	stopOnce   sync.Once
+	sem        chan struct{}
 }
 
 func NewSentryWatcher(cfg *config.Config, callback func(SentryEvent)) *SentryWatcher {
@@ -81,8 +81,8 @@ func (w *SentryWatcher) savedPath() string  { return w.clipPath("SavedClips") }
 
 func (w *SentryWatcher) seedExistingEvents() {
 	for _, dir := range []struct {
-		path string
-		seen map[string]bool
+		path  string
+		seen  map[string]bool
 		label string
 	}{
 		{w.sentryPath(), w.seenSentry, "sentry"},
