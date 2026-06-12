@@ -43,7 +43,7 @@ func (h *TelegramHandler) Configure(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.telegramSvc.Configure(req.BotToken, req.ChatID, req.OfflineMode, req.VideoQuality); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 

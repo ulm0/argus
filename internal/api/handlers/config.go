@@ -467,7 +467,7 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := cfg.Save(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save config: " + err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}
 

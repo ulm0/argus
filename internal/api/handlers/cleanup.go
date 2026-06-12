@@ -45,7 +45,7 @@ func (h *CleanupHandler) SaveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.cleanupSvc.SavePolicies(req.Policies); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -61,7 +61,7 @@ func (h *CleanupHandler) Preview(w http.ResponseWriter, r *http.Request) {
 
 	plan, err := h.cleanupSvc.CalculateCleanupPlan(partitionPath)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -86,7 +86,7 @@ func (h *CleanupHandler) Execute(w http.ResponseWriter, r *http.Request) {
 
 	plan, err := h.cleanupSvc.CalculateCleanupPlan(partitionPath)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 

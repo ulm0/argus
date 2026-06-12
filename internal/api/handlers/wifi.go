@@ -33,7 +33,7 @@ func (h *WifiHandler) Status(w http.ResponseWriter, r *http.Request) {
 func (h *WifiHandler) Scan(w http.ResponseWriter, r *http.Request) {
 	networks, err := h.monitor.ScanNetworks()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"networks": networks})
@@ -50,7 +50,7 @@ func (h *WifiHandler) Configure(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.monitor.UpdateCredentials(req.SSID, req.Password); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -66,7 +66,7 @@ func (h *WifiHandler) DismissStatus(w http.ResponseWriter, r *http.Request) {
 func (h *WifiHandler) SavedNetworks(w http.ResponseWriter, r *http.Request) {
 	nets, err := h.monitor.ListSavedNetworks()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if nets == nil {
@@ -85,7 +85,7 @@ func (h *WifiHandler) ForgetNetwork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.monitor.ForgetNetwork(req.UUID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -102,7 +102,7 @@ func (h *WifiHandler) SetAutoConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.monitor.SetAutoConnect(req.UUID, req.AutoConnect); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

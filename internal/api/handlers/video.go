@@ -301,7 +301,7 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 			height = 180
 		}
 		if err := h.generateThumbnailOnce(videoFullPath, thumbPath, width, height); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "thumbnail generation failed: " + err.Error()})
+			writeJSONError(w, http.StatusInternalServerError, "thumbnail generation failed: "+err.Error())
 			return
 		}
 	}
@@ -418,7 +418,7 @@ func (h *VideoHandler) SessionThumbnail(w http.ResponseWriter, r *http.Request) 
 			height = 180
 		}
 		if err := h.generateThumbnailOnce(videoFullPath, thumbPath, width, height); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "thumbnail generation failed: " + err.Error()})
+			writeJSONError(w, http.StatusInternalServerError, "thumbnail generation failed: "+err.Error())
 			return
 		}
 	}
@@ -444,7 +444,7 @@ func (h *VideoHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.videoSvc.DeleteEvent(folderPath, event); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 

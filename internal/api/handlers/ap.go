@@ -46,7 +46,7 @@ func (h *APHandler) ShareInternet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.manager.SetShareInternet(req.Enabled); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -61,7 +61,7 @@ func (h *APHandler) Configure(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.manager.UpdateAPConfig(apCfg); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
