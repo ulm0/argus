@@ -51,9 +51,9 @@ type CompleteAnalytics struct {
 const videoStatsCacheTTL = 30 * time.Second
 
 type Service struct {
-	cfg      *config.Config
-	mu       sync.Mutex
-	vsCache  []VideoStats
+	cfg        *config.Config
+	mu         sync.Mutex
+	vsCache    []VideoStats
 	vsCacheExp time.Time
 }
 

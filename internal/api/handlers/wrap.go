@@ -113,7 +113,7 @@ func (h *WrapHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read file"})
+		writeJSONError(w, http.StatusInternalServerError, "failed to read file")
 		return
 	}
 
@@ -196,7 +196,7 @@ func (h *WrapHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.wrapSvc.DeleteWrap(filename, mountPath); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 

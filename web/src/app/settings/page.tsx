@@ -88,6 +88,7 @@ export default function SettingsPage() {
   const [apStatus, setApStatus] = useState<APStatus | null>(null);
   const [apSSID, setApSSID] = useState("");
   const [apPass, setApPass] = useState("");
+  const [showApPass, setShowApPass] = useState(false);
 
   // Network — WiFi client
   const [wifiStatus, setWifiStatus] = useState<WifiStatus | null>(null);
@@ -98,6 +99,7 @@ export default function SettingsPage() {
   const [savedWifi, setSavedWifi] = useState<SavedWifiNetwork[]>([]);
   const [btStatus, setBtStatus] = useState<BluetoothStatus | null>(null);
   const [btDevices, setBtDevices] = useState<BluetoothDevice[]>([]);
+  const [btScanning, setBtScanning] = useState(false);
 
   // Notifications — Telegram
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null);
@@ -197,6 +199,59 @@ export default function SettingsPage() {
     }
   }, [showToast, refreshBluetooth]);
 
+  const toggleBluetoothPower = useCallback(async (enabled: boolean) => {
+    try {
+      await api.setBluetoothPower(enabled);
+      showToast(enabled ? "Bluetooth on" : "Bluetooth off");
+      await refreshBluetooth();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    }
+  }, [showToast, refreshBluetooth]);
+
+  const toggleBluetoothDiscoverable = useCallback(async (enabled: boolean) => {
+    try {
+      await api.setBluetoothDiscoverable(enabled);
+      showToast(enabled ? "Pi is now discoverable — pair from your phone" : "Discoverable off");
+      await refreshBluetooth();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    }
+  }, [showToast, refreshBluetooth]);
+
+  const scanBluetooth = useCallback(async () => {
+    setBtScanning(true);
+    try {
+      const res = await api.scanBluetooth();
+      setBtDevices(res.devices || []);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Bluetooth scan failed", false);
+    } finally {
+      setBtScanning(false);
+    }
+  }, [showToast]);
+
+  const pairBluetooth = useCallback(async (mac: string, name: string) => {
+    try {
+      await api.bluetoothPair(mac);
+      showToast(`Paired with ${name}`);
+      await refreshBluetooth();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Bluetooth pair failed", false);
+    }
+  }, [showToast, refreshBluetooth]);
+
+  const removeBluetooth = useCallback(async (mac: string, name: string) => {
+    if (!confirm(`Forget Bluetooth device "${name}"?`)) return;
+    try {
+      await api.bluetoothRemove(mac);
+      showToast(`Removed ${name}`);
+      await refreshBluetooth();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    }
+  }, [showToast, refreshBluetooth]);
+
   const forgetWifi = useCallback(async (uuid: string, name: string) => {
     if (!confirm(`Forget WiFi network "${name}"? The device will no longer auto-join it.`)) return;
     try {
@@ -216,6 +271,15 @@ export default function SettingsPage() {
       showToast(e instanceof Error ? e.message : "Failed to update network", false);
     }
   }, [showToast, refreshSavedWifi]);
+
+  const copyText = useCallback(async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast(`${label} copied`);
+    } catch {
+      showToast("Copy failed — clipboard unavailable", false);
+    }
+  }, [showToast]);
 
   const loadConfig = useCallback(async () => {
     try {
@@ -799,19 +863,76 @@ export default function SettingsPage() {
             <input id="ap-ssid" type="text" className={inputCls} value={apSSID} onChange={(e) => setApSSID(e.target.value)} />
           </div>
           <div>
-            <label className={fieldLabel} htmlFor="ap-pass">Passphrase</label>
+            <label className={fieldLabel} htmlFor="ap-pass">New passphrase</label>
             <input id="ap-pass" type="password" className={inputCls} value={apPass} onChange={(e) => setApPass(e.target.value)} placeholder="Leave blank to keep current" />
           </div>
         </div>
-        <div className="mt-5 flex flex-wrap gap-2">
+
+        {apStatus?.passphrase && (
+          <div className="mt-3">
+            <label className={fieldLabel}>Current passphrase</label>
+            <div className="flex items-center gap-2">
+              <input
+                type={showApPass ? "text" : "password"}
+                className={inputCls}
+                value={apStatus.passphrase}
+                readOnly
+              />
+              <button
+                type="button"
+                onClick={() => setShowApPass((v) => !v)}
+                className="shrink-0 rounded border border-[var(--color-border)] px-3 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]"
+              >
+                {showApPass ? "Hide" : "Show"}
+              </button>
+              <button
+                type="button"
+                onClick={() => copyText(apStatus.passphrase, "Passphrase")}
+                className="shrink-0 rounded border border-[var(--color-border)] px-3 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]"
+              >
+                Copy
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-5">
           <button className={btnPrimaryCls} disabled={saving === "ap-basic"} onClick={saveAP}>
-            {saving === "ap-basic" ? "Saving…" : "Save"}
+            {saving === "ap-basic" ? "Saving…" : "Save SSID / passphrase"}
           </button>
-          {(["on", "off", "auto"] as const).map((m) => (
-            <button key={m} className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold capitalize text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]" onClick={() => forceAP(m)}>
-              Force {m}
-            </button>
-          ))}
+        </div>
+
+        <div className="mt-5">
+          <label className={fieldLabel}>Hotspot mode</label>
+          <div className="flex flex-wrap gap-2">
+            {([
+              { mode: "auto", label: "Auto (fallback)", desc: "On only when WiFi/internet is lost" },
+              { mode: "on", label: "Always on", desc: "Hotspot stays up at all times" },
+              { mode: "off", label: "Always off", desc: "Never start the hotspot" },
+            ] as const).map((o) => {
+              const isActive = apStatus?.force_mode === o.mode;
+              return (
+                <button
+                  key={o.mode}
+                  title={o.desc}
+                  onClick={() => forceAP(o.mode)}
+                  className={`rounded border px-4 py-2.5 text-sm font-semibold transition-all ${
+                    isActive
+                      ? "border-[var(--color-accent)] bg-[var(--color-accent)] text-white"
+                      : "border-[var(--color-border)] bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]"
+                  }`}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+          <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+            {apStatus?.force_mode === "on" && "Hotspot is forced on at all times."}
+            {apStatus?.force_mode === "off" && "Hotspot is forced off — it will not start even when WiFi drops."}
+            {(apStatus?.force_mode === "auto" || !apStatus?.force_mode) &&
+              "Hotspot starts automatically when the Pi loses WiFi/internet, and stops when it reconnects."}
+          </p>
         </div>
 
         <label className="mt-5 flex items-start gap-3 rounded border border-[var(--color-border)] p-3">
@@ -929,20 +1050,42 @@ export default function SettingsPage() {
           description="Pull internet from a paired phone over Bluetooth (PAN), then share it to the car via the AP's 'Share internet' toggle."
         />
         <div className="mb-4 flex flex-wrap items-center gap-2 text-xs">
+          <span className={`rounded px-2 py-0.5 font-semibold ${btStatus?.powered ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"}`}>
+            {btStatus?.powered ? "On" : "Off"}
+          </span>
           <span className={`rounded px-2 py-0.5 font-semibold ${btStatus?.tethered ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"}`}>
             {btStatus?.tethered ? "Tethered" : "Not tethered"}
           </span>
           {btStatus?.tethered && btStatus?.device_name && (
             <span className="text-[var(--color-text-muted)]">via {btStatus.device_name}</span>
           )}
-          <button className="ml-auto rounded border border-[var(--color-border)] px-3 py-1 font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]" onClick={refreshBluetooth}>
+        </div>
+
+        <div className="mb-4 flex flex-wrap items-center gap-4">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={!!btStatus?.powered} onChange={(e) => toggleBluetoothPower(e.target.checked)} />
+            <span className="text-[var(--color-text-secondary)]">Bluetooth power</span>
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={!!btStatus?.discoverable} onChange={(e) => toggleBluetoothDiscoverable(e.target.checked)} disabled={!btStatus?.powered} />
+            <span className="text-[var(--color-text-secondary)]">Discoverable / pairable</span>
+          </label>
+          <button className={btnPrimaryCls} disabled={btScanning || !btStatus?.powered} onClick={scanBluetooth}>
+            {btScanning ? "Scanning…" : "Scan"}
+          </button>
+          <button className="rounded border border-[var(--color-border)] px-3 py-1.5 text-sm font-semibold text-[var(--color-text-secondary)] hover:border-[var(--color-accent)]" onClick={refreshBluetooth}>
             Refresh
           </button>
         </div>
+
+        <p className="mb-3 text-xs text-[var(--color-text-muted)]">
+          To tether: turn on Discoverable and pair from your phone (or Scan and Pair a nearby
+          device), enable the phone&apos;s Bluetooth tethering, then Connect below.
+        </p>
+
         {btDevices.length === 0 ? (
           <p className="text-sm text-[var(--color-text-muted)]">
-            No paired devices. Pair your phone with the Pi once (Bluetooth settings), enable
-            its Bluetooth tethering, then it will appear here.
+            No devices yet. Make the Pi discoverable and pair from your phone, or Scan for nearby devices.
           </p>
         ) : (
           <div className="divide-y divide-[var(--color-border)] rounded border border-[var(--color-border)]">
@@ -954,22 +1097,43 @@ export default function SettingsPage() {
                   {d.connected && (
                     <span className="shrink-0 rounded bg-[var(--color-success-bg)] px-1.5 py-0.5 text-xs text-[var(--color-success)]">Connected</span>
                   )}
+                  {!d.connected && d.paired && (
+                    <span className="shrink-0 rounded bg-[var(--color-bg-tertiary)] px-1.5 py-0.5 text-xs text-[var(--color-text-muted)]">Paired</span>
+                  )}
                 </span>
-                {d.connected ? (
-                  <button
-                    onClick={() => disconnectBluetooth(d.mac, d.name)}
-                    className="shrink-0 rounded border border-[var(--color-border)] px-2 py-1 text-xs font-semibold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-danger)] hover:text-[var(--color-danger)]"
-                  >
-                    Disconnect
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => connectBluetooth(d.mac, d.name)}
-                    className="shrink-0 rounded border border-[var(--color-border)] px-2 py-1 text-xs font-semibold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]"
-                  >
-                    Connect
-                  </button>
-                )}
+                <span className="flex shrink-0 items-center gap-1.5">
+                  {!d.paired && (
+                    <button
+                      onClick={() => pairBluetooth(d.mac, d.name)}
+                      className="rounded border border-[var(--color-border)] px-2 py-1 text-xs font-semibold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]"
+                    >
+                      Pair
+                    </button>
+                  )}
+                  {d.paired && (d.connected ? (
+                    <button
+                      onClick={() => disconnectBluetooth(d.mac, d.name)}
+                      className="rounded border border-[var(--color-border)] px-2 py-1 text-xs font-semibold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-danger)] hover:text-[var(--color-danger)]"
+                    >
+                      Disconnect
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => connectBluetooth(d.mac, d.name)}
+                      className="rounded border border-[var(--color-border)] px-2 py-1 text-xs font-semibold text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]"
+                    >
+                      Connect
+                    </button>
+                  ))}
+                  {d.paired && (
+                    <button
+                      onClick={() => removeBluetooth(d.mac, d.name)}
+                      className="rounded border border-[var(--color-border)] px-2 py-1 text-xs font-semibold text-[var(--color-text-muted)] transition-colors hover:border-[var(--color-danger)] hover:text-[var(--color-danger)]"
+                    >
+                      Forget
+                    </button>
+                  )}
+                </span>
               </div>
             ))}
           </div>

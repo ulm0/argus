@@ -36,9 +36,7 @@ func (h *ModeHandler) Status(w http.ResponseWriter, r *http.Request) {
 
 func (h *ModeHandler) PresentUSB(w http.ResponseWriter, r *http.Request) {
 	if err := h.modeSvc.SwitchToPresent(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{
-			"error": err.Error(),
-		})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": "present"})
@@ -46,9 +44,7 @@ func (h *ModeHandler) PresentUSB(w http.ResponseWriter, r *http.Request) {
 
 func (h *ModeHandler) EditUSB(w http.ResponseWriter, r *http.Request) {
 	if err := h.modeSvc.SwitchToEdit(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{
-			"error": err.Error(),
-		})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": "edit"})
@@ -62,7 +58,7 @@ func (h *ModeHandler) GadgetState(w http.ResponseWriter, r *http.Request) {
 func (h *ModeHandler) RecoverGadget(w http.ResponseWriter, r *http.Request) {
 	result, err := h.modeSvc.RecoverGadget()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -73,15 +69,19 @@ func (h *ModeHandler) OperationStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+// writeJSON serializes v as the response body. It deliberately does no logging:
+// payloads can carry secrets (e.g. the AP passphrase in /ap/status), so 5xx
+// logging lives in writeJSONError, which only ever receives the error string.
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	if status >= 500 {
-		if m, ok := v.(map[string]string); ok {
-			if errMsg := m["error"]; errMsg != "" {
-				logger.L.WithField("status", status).WithField("detail", errMsg).Error("request error")
-			}
-		}
-	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+// writeJSONError writes {"error": msg} and logs server-side (5xx) failures.
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	if status >= 500 && msg != "" {
+		logger.L.WithField("status", status).WithField("detail", msg).Error("request error")
+	}
+	writeJSON(w, status, map[string]string{"error": msg})
 }

@@ -104,7 +104,7 @@ func (h *ChimeHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read file"})
+		writeJSONError(w, http.StatusInternalServerError, "failed to read file")
 		return
 	}
 
@@ -115,7 +115,7 @@ func (h *ChimeHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.chimeSvc.UploadChime(data, header.Filename, h.mountPath(), normalize, targetLUFS); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -171,7 +171,7 @@ func (h *ChimeHandler) SetActive(w http.ResponseWriter, r *http.Request) {
 	filename := mux.Vars(r)["filename"]
 
 	if err := h.chimeSvc.SetActiveChime(filename, h.mountPath()); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -183,7 +183,7 @@ func (h *ChimeHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	filename := mux.Vars(r)["filename"]
 
 	if err := h.chimeSvc.DeleteChime(filename, h.mountPath()); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -196,7 +196,7 @@ func (h *ChimeHandler) Rename(w http.ResponseWriter, r *http.Request) {
 	newName := mux.Vars(r)["new"]
 
 	if err := h.chimeSvc.RenameChime(oldName, newName, h.mountPath()); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -224,7 +224,7 @@ func (h *ChimeHandler) AddSchedule(w http.ResponseWriter, r *http.Request) {
 
 	id, err := h.chimeSvc.Scheduler().AddSchedule(sched)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -242,7 +242,7 @@ func (h *ChimeHandler) ToggleSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.chimeSvc.Scheduler().UpdateSchedule(id, map[string]any{"enabled": !sched.Enabled}); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -285,7 +285,7 @@ func (h *ChimeHandler) EditSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.chimeSvc.Scheduler().UpdateSchedule(id, updates); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -322,7 +322,7 @@ func (h *ChimeHandler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 
 	id, err := h.chimeSvc.Groups().CreateGroup(body.Name, body.Description, body.Chimes)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -344,7 +344,7 @@ func (h *ChimeHandler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.chimeSvc.Groups().UpdateGroup(id, body.Name, body.Description, body.Chimes); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -356,7 +356,7 @@ func (h *ChimeHandler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
 	id := mux.Vars(r)["id"]
 
 	if err := h.chimeSvc.Groups().DeleteGroup(id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -381,7 +381,7 @@ func (h *ChimeHandler) AddChimeToGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.chimeSvc.Groups().AddChimeToGroup(id, body.Filename); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -406,7 +406,7 @@ func (h *ChimeHandler) RemoveChimeFromGroup(w http.ResponseWriter, r *http.Reque
 	}
 
 	if err := h.chimeSvc.Groups().RemoveChimeFromGroup(id, body.Filename); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -425,7 +425,7 @@ func (h *ChimeHandler) RandomMode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.chimeSvc.Groups().SetRandomMode(body.Enabled, body.GroupID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 

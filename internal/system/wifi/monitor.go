@@ -30,11 +30,11 @@ type Network struct {
 }
 
 type Monitor struct {
-	cfg    *config.Config
-	mu     sync.RWMutex
-	status ConnectionStatus
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	cfg          *config.Config
+	mu           sync.RWMutex
+	status       ConnectionStatus
+	stopCh       chan struct{}
+	stopOnce     sync.Once
 	onDisconnect func()
 	onReconnect  func()
 	connInfoExp  time.Time // protected by mu; refreshes getConnectionInfo every 5 min
@@ -49,8 +49,31 @@ func NewMonitor(cfg *config.Config) *Monitor {
 
 // SetCallbacks configures disconnect/reconnect handlers (e.g., for AP management).
 func (m *Monitor) SetCallbacks(onDisconnect, onReconnect func()) {
+	m.mu.Lock()
 	m.onDisconnect = onDisconnect
 	m.onReconnect = onReconnect
+	m.mu.Unlock()
+}
+
+// fireDisconnect / fireReconnect snapshot the callback under the lock and invoke
+// it *outside* the lock — the AP start/stop they trigger blocks for seconds, and
+// holding m.mu across it would stall every status reader.
+func (m *Monitor) fireDisconnect() {
+	m.mu.RLock()
+	cb := m.onDisconnect
+	m.mu.RUnlock()
+	if cb != nil {
+		cb()
+	}
+}
+
+func (m *Monitor) fireReconnect() {
+	m.mu.RLock()
+	cb := m.onReconnect
+	m.mu.RUnlock()
+	if cb != nil {
+		cb()
+	}
 }
 
 // Start begins the WiFi monitoring goroutine.
@@ -60,10 +83,23 @@ func (m *Monitor) Start(ctx context.Context) {
 
 func (m *Monitor) monitorLoop(ctx context.Context) {
 	interval := time.Duration(m.cfg.OfflineAP.CheckInterval) * time.Second
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
 	grace := time.Duration(m.cfg.OfflineAP.DisconnectGrace) * time.Second
 
+	// How long the AP fallback is allowed to hold the radio before we free it to
+	// retry the STA. Without this, the AP keeps wlan0 busy, the STA can never
+	// rejoin another saved network, and the only way out is a reboot.
+	retry := time.Duration(m.cfg.OfflineAP.RetrySeconds) * time.Second
+	if retry <= 0 {
+		retry = 2 * time.Minute
+	}
+
 	var disconnectedSince *time.Time
-	var disconnectFired bool
+	var apUp bool
+	var lastReconnect time.Time
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -74,30 +110,57 @@ func (m *Monitor) monitorLoop(ctx context.Context) {
 		case <-m.stopCh:
 			return
 		case <-ticker.C:
-			ok := m.checkWifi()
-
-			m.mu.Lock()
-			if ok {
-				if disconnectFired && m.onReconnect != nil {
-					logger.L.Info("WiFi reconnected")
-					m.onReconnect()
+			if m.checkWifi() {
+				if apUp {
+					logger.L.Info("WiFi reconnected; stopping AP fallback")
+					m.fireReconnect()
+					apUp = false
 				}
 				disconnectedSince = nil
-				disconnectFired = false
-			} else {
-				if disconnectedSince == nil {
-					now := time.Now()
-					disconnectedSince = &now
-				} else if !disconnectFired && time.Since(*disconnectedSince) > grace {
-					if m.onDisconnect != nil {
-						logger.L.Warn("WiFi disconnected beyond grace period")
-						m.onDisconnect()
-						disconnectFired = true
-					}
-				}
+				continue
 			}
-			m.mu.Unlock()
+
+			// Disconnected.
+			if disconnectedSince == nil {
+				now := time.Now()
+				disconnectedSince = &now
+			}
+
+			if !apUp {
+				// Actively nudge a reconnect to a saved network — NM's own
+				// autoconnect backoff can be slow to retry on its own.
+				if time.Since(lastReconnect) >= interval {
+					m.attemptReconnect()
+					lastReconnect = time.Now()
+				}
+				if time.Since(*disconnectedSince) > grace {
+					logger.L.Warn("WiFi down beyond grace; starting AP fallback")
+					m.fireDisconnect()
+					apUp = true
+					lastReconnect = time.Now()
+				}
+			} else if time.Since(lastReconnect) > retry {
+				// Free the radio so the STA can scan and rejoin another saved
+				// network, then give it a fresh grace window before the AP returns.
+				logger.L.Info("AP fallback active; freeing radio to retry WiFi")
+				m.fireReconnect()
+				apUp = false
+				m.attemptReconnect()
+				lastReconnect = time.Now()
+				disconnectedSince = nil
+			}
 		}
+	}
+}
+
+// attemptReconnect forces a rescan and asks NetworkManager to activate the best
+// available saved profile on the STA interface. Bounded with -w so a failing
+// activation can't stall the monitor loop.
+func (m *Monitor) attemptReconnect() {
+	exec.Command("nmcli", "radio", "wifi", "on").Run()
+	exec.Command("nmcli", "device", "wifi", "rescan").Run()
+	if iface := m.cfg.OfflineAP.Interface; iface != "" {
+		exec.Command("nmcli", "-w", "20", "device", "connect", iface).Run()
 	}
 }
 

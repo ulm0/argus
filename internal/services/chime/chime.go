@@ -33,8 +33,8 @@ func NewService(cfg *config.Config) *Service {
 	}
 }
 
-func (s *Service) Scheduler() *Scheduler   { return s.scheduler }
-func (s *Service) Groups() *GroupManager    { return s.groups }
+func (s *Service) Scheduler() *Scheduler { return s.scheduler }
+func (s *Service) Groups() *GroupManager { return s.groups }
 
 // ValidateTeslaWAV checks if a WAV file meets Tesla lock chime requirements.
 // Requirements: PCM, 16-bit, 44.1 or 48 kHz, mono or stereo, <1 MiB, <10s.
@@ -386,18 +386,18 @@ const (
 )
 
 type Schedule struct {
-	ID             string       `json:"id"`
-	ChimeFilename  string       `json:"chime_filename"`
-	Time           string       `json:"time"`
-	Type           ScheduleType `json:"type"`
-	Days           []int        `json:"days,omitempty"`
-	Month          int          `json:"month,omitempty"`
-	Day            int          `json:"day,omitempty"`
-	Holiday        string       `json:"holiday,omitempty"`
-	Interval       string       `json:"interval,omitempty"`
-	Name           string       `json:"name,omitempty"`
-	Enabled        bool         `json:"enabled"`
-	LastRun        *time.Time   `json:"last_run,omitempty"`
+	ID            string       `json:"id"`
+	ChimeFilename string       `json:"chime_filename"`
+	Time          string       `json:"time"`
+	Type          ScheduleType `json:"type"`
+	Days          []int        `json:"days,omitempty"`
+	Month         int          `json:"month,omitempty"`
+	Day           int          `json:"day,omitempty"`
+	Holiday       string       `json:"holiday,omitempty"`
+	Interval      string       `json:"interval,omitempty"`
+	Name          string       `json:"name,omitempty"`
+	Enabled       bool         `json:"enabled"`
+	LastRun       *time.Time   `json:"last_run,omitempty"`
 }
 
 type Scheduler struct {

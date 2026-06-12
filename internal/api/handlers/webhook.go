@@ -43,7 +43,7 @@ func (h *WebhookHandler) Configure(w http.ResponseWriter, r *http.Request) {
 		h.cfg.Webhook.Secret = req.Secret
 	}
 	if err := h.cfg.Save(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save config"})
+		writeJSONError(w, http.StatusInternalServerError, "failed to save config")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})

@@ -51,23 +51,23 @@ func (h *SambaHandler) SetEnabled(w http.ResponseWriter, r *http.Request) {
 
 	if *req.Enabled {
 		if err := h.manager.GenerateConfig(); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to write smb.conf: " + err.Error()})
+			writeJSONError(w, http.StatusInternalServerError, "failed to write smb.conf: "+err.Error())
 			return
 		}
 		if err := h.manager.EnableServices(); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	} else {
 		if err := h.manager.DisableServices(); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 	}
 
 	h.cfg.SetSambaEnabled(*req.Enabled)
 	if err := h.cfg.Save(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "applied but failed to persist config: " + err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, "applied but failed to persist config: "+err.Error())
 		return
 	}
 
@@ -88,13 +88,13 @@ func (h *SambaHandler) SetPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.manager.SetPassword(req.Password); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	h.cfg.Network.SambaPassword = req.Password
 	if err := h.cfg.Save(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "password set but failed to persist config: " + err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, "password set but failed to persist config: "+err.Error())
 		return
 	}
 
@@ -103,7 +103,7 @@ func (h *SambaHandler) SetPassword(w http.ResponseWriter, r *http.Request) {
 
 func (h *SambaHandler) Restart(w http.ResponseWriter, r *http.Request) {
 	if err := h.manager.RestartSambaServices(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -111,12 +111,12 @@ func (h *SambaHandler) Restart(w http.ResponseWriter, r *http.Request) {
 
 func (h *SambaHandler) Regenerate(w http.ResponseWriter, r *http.Request) {
 	if err := h.manager.GenerateConfig(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	if err := h.manager.RestartSambaServices(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "config written but restart failed: " + err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, "config written but restart failed: "+err.Error())
 		return
 	}
 

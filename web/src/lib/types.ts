@@ -309,9 +309,8 @@ export interface APStatus {
   enabled: boolean;
   active: boolean;
   ssid: string;
-  interface: string;
+  passphrase: string;
   force_mode: string;
-  channel: number;
   client_count: number;
   share_internet?: boolean;
   upstream?: string;
@@ -320,11 +319,14 @@ export interface APStatus {
 export interface BluetoothDevice {
   mac: string;
   name: string;
+  paired: boolean;
   connected: boolean;
 }
 
 export interface BluetoothStatus {
   available: boolean;
+  powered: boolean;
+  discoverable: boolean;
   tethered: boolean;
   interface?: string;
   device_mac?: string;

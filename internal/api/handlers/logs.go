@@ -72,11 +72,11 @@ func (h *LogsHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	cmd := exec.CommandContext(r.Context(), "journalctl", args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open journalctl: " + err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, "failed to open journalctl: "+err.Error())
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to start journalctl: " + err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, "failed to start journalctl: "+err.Error())
 		return
 	}
 	defer func() { _ = cmd.Wait() }()

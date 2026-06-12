@@ -41,9 +41,9 @@ type CheckResult struct {
 }
 
 type RunStatus struct {
-	Running   bool         `json:"running"`
-	Partition string       `json:"partition,omitempty"`
-	StartedAt *time.Time   `json:"started_at,omitempty"`
+	Running   bool          `json:"running"`
+	Partition string        `json:"partition,omitempty"`
+	StartedAt *time.Time    `json:"started_at,omitempty"`
 	Results   []CheckResult `json:"results,omitempty"`
 }
 

@@ -485,6 +485,26 @@ export function getBluetoothDevices(): Promise<{ devices: BluetoothDevice[] }> {
   return request<{ devices: BluetoothDevice[] }>("/api/bluetooth/devices");
 }
 
+export function scanBluetooth(): Promise<{ devices: BluetoothDevice[] }> {
+  return request<{ devices: BluetoothDevice[] }>("/api/bluetooth/scan");
+}
+
+export function setBluetoothPower(enabled: boolean): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/bluetooth/power", { enabled });
+}
+
+export function setBluetoothDiscoverable(enabled: boolean): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/bluetooth/discoverable", { enabled });
+}
+
+export function bluetoothPair(mac: string): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/bluetooth/pair", { mac });
+}
+
+export function bluetoothRemove(mac: string): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/bluetooth/remove", { mac });
+}
+
 export function bluetoothConnect(mac: string): Promise<StatusResponse> {
   return post<StatusResponse>("/api/bluetooth/connect", { mac });
 }

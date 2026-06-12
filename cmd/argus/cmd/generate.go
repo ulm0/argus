@@ -12,7 +12,7 @@ import (
 func NewGenerateCmd() *cobra.Command {
 	var (
 		output string
-		force   bool
+		force  bool
 	)
 
 	c := &cobra.Command{
@@ -88,11 +88,11 @@ func buildGenerateContent(targetUser string) string {
 }
 
 func printGenerateNotice(outPath string) {
-	fmt.Printf("\n  Edit the file to set your credentials and preferences:\n"+
-		"    - samba_password            (network section)\n"+
-		"    - offline_ap.ssid / passphrase\n"+
-		"    - telegram.bot_token / chat_id (optional)\n"+
-		"\n  When ready, run:\n"+
+	fmt.Printf("\n  Edit the file to set your credentials and preferences:\n" +
+		"    - samba_password            (network section)\n" +
+		"    - offline_ap.ssid / passphrase\n" +
+		"    - telegram.bot_token / chat_id (optional)\n" +
+		"\n  When ready, run:\n" +
 		"    sudo argus setup\n")
 }
 
@@ -149,4 +149,3 @@ func writeGenerateConfig(path, content string, force bool) (wrote bool, err erro
 
 	return true, nil
 }
-

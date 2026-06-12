@@ -62,8 +62,8 @@ type Service struct {
 	mp4Mu    sync.RWMutex
 	mp4Cache map[string]mp4CacheEntry
 
-	eventMu      sync.RWMutex
-	eventCache   map[string]eventCacheEntry
+	eventMu    sync.RWMutex
+	eventCache map[string]eventCacheEntry
 
 	sessionMu    sync.RWMutex
 	sessionCache map[string]sessionCacheEntry
@@ -79,16 +79,16 @@ func NewService(cfg *config.Config) *Service {
 }
 
 type Event struct {
-	Name         string            `json:"name"`
-	Datetime     string            `json:"datetime"`
-	City         string            `json:"city"`
-	Reason       string            `json:"reason"`
-	SizeMB       float64           `json:"size_mb"`
-	HasThumbnail bool              `json:"has_thumbnail"`
-	CameraVideos map[string]string `json:"camera_videos"`
-	Encrypted    map[string]bool   `json:"encrypted_videos"`
-	Clips              []string          `json:"clips,omitempty"`
-	StartingClipIndex  int               `json:"starting_clip_index"`
+	Name              string            `json:"name"`
+	Datetime          string            `json:"datetime"`
+	City              string            `json:"city"`
+	Reason            string            `json:"reason"`
+	SizeMB            float64           `json:"size_mb"`
+	HasThumbnail      bool              `json:"has_thumbnail"`
+	CameraVideos      map[string]string `json:"camera_videos"`
+	Encrypted         map[string]bool   `json:"encrypted_videos"`
+	Clips             []string          `json:"clips,omitempty"`
+	StartingClipIndex int               `json:"starting_clip_index"`
 }
 
 type Folder struct {

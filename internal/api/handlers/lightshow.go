@@ -91,7 +91,7 @@ func (h *LightshowHandler) Download(w http.ResponseWriter, r *http.Request) {
 
 	zipPath, err := h.lightshowSvc.CreateDownloadZip(baseName, mountPath)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	defer os.Remove(zipPath)
@@ -111,7 +111,7 @@ func (h *LightshowHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read file"})
+		writeJSONError(w, http.StatusInternalServerError, "failed to read file")
 		return
 	}
 
@@ -198,7 +198,7 @@ func (h *LightshowHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.lightshowSvc.DeleteShow(baseName, mountPath); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 

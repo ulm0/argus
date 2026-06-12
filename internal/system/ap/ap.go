@@ -27,9 +27,10 @@ const (
 
 type Status struct {
 	Enabled       bool      `json:"enabled"`
-	APActive      bool      `json:"ap_active"`
+	APActive      bool      `json:"active"`
 	ForceMode     ForceMode `json:"force_mode"`
 	SSID          string    `json:"ssid"`
+	Passphrase    string    `json:"passphrase"`
 	StaticIP      string    `json:"static_ip"`
 	DHCPStart     string    `json:"dhcp_range_start"`
 	DHCPEnd       string    `json:"dhcp_range_end"`
@@ -52,10 +53,10 @@ type APConfig struct {
 }
 
 type Manager struct {
-	cfg       *config.Config
-	mu        sync.Mutex
-	active    bool
-	forceMode ForceMode
+	cfg        *config.Config
+	mu         sync.Mutex
+	active     bool
+	forceMode  ForceMode
 	dnsmasqCmd *exec.Cmd
 }
 
@@ -109,6 +110,7 @@ func (m *Manager) GetStatus() Status {
 		APActive:      m.active,
 		ForceMode:     m.forceMode,
 		SSID:          m.cfg.OfflineAP.SSID,
+		Passphrase:    m.cfg.OfflineAP.Passphrase,
 		StaticIP:      m.cfg.OfflineAP.IPv4CIDR,
 		DHCPStart:     m.cfg.OfflineAP.DHCPStart,
 		DHCPEnd:       m.cfg.OfflineAP.DHCPEnd,

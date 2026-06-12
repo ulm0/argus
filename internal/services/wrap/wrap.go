@@ -11,21 +11,21 @@ import (
 )
 
 const (
-	MinDimension    = 512
-	MaxDimension    = 1024
-	MaxFileSize     = 1 * 1024 * 1024 // 1 MiB
-	MaxWrapCount    = 10
-	MaxFilenameLen  = 50
-	WrapsFolder     = "Wraps"
+	MinDimension   = 512
+	MaxDimension   = 1024
+	MaxFileSize    = 1 * 1024 * 1024 // 1 MiB
+	MaxWrapCount   = 10
+	MaxFilenameLen = 50
+	WrapsFolder    = "Wraps"
 )
 
 type WrapFile struct {
-	Filename   string `json:"filename"`
-	Width      int    `json:"width"`
-	Height     int    `json:"height"`
-	Size       int64  `json:"size"`
-	SizeStr    string `json:"size_str"`
-	Partition  string `json:"partition_key"`
+	Filename  string `json:"filename"`
+	Width     int    `json:"width"`
+	Height    int    `json:"height"`
+	Size      int64  `json:"size"`
+	SizeStr   string `json:"size_str"`
+	Partition string `json:"partition_key"`
 }
 
 type Service struct {
@@ -55,9 +55,9 @@ func (s *Service) ListWraps(mountPath string) []WrapFile {
 		w, h, _ := GetPNGDimensions(filePath)
 
 		wf := WrapFile{
-			Filename:  e.Name(),
-			Width:     w,
-			Height:    h,
+			Filename: e.Name(),
+			Width:    w,
+			Height:   h,
 		}
 		if info != nil {
 			wf.Size = info.Size()

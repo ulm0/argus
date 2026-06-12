@@ -35,7 +35,7 @@ func (h *MusicHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.musicSvc.ListFiles(mountPath, relPath)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -59,7 +59,7 @@ func (h *MusicHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.musicSvc.SaveFile(file, header.Filename, mountPath, relPath); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -102,7 +102,7 @@ func (h *MusicHandler) UploadChunk(w http.ResponseWriter, r *http.Request) {
 
 	complete, err := h.musicSvc.HandleChunk(uploadID, filename, chunkIndex, totalChunks, file, mountPath, relPath)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -123,7 +123,7 @@ func (h *MusicHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.musicSvc.DeleteFile(mountPath, relPath); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -140,7 +140,7 @@ func (h *MusicHandler) DeleteDir(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.musicSvc.DeleteDirectory(mountPath, relPath); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -165,7 +165,7 @@ func (h *MusicHandler) Move(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.musicSvc.MoveFile(mountPath, req.Source, req.Destination, req.NewName); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -189,7 +189,7 @@ func (h *MusicHandler) Mkdir(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.musicSvc.CreateDirectory(mountPath, req.Path, req.Name); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
