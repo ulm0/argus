@@ -50,6 +50,16 @@ import type {
   WrapListResponse,
 } from "./types";
 
+// encodePath percent-encodes each segment of a multi-segment relative path
+// while preserving the structural "/" separators. Filenames/directory names
+// come from disk content (e.g. Tesla-written USB media), so a name containing
+// "#", "?", "%", "&" or "=" must not be interpolated raw into a URL — it would
+// otherwise truncate the path at a fragment, inject a query string, or smuggle
+// extra query parameters into the request.
+function encodePath(relativePath: string): string {
+  return relativePath.split("/").map(encodeURIComponent).join("/");
+}
+
 class ApiError extends Error {
   constructor(
     public status: number,
@@ -155,19 +165,19 @@ export function getSessionDetail(folder: string, session: string): Promise<Video
 }
 
 export function streamURL(relativePath: string): string {
-  return `/api/videos/stream/${relativePath}`;
+  return `/api/videos/stream/${encodePath(relativePath)}`;
 }
 
 export function downloadURL(relativePath: string): string {
-  return `/api/videos/download/${relativePath}`;
+  return `/api/videos/download/${encodePath(relativePath)}`;
 }
 
 export function seiURL(relativePath: string): string {
-  return `/api/videos/sei/${relativePath}`;
+  return `/api/videos/sei/${encodePath(relativePath)}`;
 }
 
 export function telemetryURL(relativePath: string): string {
-  return `/api/videos/telemetry/${relativePath}`;
+  return `/api/videos/telemetry/${encodePath(relativePath)}`;
 }
 
 export function downloadEventURL(folder: string, event: string): string {
@@ -363,11 +373,11 @@ export function uploadChunk(
 }
 
 export function deleteFile(relativePath: string): Promise<StatusResponse> {
-  return post<StatusResponse>(`/api/music/delete/${relativePath}`);
+  return post<StatusResponse>(`/api/music/delete/${encodePath(relativePath)}`);
 }
 
 export function deleteDir(relativePath: string): Promise<StatusResponse> {
-  return post<StatusResponse>(`/api/music/delete-dir/${relativePath}`);
+  return post<StatusResponse>(`/api/music/delete-dir/${encodePath(relativePath)}`);
 }
 
 export function moveFile(source: string, destination: string, newName: string): Promise<StatusResponse> {
@@ -379,7 +389,7 @@ export function mkdir(path: string, name: string): Promise<StatusResponse> {
 }
 
 export function playURL(relativePath: string): string {
-  return `/api/music/play/${relativePath}`;
+  return `/api/music/play/${encodePath(relativePath)}`;
 }
 
 // ──────────────────────────────────────────────

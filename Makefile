@@ -8,11 +8,13 @@ LDFLAGS := -s -w -X main.version=$(VERSION) -X github.com/ulm0/argus/cmd/argus/c
 
 all: web build
 
-# Build Next.js static export
+# Build Next.js static export and stage it where the Go binary embeds it
+# (cmd/argus/web/out), mirroring the GoReleaser before-hook.
 web:
 	@echo "Building Next.js frontend..."
-	cd web && npm ci && npm run build
-	@echo "Frontend build complete -> web/out/"
+	cd web && pnpm install --frozen-lockfile && pnpm run build
+	rm -rf cmd/argus/web/out && mkdir -p cmd/argus/web && cp -r web/out cmd/argus/web/out
+	@echo "Frontend build complete -> cmd/argus/web/out/"
 
 # Cross-compile Go binary with embedded frontend
 build:
@@ -29,7 +31,7 @@ build-local:
 # Development mode: run locally with auto-reload
 dev:
 	@echo "Starting development server..."
-	@echo "Frontend: cd web && npm run dev"
+	@echo "Frontend: cd web && pnpm dev"
 	@echo "Backend:  go run ./cmd/argus run config.yaml"
 
 # Run tests
@@ -55,12 +57,12 @@ clean:
 # Download dependencies
 deps:
 	go mod download
-	cd web && npm ci
+	cd web && pnpm install --frozen-lockfile
 
 # Format code
 fmt:
 	gofmt -s -w .
-	cd web && npm run lint -- --fix 2>/dev/null || true
+	cd web && pnpm run lint --fix 2>/dev/null || true
 
 # Create a GitHub release using GoReleaser (requires a git tag)
 release:
