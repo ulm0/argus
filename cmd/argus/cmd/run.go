@@ -188,7 +188,7 @@ func resolveCfgPath(flagVal string, args []string) string {
 // checkForUpdate runs at startup (non-blocking goroutine): checks GitHub for a newer release,
 // logs and optionally notifies via Telegram, then auto-installs if opted in.
 func checkForUpdate(cfg *config.Config) {
-	if !cfg.Update.CheckOnStartup {
+	if !cfg.CheckUpdateOnStartup() {
 		return
 	}
 	if !updater.IsOnline() {

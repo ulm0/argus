@@ -3,6 +3,7 @@ package ap
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,19 @@ import (
 	"github.com/ulm0/argus/internal/config"
 	"github.com/ulm0/argus/internal/logger"
 )
+
+// validAPText reports whether s is safe to embed in a single line of an
+// hostapd/dnsmasq config file: no control characters. A newline in an
+// SSID/passphrase would otherwise inject arbitrary directives into the
+// generated config (e.g. `wpa=0`, disabling AP encryption).
+func validAPText(s string) bool {
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
 
 type ForceMode string
 
@@ -342,24 +356,42 @@ func (m *Manager) UpdateAPConfig(apCfg APConfig) error {
 	defer m.mu.Unlock()
 
 	if apCfg.SSID != "" {
+		if len(apCfg.SSID) > 32 || !validAPText(apCfg.SSID) {
+			return fmt.Errorf("invalid SSID (max 32 bytes, no control characters)")
+		}
 		m.cfg.OfflineAP.SSID = apCfg.SSID
 	}
 	if apCfg.Passphrase != "" {
+		if l := len(apCfg.Passphrase); l < 8 || l > 63 || !validAPText(apCfg.Passphrase) {
+			return fmt.Errorf("invalid passphrase (must be 8-63 printable characters)")
+		}
 		m.cfg.OfflineAP.Passphrase = apCfg.Passphrase
 	}
 	if apCfg.Channel > 0 {
 		m.cfg.OfflineAP.Channel = apCfg.Channel
 	}
 	if apCfg.Interface != "" {
+		if !validAPText(apCfg.Interface) || strings.ContainsAny(apCfg.Interface, " \t") {
+			return fmt.Errorf("invalid interface name")
+		}
 		m.cfg.OfflineAP.Interface = apCfg.Interface
 	}
 	if apCfg.IPv4CIDR != "" {
+		if _, _, err := net.ParseCIDR(apCfg.IPv4CIDR); err != nil {
+			return fmt.Errorf("invalid ipv4_cidr: %w", err)
+		}
 		m.cfg.OfflineAP.IPv4CIDR = apCfg.IPv4CIDR
 	}
 	if apCfg.DHCPStart != "" {
+		if net.ParseIP(apCfg.DHCPStart) == nil {
+			return fmt.Errorf("invalid dhcp_start address")
+		}
 		m.cfg.OfflineAP.DHCPStart = apCfg.DHCPStart
 	}
 	if apCfg.DHCPEnd != "" {
+		if net.ParseIP(apCfg.DHCPEnd) == nil {
+			return fmt.Errorf("invalid dhcp_end address")
+		}
 		m.cfg.OfflineAP.DHCPEnd = apCfg.DHCPEnd
 	}
 	if apCfg.CheckInterval > 0 {
@@ -434,6 +466,13 @@ rsn_pairwise=CCMP
 		channel = 6
 	}
 
+	// Backstop against config set through a path that skips UpdateAPConfig's
+	// validation (e.g. PATCH /api/config): refuse to emit a config containing
+	// injected directives rather than disabling AP security silently.
+	if !validAPText(m.cfg.OfflineAP.SSID) || !validAPText(m.cfg.OfflineAP.Passphrase) {
+		return fmt.Errorf("AP SSID/passphrase contains invalid characters")
+	}
+
 	return tmpl.Execute(f, map[string]any{
 		"VIF":        m.cfg.OfflineAP.VirtualInterface,
 		"SSID":       m.cfg.OfflineAP.SSID,
@@ -461,6 +500,10 @@ dhcp-option=6,{{.GatewayIP}}
 		return err
 	}
 	defer f.Close()
+
+	if !validAPText(m.cfg.OfflineAP.DHCPStart) || !validAPText(m.cfg.OfflineAP.DHCPEnd) || !validAPText(gatewayIP) {
+		return fmt.Errorf("AP DHCP range contains invalid characters")
+	}
 
 	return tmpl.Execute(f, map[string]any{
 		"VIF":       m.cfg.OfflineAP.VirtualInterface,

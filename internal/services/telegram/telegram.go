@@ -308,6 +308,21 @@ func (s *Service) sendSentryAlert(event SentryEvent) error {
 	return nil
 }
 
+// redactToken strips the bot token from an error before it is logged. HTTP
+// client failures are *url.Error and embed the full request URL, which
+// contains the token (…/bot<TOKEN>/sendMessage); logging it verbatim would
+// leak the credential into the journal.
+func (s *Service) redactToken(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if t := s.cfg.Telegram.BotToken; t != "" {
+		msg = strings.ReplaceAll(msg, t, "***")
+	}
+	return fmt.Errorf("%s", msg)
+}
+
 func (s *Service) sendMessage(text string) error {
 	url := fmt.Sprintf("%s%s/sendMessage", apiBaseURL, s.cfg.Telegram.BotToken)
 
@@ -324,7 +339,7 @@ func (s *Service) sendMessage(text string) error {
 
 	resp, err := s.httpClient.Post(url, "application/json", bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("send message: %w", err)
+		return fmt.Errorf("send message: %w", s.redactToken(err))
 	}
 	defer resp.Body.Close()
 
@@ -382,7 +397,7 @@ func (s *Service) sendVideo(videoPath, caption string) error {
 
 	resp, err := s.httpClientVideo.Post(url, writer.FormDataContentType(), &buf)
 	if err != nil {
-		return err
+		return s.redactToken(err)
 	}
 	defer resp.Body.Close()
 

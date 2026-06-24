@@ -265,7 +265,10 @@ func (s *Service) UploadChime(data []byte, filename, mountPath string, normalize
 	chimesDir := filepath.Join(mountPath, s.cfg.Web.ChimesFolder)
 	os.MkdirAll(chimesDir, 0755)
 
-	destPath := filepath.Join(chimesDir, filename)
+	destPath := filepath.Join(chimesDir, filepath.Base(filename))
+	if !strings.HasPrefix(destPath, chimesDir+string(filepath.Separator)) {
+		return fmt.Errorf("invalid chime filename: path traversal detected")
+	}
 
 	// Write raw upload to temp file.
 	tmpPath := destPath + ".tmp"

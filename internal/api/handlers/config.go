@@ -161,7 +161,7 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 		},
 		Update: updateConfigPublic{
 			AutoUpdate:     cfg.Update.AutoUpdate,
-			CheckOnStartup: cfg.Update.CheckOnStartup,
+			CheckOnStartup: cfg.CheckUpdateOnStartup(),
 			Channel:        cfg.Update.Channel,
 		},
 		Startup: startupConfigPublic{
@@ -388,7 +388,8 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			cfg.Update.AutoUpdate = *p.AutoUpdate
 		}
 		if p.CheckOnStartup != nil {
-			cfg.Update.CheckOnStartup = *p.CheckOnStartup
+			v := *p.CheckOnStartup
+			cfg.Update.CheckOnStartup = &v
 		}
 		if p.Channel != nil {
 			cfg.Update.Channel = *p.Channel

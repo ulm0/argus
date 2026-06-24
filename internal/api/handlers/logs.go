@@ -6,11 +6,21 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/ulm0/argus/internal/config"
 )
+
+// unitNameRe matches valid systemd unit names (without the ".service" suffix
+// this handler appends). Rejects spaces, control characters, and anything that
+// could be parsed as a separate journalctl argument.
+var unitNameRe = regexp.MustCompile(`^[a-zA-Z0-9_.@:-]{1,128}$`)
+
+func validUnitName(s string) bool {
+	return unitNameRe.MatchString(s)
+}
 
 // LogsHandler streams systemd journal entries for the argus service.
 type LogsHandler struct {
@@ -45,6 +55,12 @@ func (h *LogsHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	unit := q.Get("unit")
 	if unit == "" {
 		unit = "argus"
+	}
+	// Constrain to the systemd unit-name charset so a stray value can't turn into
+	// extra journalctl arguments or anything other than a single unit selector.
+	if !validUnitName(unit) {
+		writeJSONError(w, http.StatusBadRequest, "invalid unit name")
+		return
 	}
 
 	lines := 200

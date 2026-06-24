@@ -149,8 +149,12 @@ type WebhookConfig struct {
 }
 
 type UpdateConfig struct {
-	AutoUpdate     bool   `yaml:"auto_update"`
-	CheckOnStartup bool   `yaml:"check_on_startup"`
+	AutoUpdate bool `yaml:"auto_update"`
+	// CheckOnStartup is a pointer so an explicit `check_on_startup: false` is
+	// distinguishable from the field being unset. A plain bool defaulted to true
+	// can never be turned off (unset == false == "apply default"), which silently
+	// forced startup update checks on regardless of the user's config.
+	CheckOnStartup *bool  `yaml:"check_on_startup,omitempty"`
 	Channel        string `yaml:"channel"`
 }
 
@@ -266,8 +270,9 @@ func (c *Config) setDefaults() {
 	if c.OfflineAP.DisconnectGrace == 0 {
 		c.OfflineAP.DisconnectGrace = 60
 	}
-	if !c.Update.CheckOnStartup {
-		c.Update.CheckOnStartup = true
+	if c.Update.CheckOnStartup == nil {
+		enabled := true
+		c.Update.CheckOnStartup = &enabled
 	}
 	if c.Update.Channel == "" {
 		c.Update.Channel = "stable"
@@ -305,6 +310,12 @@ func (c *Config) SambaEnabled() bool {
 // SetSambaEnabled records the Samba enabled flag.
 func (c *Config) SetSambaEnabled(enabled bool) {
 	c.Network.SambaEnabled = &enabled
+}
+
+// CheckUpdateOnStartup reports whether Argus should check for updates at boot.
+// Defaults to true when the field is unset to preserve existing behavior.
+func (c *Config) CheckUpdateOnStartup() bool {
+	return c.Update.CheckOnStartup == nil || *c.Update.CheckOnStartup
 }
 
 func (c *Config) computePaths() {
