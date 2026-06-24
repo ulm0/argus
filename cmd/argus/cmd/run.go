@@ -119,6 +119,12 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 			server := &http.Server{
 				Addr:    addr,
 				Handler: router,
+				// Bound header reads/size so a slow-header (slowloris) client can't
+				// tie up a connection on the single-core Pi. No Write/IdleTimeout
+				// on purpose — those would cut off the long-lived SSE streams
+				// (/api/logs, /api/events/stream).
+				ReadHeaderTimeout: 10 * time.Second,
+				MaxHeaderBytes:    1 << 20,
 			}
 
 			sigCh := make(chan os.Signal, 1)
