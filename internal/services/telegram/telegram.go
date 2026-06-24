@@ -348,6 +348,8 @@ func (s *Service) sendMessage(text string) error {
 		return fmt.Errorf("telegram API error %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Drain the body so the keep-alive connection can be reused.
+	io.Copy(io.Discard, resp.Body)
 	return nil
 }
 
@@ -406,6 +408,8 @@ func (s *Service) sendVideo(videoPath, caption string) error {
 		return fmt.Errorf("telegram API error %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Drain the body so the keep-alive connection can be reused.
+	io.Copy(io.Discard, resp.Body)
 	return nil
 }
 

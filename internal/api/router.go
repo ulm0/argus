@@ -29,7 +29,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 		// Skip gzip compression for SSE endpoints — the compressor buffers output
 		// and breaks flushing, so EventSource clients never receive events.
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			if isStreamPath(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -41,9 +41,13 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	r.Use(func(next http.Handler) http.Handler {
 		// MaxBytesHandler wraps the ResponseWriter in a type that does not
 		// implement http.Flusher, so skip it for SSE streaming endpoints.
+		// The skip is keyed on the actual SSE route, NOT the client-controlled
+		// Accept header — otherwise any caller could set Accept: text/event-stream
+		// on an upload POST and bypass the only request-body size limit, reading
+		// an unbounded body into RAM on a memory-constrained Pi.
 		limited := http.MaxBytesHandler(next, maxBody)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			if isStreamPath(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -298,6 +302,18 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	})
 
 	return r
+}
+
+// isStreamPath reports whether the request targets one of the two Server-Sent
+// Events endpoints, which need the response Flusher intact and must not be gzip
+// buffered. Both are GET with no request body, so exempting them from the body
+// limit is safe — unlike trusting the client's Accept header would be.
+func isStreamPath(r *http.Request) bool {
+	switch r.URL.Path {
+	case "/api/events/stream", "/api/logs":
+		return true
+	}
+	return false
 }
 
 // serveFile streams a single file from the embedded FS without going through

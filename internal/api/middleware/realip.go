@@ -13,10 +13,14 @@ func RealIP(next http.Handler) http.Handler {
 		if rip := r.Header.Get("X-Real-IP"); rip != "" {
 			r.RemoteAddr = rip
 		} else if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			if i := strings.IndexByte(xff, ','); i > 0 {
+			if i := strings.IndexByte(xff, ','); i >= 0 {
 				xff = strings.TrimSpace(xff[:i])
 			}
-			r.RemoteAddr = xff
+			// Only override with a non-empty client IP; a leading-comma XFF
+			// (i == 0) would otherwise blank out RemoteAddr.
+			if xff != "" {
+				r.RemoteAddr = xff
+			}
 		}
 
 		if _, _, err := net.SplitHostPort(r.RemoteAddr); err != nil {

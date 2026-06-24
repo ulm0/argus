@@ -91,6 +91,22 @@ func makeSessionFiles(t *testing.T, parent, session string, modTime time.Time) {
 	}
 }
 
+func TestSavePoliciesRejectsTraversalKeys(t *testing.T) {
+	cfg, _ := testConfig(t)
+	svc := NewService(cfg)
+
+	for _, key := range []string{"../etc", "../../home/user", "..", ".", "a/b", `a\b`, ""} {
+		err := svc.SavePolicies(map[string]FolderPolicy{key: {Enabled: true, KeepLast: 1}})
+		if err == nil {
+			t.Errorf("SavePolicies accepted unsafe folder key %q", key)
+		}
+	}
+	// A normal folder name is still accepted.
+	if err := svc.SavePolicies(map[string]FolderPolicy{"SentryClips": {Enabled: true, KeepLast: 5}}); err != nil {
+		t.Errorf("SavePolicies rejected a valid key: %v", err)
+	}
+}
+
 func TestSaveAndLoadPolicies(t *testing.T) {
 	cfg, _ := testConfig(t)
 	svc := NewService(cfg)

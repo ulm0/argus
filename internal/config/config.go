@@ -34,6 +34,11 @@ type Config struct {
 	ThumbnailDir   string `yaml:"-"`
 	MountDir       string `yaml:"-"`
 	ConfigFilePath string `yaml:"-"`
+
+	// saveMu serializes Save() so concurrent callers don't write the same
+	// ".tmp" file at once (which would corrupt the persisted config) and don't
+	// race each other's marshal/rename. Unexported, so yaml ignores it.
+	saveMu sync.Mutex `yaml:"-"`
 }
 
 type InstallationConfig struct {
@@ -359,7 +364,11 @@ func (c *Config) CameraAngles() []string {
 }
 
 // Save writes the current config back to its YAML file atomically.
+// Calls are serialized so concurrent savers can't clobber the shared temp file.
 func (c *Config) Save() error {
+	c.saveMu.Lock()
+	defer c.saveMu.Unlock()
+
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)

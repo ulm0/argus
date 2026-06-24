@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
 
@@ -78,6 +79,8 @@ func (s *Service) onEvent(e telegram.SentryEvent) {
 		logger.L.WithError(err).Warn("webhook: delivery failed")
 		return
 	}
+	// Drain before closing so net/http can reuse the keep-alive connection.
+	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		logger.L.WithField("status", resp.StatusCode).Warn("webhook: non-2xx response")

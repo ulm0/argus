@@ -202,8 +202,10 @@ func (r *Runner) Cancel() error {
 	if r.currentCmd != nil && r.currentCmd.Process != nil {
 		r.currentCmd.Process.Kill()
 	}
-	r.running = false
-	r.current = nil
+	// Do NOT clear r.running here. Only the worker goroutine may transition
+	// running→false (in its cancelled/cleanup block); clearing it from Cancel
+	// while the worker is still alive lets a racing Start() pass the guard and
+	// spawn a second worker that clobbers the first one's state.
 	return nil
 }
 

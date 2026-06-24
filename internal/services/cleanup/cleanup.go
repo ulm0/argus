@@ -121,10 +121,23 @@ func (s *Service) loadPolicies() {
 	}
 }
 
+// isSafeFolderKey reports whether a cleanup policy key is a single, in-tree
+// folder name. Policy keys are joined onto the TeslaCam path and ultimately
+// fed to os.RemoveAll, so a key like "../../etc" must never be accepted — it
+// would turn cleanup into an arbitrary-directory-delete primitive reachable
+// from the unauthenticated local API (and the boot-time cleanup path).
+func isSafeFolderKey(folder string) bool {
+	return folder != "" && folder == filepath.Base(folder) &&
+		folder != "." && folder != ".." && !strings.ContainsAny(folder, `/\`)
+}
+
 // SavePolicies persists cleanup policies to disk atomically.
 // In-memory state is only updated after a successful disk write.
 func (s *Service) SavePolicies(policies map[string]FolderPolicy) error {
 	for folder, p := range policies {
+		if !isSafeFolderKey(folder) {
+			return fmt.Errorf("invalid cleanup folder name: %q", folder)
+		}
 		if p.KeepLast <= 0 {
 			p.KeepLast = defaultKeepLast
 			policies[folder] = p
@@ -208,6 +221,11 @@ func (s *Service) CalculateCleanupPlan(partitionPath string) (*CleanupPlan, erro
 
 	for folder, policy := range s.GetPolicies() {
 		if !policy.Enabled || policy.KeepLast <= 0 {
+			continue
+		}
+		// Defense-in-depth against a poisoned/legacy policy file: never act on a
+		// key that escapes the TeslaCam root, even if it slipped past SavePolicies.
+		if !isSafeFolderKey(folder) {
 			continue
 		}
 

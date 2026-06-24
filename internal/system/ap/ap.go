@@ -371,7 +371,11 @@ func (m *Manager) UpdateAPConfig(apCfg APConfig) error {
 		m.cfg.OfflineAP.Channel = apCfg.Channel
 	}
 	if apCfg.Interface != "" {
-		if !validAPText(apCfg.Interface) || strings.ContainsAny(apCfg.Interface, " \t") {
+		// The interface name is concatenated into /sys/class/net/<iface>/operstate
+		// and passed positionally to iw/nmcli, so disallow '/' and '..' (path
+		// traversal / file-content oracle) and a leading '-' (arg injection).
+		if !validAPText(apCfg.Interface) || len(apCfg.Interface) > 15 ||
+			strings.ContainsAny(apCfg.Interface, ` \t/`) || strings.HasPrefix(apCfg.Interface, "-") {
 			return fmt.Errorf("invalid interface name")
 		}
 		m.cfg.OfflineAP.Interface = apCfg.Interface

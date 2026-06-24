@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 
@@ -291,6 +292,37 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if p := req.OfflineAP; p != nil {
+		// Validate network fields the same way UpdateAPConfig does, so a PATCH
+		// can't smuggle malformed/injected values (newline-injected SSID/passphrase,
+		// non-IP DHCP/CIDR, or a leading-'-' ping target) into hostapd/dnsmasq/ip.
+		if p.SSID != nil && (len(*p.SSID) > 32 || strings.ContainsAny(*p.SSID, "\r\n")) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ssid"})
+			return
+		}
+		if p.Passphrase != nil {
+			if l := len(*p.Passphrase); l < 8 || l > 63 || strings.ContainsAny(*p.Passphrase, "\r\n") {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid passphrase (8-63 chars, no newlines)"})
+				return
+			}
+		}
+		if p.IPv4CIDR != nil {
+			if _, _, err := net.ParseCIDR(*p.IPv4CIDR); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ipv4_cidr"})
+				return
+			}
+		}
+		if p.DHCPStart != nil && net.ParseIP(*p.DHCPStart) == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid dhcp_start"})
+			return
+		}
+		if p.DHCPEnd != nil && net.ParseIP(*p.DHCPEnd) == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid dhcp_end"})
+			return
+		}
+		if p.PingTarget != nil && (*p.PingTarget == "" || strings.HasPrefix(*p.PingTarget, "-")) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ping_target"})
+			return
+		}
 		if p.Enabled != nil {
 			cfg.OfflineAP.Enabled = *p.Enabled
 		}

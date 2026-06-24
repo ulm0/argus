@@ -509,3 +509,31 @@ func TestGetActiveChimeInfo(t *testing.T) {
 		t.Errorf("active chime name = %q, want %q", name, cfg.Web.LockChimeFilename)
 	}
 }
+
+// TestValidateTeslaWAV_OversizedChunk ensures a tiny WAV declaring a ~4 GiB
+// chunk is rejected without attempting the huge allocation (regression for the
+// chunkSize-vs-file-size guard that prevents an OOM DoS).
+func TestValidateTeslaWAV_OversizedChunk(t *testing.T) {
+	cfg, _ := testConfig(t)
+	svc := NewService(cfg)
+	dir := t.TempDir()
+
+	buf := make([]byte, 20)
+	copy(buf[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(buf[4:8], 12)
+	copy(buf[8:12], "WAVE")
+	copy(buf[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(buf[16:20], 0xFFFFFFFF) // absurd chunk size
+
+	path := filepath.Join(dir, "huge.wav")
+	if err := os.WriteFile(path, buf, 0644); err != nil {
+		t.Fatal(err)
+	}
+	ok, msg := svc.ValidateTeslaWAV(path)
+	if ok {
+		t.Error("expected invalid for oversized chunk")
+	}
+	if msg == "" {
+		t.Error("expected an error message")
+	}
+}
