@@ -18,6 +18,7 @@ Argus turns a Raspberry Pi into a Tesla-compatible multi-LUN USB storage device 
   - Cleanup policies and analytics
   - WiFi, Bluetooth, AP, Samba, Telegram, and webhook configuration
   - Runtime settings
+  - Session-based login (default `admin` / `argus`, changeable)
 - Includes unattended reliability features:
   - Startup boot pipeline
   - Optional fsck checks on boot
@@ -91,6 +92,27 @@ This installs the **latest release** binary for your CPU (`arm64` / `armv7` / `a
 
 After setup, upgrades on the device are: `sudo argus upgrade` (same raw binary layout).
 
+### Accessing the web UI
+
+Browse to the device on the configured `web_port` (default `80`) — over your WiFi
+or the offline AP. The UI is protected by a session login:
+
+- **Default credentials: `admin` / `argus`.**
+- **Change them on first use** — from **Settings** in the UI, or by editing
+  `auth_username` / `auth_password` under `web:` in `config.yaml`. The login
+  screen nags while the defaults are still in place.
+- Set `auth_enabled: false` under `web:` to disable the login entirely (only do
+  this on a fully trusted, isolated network).
+
+Sessions are stateless cookies signed with `web.secret_key` (auto-generated on
+first run), `HttpOnly` + `SameSite=Strict`, and marked `Secure` automatically
+when Argus is reached over HTTPS (e.g. behind a TLS reverse proxy).
+
+The API also rejects requests whose `Host` header isn't a local identity (an IP,
+`localhost`, a bare name, or `*.local` / `*.lan`) as a DNS-rebinding defense. If
+you front Argus with a reverse proxy on a real domain, add that hostname to
+`web.allowed_hosts`.
+
 ### Setup options
 
 | Flag | Default | Description |
@@ -132,6 +154,7 @@ All runtime settings are in `~/.argus/config.yaml`.
 | `installation` | startup behavior, target user, mount dir, archive path |
 | `disk_images` | image names, partition toggles, fsck boot option |
 | `network` | web port, Samba password |
+| `web` | UI login (`auth_enabled`, `auth_username`, `auth_password`), `allowed_hosts`, upload limits, chime/lightshow folders, signing `secret_key` |
 | `offline_ap` | AP fallback behavior, force mode, internet sharing |
 | `system` | watchdog + sysctl startup behavior |
 | `telegram` | alerting configuration, video quality, offline queueing |

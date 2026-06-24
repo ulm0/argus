@@ -230,6 +230,12 @@ export class DashcamMP4 {
         size = end - pos;
       }
 
+      // A box must be at least as large as its own header. A malformed/degenerate
+      // size (e.g. a 64-bit extended size of 0) would otherwise make `pos += size`
+      // stall or rewind the cursor, hanging this synchronous main-thread parse on
+      // attacker-supplied bytes.
+      if (size < headerSize) break;
+
       if (type === name) {
         return {
           start: pos + headerSize,

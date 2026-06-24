@@ -17,6 +17,13 @@ var validExtensions = map[string]bool{
 	".wav":  true,
 }
 
+// Bounds for ZIP extraction, to defeat zip bombs on a memory/disk-constrained Pi.
+const (
+	maxZipEntries    = 512
+	maxZipEntryBytes = 128 << 20 // 128 MiB per extracted file
+	maxZipTotalBytes = 512 << 20 // 512 MiB total per archive
+)
+
 type ShowGroup struct {
 	BaseName  string `json:"base_name"`
 	FseqFile  string `json:"fseq_file,omitempty"`
@@ -110,7 +117,11 @@ func (s *Service) UploadZip(zipData []byte, mountPath string) (int, error) {
 	os.MkdirAll(showDir, 0755)
 
 	count := 0
+	var total int64
 	for _, f := range r.File {
+		if count >= maxZipEntries {
+			break
+		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
 		if !validExtensions[ext] {
 			continue
@@ -118,6 +129,11 @@ func (s *Service) UploadZip(zipData []byte, mountPath string) (int, error) {
 
 		baseName := filepath.Base(f.Name) // strip paths inside ZIP
 		destPath := filepath.Join(showDir, baseName)
+		// Confine the write target to showDir (zip-slip guard); filepath.Base
+		// already strips directory components, this makes the invariant explicit.
+		if !strings.HasPrefix(destPath, showDir+string(filepath.Separator)) {
+			continue
+		}
 
 		src, err := f.Open()
 		if err != nil {
@@ -130,14 +146,25 @@ func (s *Service) UploadZip(zipData []byte, mountPath string) (int, error) {
 			continue
 		}
 
-		if _, err := io.Copy(dst, src); err != nil {
-			dst.Close()
-			src.Close()
+		// Bound decompressed output: ParseMultipartForm only caps the *compressed*
+		// upload, so a small archive could otherwise inflate to gigabytes of
+		// .wav/.fseq and fill the SD card. CopyN(limit+1) lets us detect overflow.
+		limit := int64(maxZipEntryBytes)
+		if rem := int64(maxZipTotalBytes) - total; rem < limit {
+			limit = rem
+		}
+		n, err := io.CopyN(dst, src, limit+1)
+		dst.Close()
+		src.Close()
+		if err != nil && err != io.EOF {
 			os.Remove(destPath)
 			continue
 		}
-		dst.Close()
-		src.Close()
+		if n > limit {
+			os.Remove(destPath)
+			return count, fmt.Errorf("zip entry %q exceeds size limit", baseName)
+		}
+		total += n
 		count++
 	}
 	return count, nil

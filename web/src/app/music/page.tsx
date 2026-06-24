@@ -66,6 +66,16 @@ export default function MusicPage() {
     loadDir("");
   }, [loadDir]);
 
+  // Stop any in-progress playback when the page unmounts, otherwise the audio
+  // keeps playing after the user navigates away with no UI left to stop it.
+  useEffect(
+    () => () => {
+      audioRef.current?.pause();
+      audioRef.current = null;
+    },
+    [],
+  );
+
   const navigate = (path: string) => {
     setPlaying(null);
     if (audioRef.current) {

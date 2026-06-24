@@ -267,3 +267,15 @@ func TestGroupVideosBySessionPagination(t *testing.T) {
 		t.Fatalf("page 1 len = %d, want 1", len(groups))
 	}
 }
+
+// TestDecodeSeiProtobufMaliciousLength ensures a crafted length-delimited field
+// whose length has bit 63 set cannot drive the parse position negative and
+// panic on data[pos] (regression for the telemetry decoder bounds check).
+func TestDecodeSeiProtobufMaliciousLength(t *testing.T) {
+	// field 1, wire type 2 (length-delimited), then a 10-byte varint = 1<<63.
+	data := []byte{0x0A, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01}
+	// Must not panic; partial decode returning a non-nil message is fine.
+	if msg := decodeSeiProtobuf(data); msg == nil {
+		t.Fatal("expected a non-nil message, got nil")
+	}
+}

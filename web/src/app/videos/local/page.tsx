@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DashcamMP4, findSeiAtTime, downloadCsv } from "@/lib/sei-parser";
 import type { SeiFrame, SeiMetadata } from "@/lib/sei-parser";
 import ArgusHUD from "@/components/ArgusHUD";
@@ -19,6 +19,20 @@ export default function LocalAnalysisPage() {
   const [parseError, setParseError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+
+  // Track the current blob URLs in a ref so the unmount cleanup can revoke them.
+  // Without this, navigating away while files are loaded leaks every object URL
+  // (and the full MP4 it pins in memory) for the lifetime of the tab.
+  const filesRef = useRef<LocalFile[]>([]);
+  useEffect(() => {
+    filesRef.current = files;
+  }, [files]);
+  useEffect(
+    () => () => {
+      filesRef.current.forEach((f) => URL.revokeObjectURL(f.url));
+    },
+    [],
+  );
 
   const processFiles = useCallback(async (rawFiles: File[]) => {
     const mp4Files = rawFiles.filter((f) => f.name.toLowerCase().endsWith(".mp4"));

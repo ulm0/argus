@@ -106,6 +106,10 @@ web:
   lightshow_folder: LightShow
   max_upload_size_mb: 2048
   max_upload_chunk_mb: 16
+  # Web UI login. Change auth_username/auth_password from the defaults below.
+  auth_enabled: true
+  auth_username: admin
+  auth_password: argus
 
 # ============================================================================
 # Telegram (optional)

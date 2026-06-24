@@ -794,6 +794,12 @@ func scanBoxes(f *os.File, start, length int64) (time.Duration, error) {
 				return dur, nil
 			}
 		case "mvhd":
+			// boxSize is an attacker-controlled uint32 from the file. An mvhd box
+			// is only a few dozen bytes; cap it before allocating so a crafted
+			// header declaring a ~4 GiB box can't OOM a memory-constrained Pi.
+			if boxSize-8 > 64<<10 {
+				return 0, fmt.Errorf("mvhd box implausibly large: %d bytes", boxSize)
+			}
 			payload := make([]byte, boxSize-8)
 			if _, err := io.ReadFull(f, payload); err != nil {
 				return 0, fmt.Errorf("read mvhd: %w", err)

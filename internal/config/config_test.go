@@ -127,6 +127,30 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestCheckUpdateOnStartup(t *testing.T) {
+	// Unset → defaults to true.
+	cfg, err := Load(writeTestConfig(t, minimalYAML))
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.CheckUpdateOnStartup() {
+		t.Error("CheckUpdateOnStartup() = false for unset field, want true (default)")
+	}
+
+	// Explicit false must be honored, not silently forced back to true.
+	yaml := minimalYAML + `
+update:
+  check_on_startup: false
+`
+	cfg, err = Load(writeTestConfig(t, yaml))
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.CheckUpdateOnStartup() {
+		t.Error("CheckUpdateOnStartup() = true after explicit check_on_startup: false")
+	}
+}
+
 func TestDefaultOverride(t *testing.T) {
 	yaml := minimalYAML + `
   web_port: 8080

@@ -478,6 +478,12 @@ func decodeSeiProtobuf(data []byte) *SeiTelemetry {
 			if !ok {
 				break
 			}
+			// Bound the skip in 64-bit space before the int() cast: a crafted
+			// length with bit 63 set would otherwise make int(length) negative,
+			// drive pos negative, and panic on data[pos] in the next iteration.
+			if length > uint64(len(data)-pos) {
+				return msg
+			}
 			pos += int(length)
 
 		default:

@@ -25,11 +25,13 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logging)
 	r.Use(middleware.PanicRecovery)
+	// Reject API requests with a non-local Host header (DNS-rebinding defense).
+	r.Use(middleware.RequireLocalHost(cfg.Web.AllowedHosts))
 	r.Use(func(next http.Handler) http.Handler {
 		// Skip gzip compression for SSE endpoints — the compressor buffers output
 		// and breaks flushing, so EventSource clients never receive events.
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			if isStreamPath(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -37,13 +39,20 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 		})
 	})
 
+	// Gate /api/ behind a session cookie (except the auth endpoints themselves).
+	r.Use(middleware.RequireAuth(cfg, cfg.Web.SecretKey, handlers.SessionCookie))
+
 	maxBody := int64(cfg.Web.MaxUploadSizeMB) * 1024 * 1024
 	r.Use(func(next http.Handler) http.Handler {
 		// MaxBytesHandler wraps the ResponseWriter in a type that does not
 		// implement http.Flusher, so skip it for SSE streaming endpoints.
+		// The skip is keyed on the actual SSE route, NOT the client-controlled
+		// Accept header — otherwise any caller could set Accept: text/event-stream
+		// on an upload POST and bypass the only request-body size limit, reading
+		// an unbounded body into RAM on a memory-constrained Pi.
 		limited := http.MaxBytesHandler(next, maxBody)
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			if isStreamPath(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -70,6 +79,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 
 	configH := handlers.NewConfigHandler(cfg)
 	logsH := handlers.NewLogsHandler(cfg)
+	authH := handlers.NewAuthHandler(cfg)
 
 	updateH := handlers.NewUpdateHandler(cfg)
 	powerH := handlers.NewSystemPowerHandler(cfg)
@@ -86,6 +96,11 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	r.HandleFunc("/canonical.html", captiveH.Detect).Methods("GET")
 
 	api := r.PathPrefix("/api").Subrouter()
+
+	// Auth (login/logout/status are reachable without a session)
+	api.HandleFunc("/login", authH.Login).Methods("POST")
+	api.HandleFunc("/logout", authH.Logout).Methods("POST")
+	api.HandleFunc("/auth/status", authH.Status).Methods("GET")
 
 	// Mode control
 	api.HandleFunc("/status", modeH.Status).Methods("GET")
@@ -298,6 +313,18 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	})
 
 	return r
+}
+
+// isStreamPath reports whether the request targets one of the two Server-Sent
+// Events endpoints, which need the response Flusher intact and must not be gzip
+// buffered. Both are GET with no request body, so exempting them from the body
+// limit is safe — unlike trusting the client's Accept header would be.
+func isStreamPath(r *http.Request) bool {
+	switch r.URL.Path {
+	case "/api/events/stream", "/api/logs":
+		return true
+	}
+	return false
 }
 
 // serveFile streams a single file from the embedded FS without going through

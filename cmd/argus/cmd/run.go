@@ -51,6 +51,13 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 
 			logger.L.WithField("gadget_dir", cfg.GadgetDir).WithField("port", cfg.Network.WebPort).Info("Argus starting")
 
+			if cfg.AuthEnabled() && cfg.UsingDefaultAuth() {
+				logger.L.Warn("web UI is using the DEFAULT login credentials (admin/argus) — change auth_username/auth_password in config.yaml or the Settings page")
+			}
+			if !cfg.AuthEnabled() {
+				logger.L.Warn("web UI authentication is DISABLED (auth_enabled: false) — anyone who can reach the port has full control")
+			}
+
 			if runtime.GOOS == "linux" {
 				if err := watchdog.ApplyDaemon(cfg.System.WatchdogEnabled, cfg.System.WatchdogTimeoutSec); err != nil {
 					logger.L.WithError(err).Warn("watchdog daemon configure failed")
@@ -119,6 +126,12 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 			server := &http.Server{
 				Addr:    addr,
 				Handler: router,
+				// Bound header reads/size so a slow-header (slowloris) client can't
+				// tie up a connection on the single-core Pi. No Write/IdleTimeout
+				// on purpose — those would cut off the long-lived SSE streams
+				// (/api/logs, /api/events/stream).
+				ReadHeaderTimeout: 10 * time.Second,
+				MaxHeaderBytes:    1 << 20,
 			}
 
 			sigCh := make(chan os.Signal, 1)
@@ -188,7 +201,7 @@ func resolveCfgPath(flagVal string, args []string) string {
 // checkForUpdate runs at startup (non-blocking goroutine): checks GitHub for a newer release,
 // logs and optionally notifies via Telegram, then auto-installs if opted in.
 func checkForUpdate(cfg *config.Config) {
-	if !cfg.Update.CheckOnStartup {
+	if !cfg.CheckUpdateOnStartup() {
 		return
 	}
 	if !updater.IsOnline() {

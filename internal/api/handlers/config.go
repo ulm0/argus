@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 
@@ -33,6 +34,7 @@ type configResponse struct {
 	Update      updateConfigPublic      `json:"update"`
 	Startup     startupConfigPublic     `json:"startup"`
 	ViewerPrefs viewerPrefsConfigPublic `json:"viewer_prefs"`
+	Auth        authConfigPublic        `json:"auth"`
 	LogLevel    string                  `json:"log_level"`
 
 	// Read-only info (not patchable)
@@ -84,6 +86,14 @@ type updateConfigPublic struct {
 	AutoUpdate     bool   `json:"auto_update"`
 	CheckOnStartup bool   `json:"check_on_startup"`
 	Channel        string `json:"channel"`
+}
+
+// authConfigPublic exposes login settings. The password is write-only and is
+// never returned; using_default lets the UI nag to change the shipped creds.
+type authConfigPublic struct {
+	Enabled      bool   `json:"enabled"`
+	Username     string `json:"username"`
+	UsingDefault bool   `json:"using_default"`
 }
 
 type viewerPrefsConfigPublic struct {
@@ -161,7 +171,7 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 		},
 		Update: updateConfigPublic{
 			AutoUpdate:     cfg.Update.AutoUpdate,
-			CheckOnStartup: cfg.Update.CheckOnStartup,
+			CheckOnStartup: cfg.CheckUpdateOnStartup(),
 			Channel:        cfg.Update.Channel,
 		},
 		Startup: startupConfigPublic{
@@ -178,6 +188,11 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 			SpeedUnit: cfg.ViewerPrefs.SpeedUnit,
 			HudScale:  cfg.ViewerPrefs.HudScale,
 			MapScale:  cfg.ViewerPrefs.MapScale,
+		},
+		Auth: authConfigPublic{
+			Enabled:      cfg.AuthEnabled(),
+			Username:     cfg.Web.AuthUsername,
+			UsingDefault: cfg.UsingDefaultAuth(),
 		},
 		LogLevel: cfg.LogLevel,
 		Storage: storageInfo{
@@ -207,7 +222,14 @@ type patchRequest struct {
 	Update      *updatePatch      `json:"update,omitempty"`
 	Startup     *startupPatch     `json:"startup,omitempty"`
 	ViewerPrefs *viewerPrefsPatch `json:"viewer_prefs,omitempty"`
+	Auth        *authPatch        `json:"auth,omitempty"`
 	LogLevel    *string           `json:"log_level,omitempty"`
+}
+
+type authPatch struct {
+	Enabled  *bool   `json:"enabled,omitempty"`
+	Username *string `json:"username,omitempty"`
+	Password *string `json:"password,omitempty"`
 }
 
 type networkPatch struct {
@@ -291,6 +313,37 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if p := req.OfflineAP; p != nil {
+		// Validate network fields the same way UpdateAPConfig does, so a PATCH
+		// can't smuggle malformed/injected values (newline-injected SSID/passphrase,
+		// non-IP DHCP/CIDR, or a leading-'-' ping target) into hostapd/dnsmasq/ip.
+		if p.SSID != nil && (len(*p.SSID) > 32 || strings.ContainsAny(*p.SSID, "\r\n")) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ssid"})
+			return
+		}
+		if p.Passphrase != nil {
+			if l := len(*p.Passphrase); l < 8 || l > 63 || strings.ContainsAny(*p.Passphrase, "\r\n") {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid passphrase (8-63 chars, no newlines)"})
+				return
+			}
+		}
+		if p.IPv4CIDR != nil {
+			if _, _, err := net.ParseCIDR(*p.IPv4CIDR); err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ipv4_cidr"})
+				return
+			}
+		}
+		if p.DHCPStart != nil && net.ParseIP(*p.DHCPStart) == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid dhcp_start"})
+			return
+		}
+		if p.DHCPEnd != nil && net.ParseIP(*p.DHCPEnd) == nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid dhcp_end"})
+			return
+		}
+		if p.PingTarget != nil && (*p.PingTarget == "" || strings.HasPrefix(*p.PingTarget, "-")) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ping_target"})
+			return
+		}
 		if p.Enabled != nil {
 			cfg.OfflineAP.Enabled = *p.Enabled
 		}
@@ -388,7 +441,8 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			cfg.Update.AutoUpdate = *p.AutoUpdate
 		}
 		if p.CheckOnStartup != nil {
-			cfg.Update.CheckOnStartup = *p.CheckOnStartup
+			v := *p.CheckOnStartup
+			cfg.Update.CheckOnStartup = &v
 		}
 		if p.Channel != nil {
 			cfg.Update.Channel = *p.Channel
@@ -454,6 +508,27 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			cfg.ViewerPrefs.MapScale = v
+		}
+	}
+
+	if p := req.Auth; p != nil {
+		if p.Username != nil {
+			u := strings.TrimSpace(*p.Username)
+			if u == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username must not be empty"})
+				return
+			}
+			cfg.Web.AuthUsername = u
+		}
+		if p.Password != nil {
+			if len(*p.Password) < 4 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password must be at least 4 characters"})
+				return
+			}
+			cfg.Web.AuthPassword = *p.Password
+		}
+		if p.Enabled != nil {
+			cfg.Web.AuthEnabled = p.Enabled
 		}
 	}
 

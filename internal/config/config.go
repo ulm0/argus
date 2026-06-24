@@ -34,6 +34,11 @@ type Config struct {
 	ThumbnailDir   string `yaml:"-"`
 	MountDir       string `yaml:"-"`
 	ConfigFilePath string `yaml:"-"`
+
+	// saveMu serializes Save() so concurrent callers don't write the same
+	// ".tmp" file at once (which would corrupt the persisted config) and don't
+	// race each other's marshal/rename. Unexported, so yaml ignores it.
+	saveMu sync.Mutex `yaml:"-"`
 }
 
 type InstallationConfig struct {
@@ -130,7 +135,28 @@ type WebConfig struct {
 	LightshowFolder   string  `yaml:"lightshow_folder"`
 	MaxUploadSizeMB   int     `yaml:"max_upload_size_mb"`
 	MaxUploadChunkMB  int     `yaml:"max_upload_chunk_mb"`
+
+	// AuthEnabled gates the web UI/API behind a login. Pointer so an explicit
+	// `auth_enabled: false` is distinguishable from unset; defaults to true.
+	AuthEnabled *bool `yaml:"auth_enabled,omitempty"`
+	// AuthUsername/AuthPassword are the login credentials. They ship with a
+	// default (admin / argus) that should be changed on first use. Session
+	// cookies are signed with SecretKey.
+	AuthUsername string `yaml:"auth_username"`
+	AuthPassword string `yaml:"auth_password"`
+	// AllowedHosts is an optional allowlist of Host header values (e.g. a
+	// reverse-proxy FQDN) accepted by the anti-DNS-rebinding check, in addition
+	// to the always-allowed local identities (IPs, localhost, *.local, bare
+	// single-label names).
+	AllowedHosts []string `yaml:"allowed_hosts,omitempty"`
 }
+
+// DefaultAuthUsername / DefaultAuthPassword are the shipped credentials. The
+// auth status endpoint reports when they are still in use so the UI can nag.
+const (
+	DefaultAuthUsername = "admin"
+	DefaultAuthPassword = "argus"
+)
 
 type TelegramConfig struct {
 	Enabled      bool   `yaml:"enabled"`
@@ -149,8 +175,12 @@ type WebhookConfig struct {
 }
 
 type UpdateConfig struct {
-	AutoUpdate     bool   `yaml:"auto_update"`
-	CheckOnStartup bool   `yaml:"check_on_startup"`
+	AutoUpdate bool `yaml:"auto_update"`
+	// CheckOnStartup is a pointer so an explicit `check_on_startup: false` is
+	// distinguishable from the field being unset. A plain bool defaulted to true
+	// can never be turned off (unset == false == "apply default"), which silently
+	// forced startup update checks on regardless of the user's config.
+	CheckOnStartup *bool  `yaml:"check_on_startup,omitempty"`
 	Channel        string `yaml:"channel"`
 }
 
@@ -242,6 +272,16 @@ func (c *Config) setDefaults() {
 	if c.Web.SecretKey == "" || c.Web.SecretKey == defaultSecretKey {
 		c.Web.SecretKey = generateRandomKey()
 	}
+	if c.Web.AuthEnabled == nil {
+		enabled := true
+		c.Web.AuthEnabled = &enabled
+	}
+	if c.Web.AuthUsername == "" {
+		c.Web.AuthUsername = DefaultAuthUsername
+	}
+	if c.Web.AuthPassword == "" {
+		c.Web.AuthPassword = DefaultAuthPassword
+	}
 	if c.Telegram.OfflineMode == "" {
 		c.Telegram.OfflineMode = "queue"
 	}
@@ -266,8 +306,9 @@ func (c *Config) setDefaults() {
 	if c.OfflineAP.DisconnectGrace == 0 {
 		c.OfflineAP.DisconnectGrace = 60
 	}
-	if !c.Update.CheckOnStartup {
-		c.Update.CheckOnStartup = true
+	if c.Update.CheckOnStartup == nil {
+		enabled := true
+		c.Update.CheckOnStartup = &enabled
 	}
 	if c.Update.Channel == "" {
 		c.Update.Channel = "stable"
@@ -305,6 +346,24 @@ func (c *Config) SambaEnabled() bool {
 // SetSambaEnabled records the Samba enabled flag.
 func (c *Config) SetSambaEnabled(enabled bool) {
 	c.Network.SambaEnabled = &enabled
+}
+
+// CheckUpdateOnStartup reports whether Argus should check for updates at boot.
+// Defaults to true when the field is unset to preserve existing behavior.
+func (c *Config) CheckUpdateOnStartup() bool {
+	return c.Update.CheckOnStartup == nil || *c.Update.CheckOnStartup
+}
+
+// AuthEnabled reports whether the web UI/API requires a login.
+// Defaults to true when unset.
+func (c *Config) AuthEnabled() bool {
+	return c.Web.AuthEnabled == nil || *c.Web.AuthEnabled
+}
+
+// UsingDefaultAuth reports whether the shipped default credentials are still in
+// use, so the UI can prompt the operator to change them.
+func (c *Config) UsingDefaultAuth() bool {
+	return c.Web.AuthUsername == DefaultAuthUsername && c.Web.AuthPassword == DefaultAuthPassword
 }
 
 func (c *Config) computePaths() {
@@ -348,7 +407,11 @@ func (c *Config) CameraAngles() []string {
 }
 
 // Save writes the current config back to its YAML file atomically.
+// Calls are serialized so concurrent savers can't clobber the shared temp file.
 func (c *Config) Save() error {
+	c.saveMu.Lock()
+	defer c.saveMu.Unlock()
+
 	data, err := yaml.Marshal(c)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)

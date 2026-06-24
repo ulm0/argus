@@ -249,6 +249,10 @@ export default function AudioTrimmer({
     setLoading(true);
     setError(null);
     try {
+      // Close any previously-opened context first; browsers cap the number of
+      // simultaneous AudioContexts (~6 in Chrome), so leaking one per file load
+      // eventually makes `new AudioContext()` throw and breaks the trimmer.
+      audioCtxRef.current?.close().catch(() => {});
       const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
       audioCtxRef.current = ctx;
       const buf = await ctx.decodeAudioData(data);

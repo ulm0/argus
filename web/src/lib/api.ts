@@ -50,6 +50,16 @@ import type {
   WrapListResponse,
 } from "./types";
 
+// encodePath percent-encodes each segment of a multi-segment relative path
+// while preserving the structural "/" separators. Filenames/directory names
+// come from disk content (e.g. Tesla-written USB media), so a name containing
+// "#", "?", "%", "&" or "=" must not be interpolated raw into a URL — it would
+// otherwise truncate the path at a fragment, inject a query string, or smuggle
+// extra query parameters into the request.
+function encodePath(relativePath: string): string {
+  return relativePath.split("/").map(encodeURIComponent).join("/");
+}
+
 class ApiError extends Error {
   constructor(
     public status: number,
@@ -57,6 +67,16 @@ class ApiError extends Error {
   ) {
     super(message);
     this.name = "ApiError";
+  }
+}
+
+// UNAUTHORIZED_EVENT is dispatched on window whenever the API returns 401 so the
+// login gate can re-prompt without every caller having to handle it.
+export const UNAUTHORIZED_EVENT = "argus:unauthorized";
+
+function notifyUnauthorized() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   }
 }
 
@@ -70,6 +90,7 @@ async function request<T>(
   });
 
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized();
     let msg = res.statusText;
     try {
       const body = await res.json();
@@ -93,6 +114,7 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
 async function postForm<T>(url: string, form: FormData): Promise<T> {
   const res = await fetch(url, { method: "POST", body: form });
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized();
     let msg = res.statusText;
     try {
       const body = await res.json();
@@ -103,6 +125,28 @@ async function postForm<T>(url: string, form: FormData): Promise<T> {
     throw new ApiError(res.status, msg);
   }
   return res.json() as Promise<T>;
+}
+
+// ──────────────────────────────────────────────
+// Auth
+// ──────────────────────────────────────────────
+
+export interface AuthStatus {
+  enabled: boolean;
+  authenticated: boolean;
+  using_default: boolean;
+}
+
+export function getAuthStatus(): Promise<AuthStatus> {
+  return request<AuthStatus>("/api/auth/status");
+}
+
+export function login(username: string, password: string): Promise<{ status: string; using_default: boolean }> {
+  return post("/api/login", { username, password });
+}
+
+export function logout(): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/logout");
 }
 
 // ──────────────────────────────────────────────
@@ -155,19 +199,19 @@ export function getSessionDetail(folder: string, session: string): Promise<Video
 }
 
 export function streamURL(relativePath: string): string {
-  return `/api/videos/stream/${relativePath}`;
+  return `/api/videos/stream/${encodePath(relativePath)}`;
 }
 
 export function downloadURL(relativePath: string): string {
-  return `/api/videos/download/${relativePath}`;
+  return `/api/videos/download/${encodePath(relativePath)}`;
 }
 
 export function seiURL(relativePath: string): string {
-  return `/api/videos/sei/${relativePath}`;
+  return `/api/videos/sei/${encodePath(relativePath)}`;
 }
 
 export function telemetryURL(relativePath: string): string {
-  return `/api/videos/telemetry/${relativePath}`;
+  return `/api/videos/telemetry/${encodePath(relativePath)}`;
 }
 
 export function downloadEventURL(folder: string, event: string): string {
@@ -363,11 +407,11 @@ export function uploadChunk(
 }
 
 export function deleteFile(relativePath: string): Promise<StatusResponse> {
-  return post<StatusResponse>(`/api/music/delete/${relativePath}`);
+  return post<StatusResponse>(`/api/music/delete/${encodePath(relativePath)}`);
 }
 
 export function deleteDir(relativePath: string): Promise<StatusResponse> {
-  return post<StatusResponse>(`/api/music/delete-dir/${relativePath}`);
+  return post<StatusResponse>(`/api/music/delete-dir/${encodePath(relativePath)}`);
 }
 
 export function moveFile(source: string, destination: string, newName: string): Promise<StatusResponse> {
@@ -379,7 +423,7 @@ export function mkdir(path: string, name: string): Promise<StatusResponse> {
 }
 
 export function playURL(relativePath: string): string {
-  return `/api/music/play/${relativePath}`;
+  return `/api/music/play/${encodePath(relativePath)}`;
 }
 
 // ──────────────────────────────────────────────

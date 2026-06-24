@@ -219,7 +219,14 @@ func (m *Monitor) ipReady() bool {
 }
 
 func (m *Monitor) pingOK() bool {
-	cmd := exec.Command("ping", "-c", "1", "-W", "3", m.cfg.OfflineAP.PingTarget)
+	target := m.cfg.OfflineAP.PingTarget
+	// Refuse a target that ping would parse as an option flag (e.g. "-f" flood,
+	// "-s <big>"); it reaches ping as a positional arg, so a leading '-' is the
+	// only injection vector and an empty target is meaningless.
+	if target == "" || strings.HasPrefix(target, "-") {
+		return false
+	}
+	cmd := exec.Command("ping", "-c", "1", "-W", "3", target)
 	return cmd.Run() == nil
 }
 

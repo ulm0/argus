@@ -170,11 +170,20 @@ func Install(release *Release) error {
 	}
 
 	// Back up the existing binary before swapping.
+	backupPath := binaryDest + ".backup"
+	backedUp := false
 	if _, err := os.Stat(binaryDest); err == nil {
-		_ = os.Rename(binaryDest, binaryDest+".backup")
+		if err := os.Rename(binaryDest, backupPath); err == nil {
+			backedUp = true
+		}
 	}
 
 	if err := os.Rename(tmpPath, binaryDest); err != nil {
+		// Restore the previous binary so a failed swap can't leave the service
+		// with no executable at all.
+		if backedUp {
+			_ = os.Rename(backupPath, binaryDest)
+		}
 		return fmt.Errorf("install binary: %w", err)
 	}
 

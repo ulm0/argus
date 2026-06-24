@@ -300,6 +300,12 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 		if height <= 0 {
 			height = 180
 		}
+		if width > 1920 {
+			width = 1920
+		}
+		if height > 1080 {
+			height = 1080
+		}
 		if err := h.generateThumbnailOnce(videoFullPath, thumbPath, width, height); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "thumbnail generation failed: "+err.Error())
 			return
@@ -416,6 +422,12 @@ func (h *VideoHandler) SessionThumbnail(w http.ResponseWriter, r *http.Request) 
 		}
 		if height <= 0 {
 			height = 180
+		}
+		if width > 1920 {
+			width = 1920
+		}
+		if height > 1080 {
+			height = 1080
 		}
 		if err := h.generateThumbnailOnce(videoFullPath, thumbPath, width, height); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, "thumbnail generation failed: "+err.Error())

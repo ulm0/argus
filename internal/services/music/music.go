@@ -110,8 +110,12 @@ func (s *Service) SaveFile(data io.Reader, filename, mountPath, relPath string) 
 		return fmt.Errorf("path traversal detected")
 	}
 
+	destPath := filepath.Join(targetDir, filepath.Base(filename))
+	if !isWithinDir(destPath, musicDir) {
+		return fmt.Errorf("path traversal detected")
+	}
+
 	os.MkdirAll(targetDir, 0755)
-	destPath := filepath.Join(targetDir, filename)
 
 	// Atomic write: write to temp, fsync, rename
 	tmpPath := destPath + ".tmp"
@@ -143,7 +147,28 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 	defer s.mu.Unlock()
 
 	musicDir := filepath.Join(mountPath, MusicFolder)
+
+	// Unlike multipart filenames (which the stdlib runs through filepath.Base),
+	// uploadID/filename/relPath arrive here as raw form values, so a value like
+	// "../../etc/cron.d/evil" would escape musicDir and give an arbitrary-write
+	// primitive. Constrain every component to the music directory before use.
+	if uploadID != filepath.Base(uploadID) || uploadID == "." || uploadID == ".." || strings.ContainsAny(uploadID, `/\`) {
+		return false, fmt.Errorf("invalid upload id")
+	}
+	filename = filepath.Base(filename)
+	if filename == "." || filename == ".." {
+		return false, fmt.Errorf("invalid filename")
+	}
+	targetDir := filepath.Join(musicDir, filepath.Clean(relPath))
+	destPath := filepath.Join(targetDir, filename)
+	if !isWithinDir(targetDir, musicDir) || !isWithinDir(destPath, musicDir) {
+		return false, fmt.Errorf("path traversal detected")
+	}
+
 	uploadDir := filepath.Join(musicDir, ".uploads", uploadID)
+	if !isWithinDir(uploadDir, musicDir) {
+		return false, fmt.Errorf("path traversal detected")
+	}
 	os.MkdirAll(uploadDir, 0755)
 
 	// Save chunk
@@ -164,10 +189,8 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 		return false, nil
 	}
 
-	// Assemble final file
-	targetDir := filepath.Join(musicDir, filepath.Clean(relPath))
+	// Assemble final file (targetDir/destPath were validated above).
 	os.MkdirAll(targetDir, 0755)
-	destPath := filepath.Join(targetDir, filename)
 	tmpPath := destPath + ".assembling"
 
 	assembled, err := os.Create(tmpPath)

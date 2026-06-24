@@ -70,6 +70,14 @@ func (s *Service) ValidateTeslaWAV(path string) (bool, string) {
 		chunkID := string(chunkHdr[0:4])
 		chunkSize := binary.LittleEndian.Uint32(chunkHdr[4:8])
 
+		// chunkSize is read straight from the (untrusted) file and is only loosely
+		// related to the real file length. Reject a declared chunk larger than the
+		// file so a tiny crafted WAV claiming a ~4 GiB fmt chunk can't force a
+		// multi-gigabyte allocation and OOM the Pi.
+		if int64(chunkSize) > info.Size() {
+			return false, "WAV chunk size exceeds file length"
+		}
+
 		if chunkID == "fmt " {
 			fmtData = make([]byte, chunkSize)
 			if _, err := io.ReadFull(f, fmtData); err != nil {
@@ -265,7 +273,10 @@ func (s *Service) UploadChime(data []byte, filename, mountPath string, normalize
 	chimesDir := filepath.Join(mountPath, s.cfg.Web.ChimesFolder)
 	os.MkdirAll(chimesDir, 0755)
 
-	destPath := filepath.Join(chimesDir, filename)
+	destPath := filepath.Join(chimesDir, filepath.Base(filename))
+	if !strings.HasPrefix(destPath, chimesDir+string(filepath.Separator)) {
+		return fmt.Errorf("invalid chime filename: path traversal detected")
+	}
 
 	// Write raw upload to temp file.
 	tmpPath := destPath + ".tmp"
@@ -489,7 +500,11 @@ func (s *Scheduler) GetSchedule(id string) *Schedule {
 
 	for i := range s.schedules {
 		if s.schedules[i].ID == id {
-			return &s.schedules[i]
+			// Return a copy: handing back &s.schedules[i] lets callers read the
+			// element after the lock is released, racing the per-minute tick that
+			// mutates LastRun and Add/Delete that reslice the backing array.
+			sched := s.schedules[i]
+			return &sched
 		}
 	}
 	return nil
