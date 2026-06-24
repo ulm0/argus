@@ -51,6 +51,13 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 
 			logger.L.WithField("gadget_dir", cfg.GadgetDir).WithField("port", cfg.Network.WebPort).Info("Argus starting")
 
+			if cfg.AuthEnabled() && cfg.UsingDefaultAuth() {
+				logger.L.Warn("web UI is using the DEFAULT login credentials (admin/argus) — change auth_username/auth_password in config.yaml or the Settings page")
+			}
+			if !cfg.AuthEnabled() {
+				logger.L.Warn("web UI authentication is DISABLED (auth_enabled: false) — anyone who can reach the port has full control")
+			}
+
 			if runtime.GOOS == "linux" {
 				if err := watchdog.ApplyDaemon(cfg.System.WatchdogEnabled, cfg.System.WatchdogTimeoutSec); err != nil {
 					logger.L.WithError(err).Warn("watchdog daemon configure failed")

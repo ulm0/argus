@@ -144,6 +144,11 @@ type WebConfig struct {
 	// cookies are signed with SecretKey.
 	AuthUsername string `yaml:"auth_username"`
 	AuthPassword string `yaml:"auth_password"`
+	// AllowedHosts is an optional allowlist of Host header values (e.g. a
+	// reverse-proxy FQDN) accepted by the anti-DNS-rebinding check, in addition
+	// to the always-allowed local identities (IPs, localhost, *.local, bare
+	// single-label names).
+	AllowedHosts []string `yaml:"allowed_hosts,omitempty"`
 }
 
 // DefaultAuthUsername / DefaultAuthPassword are the shipped credentials. The

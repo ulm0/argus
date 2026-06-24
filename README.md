@@ -108,6 +108,11 @@ Sessions are stateless cookies signed with `web.secret_key` (auto-generated on
 first run), `HttpOnly` + `SameSite=Strict`, and marked `Secure` automatically
 when Argus is reached over HTTPS (e.g. behind a TLS reverse proxy).
 
+The API also rejects requests whose `Host` header isn't a local identity (an IP,
+`localhost`, a bare name, or `*.local` / `*.lan`) as a DNS-rebinding defense. If
+you front Argus with a reverse proxy on a real domain, add that hostname to
+`web.allowed_hosts`.
+
 ### Setup options
 
 | Flag | Default | Description |
@@ -149,7 +154,7 @@ All runtime settings are in `~/.argus/config.yaml`.
 | `installation` | startup behavior, target user, mount dir, archive path |
 | `disk_images` | image names, partition toggles, fsck boot option |
 | `network` | web port, Samba password |
-| `web` | UI login (`auth_enabled`, `auth_username`, `auth_password`), upload limits, chime/lightshow folders, signing `secret_key` |
+| `web` | UI login (`auth_enabled`, `auth_username`, `auth_password`), `allowed_hosts`, upload limits, chime/lightshow folders, signing `secret_key` |
 | `offline_ap` | AP fallback behavior, force mode, internet sharing |
 | `system` | watchdog + sysctl startup behavior |
 | `telegram` | alerting configuration, video quality, offline queueing |

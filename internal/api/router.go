@@ -25,6 +25,8 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logging)
 	r.Use(middleware.PanicRecovery)
+	// Reject API requests with a non-local Host header (DNS-rebinding defense).
+	r.Use(middleware.RequireLocalHost(cfg.Web.AllowedHosts))
 	r.Use(func(next http.Handler) http.Handler {
 		// Skip gzip compression for SSE endpoints — the compressor buffers output
 		// and breaks flushing, so EventSource clients never receive events.
