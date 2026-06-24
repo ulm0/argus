@@ -4,11 +4,21 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ulm0/argus/internal/auth"
 	"github.com/ulm0/argus/internal/config"
 )
+
+// requestIsHTTPS reports whether the request reached us over TLS, either
+// directly or via a TLS-terminating reverse proxy. Argus serves plain HTTP on
+// the local network/AP by default, so the session cookie's Secure attribute is
+// set conditionally: forcing Secure unconditionally would stop the browser from
+// ever sending the cookie over HTTP and break login on the common deployment.
+func requestIsHTTPS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
 
 // SessionCookie is the name of the cookie carrying the signed session token.
 const SessionCookie = "argus_session"
@@ -57,6 +67,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   requestIsHTTPS(r),
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(auth.SessionTTL / time.Second),
 	})
@@ -70,6 +81,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   requestIsHTTPS(r),
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
