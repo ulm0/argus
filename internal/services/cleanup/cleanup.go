@@ -230,6 +230,11 @@ func (s *Service) CalculateCleanupPlan(partitionPath string) (*CleanupPlan, erro
 		}
 
 		folderPath := filepath.Join(tcPath, folder)
+		// Confine the resolved path to the TeslaCam root before it is used to
+		// build the event paths that ExecuteCleanup ultimately os.RemoveAll's.
+		if folderPath != tcPath && !strings.HasPrefix(folderPath, tcPath+string(filepath.Separator)) {
+			continue
+		}
 		if _, err := os.Stat(folderPath); err != nil {
 			continue
 		}

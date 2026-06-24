@@ -166,6 +166,9 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 	}
 
 	uploadDir := filepath.Join(musicDir, ".uploads", uploadID)
+	if !isWithinDir(uploadDir, musicDir) {
+		return false, fmt.Errorf("path traversal detected")
+	}
 	os.MkdirAll(uploadDir, 0755)
 
 	// Save chunk

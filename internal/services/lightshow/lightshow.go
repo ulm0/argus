@@ -129,6 +129,11 @@ func (s *Service) UploadZip(zipData []byte, mountPath string) (int, error) {
 
 		baseName := filepath.Base(f.Name) // strip paths inside ZIP
 		destPath := filepath.Join(showDir, baseName)
+		// Confine the write target to showDir (zip-slip guard); filepath.Base
+		// already strips directory components, this makes the invariant explicit.
+		if !strings.HasPrefix(destPath, showDir+string(filepath.Separator)) {
+			continue
+		}
 
 		src, err := f.Open()
 		if err != nil {
