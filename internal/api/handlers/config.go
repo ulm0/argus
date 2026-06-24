@@ -34,6 +34,7 @@ type configResponse struct {
 	Update      updateConfigPublic      `json:"update"`
 	Startup     startupConfigPublic     `json:"startup"`
 	ViewerPrefs viewerPrefsConfigPublic `json:"viewer_prefs"`
+	Auth        authConfigPublic        `json:"auth"`
 	LogLevel    string                  `json:"log_level"`
 
 	// Read-only info (not patchable)
@@ -85,6 +86,14 @@ type updateConfigPublic struct {
 	AutoUpdate     bool   `json:"auto_update"`
 	CheckOnStartup bool   `json:"check_on_startup"`
 	Channel        string `json:"channel"`
+}
+
+// authConfigPublic exposes login settings. The password is write-only and is
+// never returned; using_default lets the UI nag to change the shipped creds.
+type authConfigPublic struct {
+	Enabled      bool   `json:"enabled"`
+	Username     string `json:"username"`
+	UsingDefault bool   `json:"using_default"`
 }
 
 type viewerPrefsConfigPublic struct {
@@ -180,6 +189,11 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 			HudScale:  cfg.ViewerPrefs.HudScale,
 			MapScale:  cfg.ViewerPrefs.MapScale,
 		},
+		Auth: authConfigPublic{
+			Enabled:      cfg.AuthEnabled(),
+			Username:     cfg.Web.AuthUsername,
+			UsingDefault: cfg.UsingDefaultAuth(),
+		},
 		LogLevel: cfg.LogLevel,
 		Storage: storageInfo{
 			CamName:          cfg.DiskImages.CamName,
@@ -208,7 +222,14 @@ type patchRequest struct {
 	Update      *updatePatch      `json:"update,omitempty"`
 	Startup     *startupPatch     `json:"startup,omitempty"`
 	ViewerPrefs *viewerPrefsPatch `json:"viewer_prefs,omitempty"`
+	Auth        *authPatch        `json:"auth,omitempty"`
 	LogLevel    *string           `json:"log_level,omitempty"`
+}
+
+type authPatch struct {
+	Enabled  *bool   `json:"enabled,omitempty"`
+	Username *string `json:"username,omitempty"`
+	Password *string `json:"password,omitempty"`
 }
 
 type networkPatch struct {
@@ -487,6 +508,27 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			cfg.ViewerPrefs.MapScale = v
+		}
+	}
+
+	if p := req.Auth; p != nil {
+		if p.Username != nil {
+			u := strings.TrimSpace(*p.Username)
+			if u == "" {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username must not be empty"})
+				return
+			}
+			cfg.Web.AuthUsername = u
+		}
+		if p.Password != nil {
+			if len(*p.Password) < 4 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password must be at least 4 characters"})
+				return
+			}
+			cfg.Web.AuthPassword = *p.Password
+		}
+		if p.Enabled != nil {
+			cfg.Web.AuthEnabled = p.Enabled
 		}
 	}
 

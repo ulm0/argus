@@ -135,7 +135,23 @@ type WebConfig struct {
 	LightshowFolder   string  `yaml:"lightshow_folder"`
 	MaxUploadSizeMB   int     `yaml:"max_upload_size_mb"`
 	MaxUploadChunkMB  int     `yaml:"max_upload_chunk_mb"`
+
+	// AuthEnabled gates the web UI/API behind a login. Pointer so an explicit
+	// `auth_enabled: false` is distinguishable from unset; defaults to true.
+	AuthEnabled *bool `yaml:"auth_enabled,omitempty"`
+	// AuthUsername/AuthPassword are the login credentials. They ship with a
+	// default (admin / argus) that should be changed on first use. Session
+	// cookies are signed with SecretKey.
+	AuthUsername string `yaml:"auth_username"`
+	AuthPassword string `yaml:"auth_password"`
 }
+
+// DefaultAuthUsername / DefaultAuthPassword are the shipped credentials. The
+// auth status endpoint reports when they are still in use so the UI can nag.
+const (
+	DefaultAuthUsername = "admin"
+	DefaultAuthPassword = "argus"
+)
 
 type TelegramConfig struct {
 	Enabled      bool   `yaml:"enabled"`
@@ -251,6 +267,16 @@ func (c *Config) setDefaults() {
 	if c.Web.SecretKey == "" || c.Web.SecretKey == defaultSecretKey {
 		c.Web.SecretKey = generateRandomKey()
 	}
+	if c.Web.AuthEnabled == nil {
+		enabled := true
+		c.Web.AuthEnabled = &enabled
+	}
+	if c.Web.AuthUsername == "" {
+		c.Web.AuthUsername = DefaultAuthUsername
+	}
+	if c.Web.AuthPassword == "" {
+		c.Web.AuthPassword = DefaultAuthPassword
+	}
 	if c.Telegram.OfflineMode == "" {
 		c.Telegram.OfflineMode = "queue"
 	}
@@ -321,6 +347,18 @@ func (c *Config) SetSambaEnabled(enabled bool) {
 // Defaults to true when the field is unset to preserve existing behavior.
 func (c *Config) CheckUpdateOnStartup() bool {
 	return c.Update.CheckOnStartup == nil || *c.Update.CheckOnStartup
+}
+
+// AuthEnabled reports whether the web UI/API requires a login.
+// Defaults to true when unset.
+func (c *Config) AuthEnabled() bool {
+	return c.Web.AuthEnabled == nil || *c.Web.AuthEnabled
+}
+
+// UsingDefaultAuth reports whether the shipped default credentials are still in
+// use, so the UI can prompt the operator to change them.
+func (c *Config) UsingDefaultAuth() bool {
+	return c.Web.AuthUsername == DefaultAuthUsername && c.Web.AuthPassword == DefaultAuthPassword
 }
 
 func (c *Config) computePaths() {

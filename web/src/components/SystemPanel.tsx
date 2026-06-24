@@ -140,6 +140,16 @@ export default function SystemPanel() {
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      /* ignore — we reload regardless */
+    }
+    // Reload so AuthGate re-evaluates auth status (shows login if enabled).
+    window.location.reload();
+  };
+
   const handlePower = async (action: "reboot" | "poweroff") => {
     const verb = action === "reboot" ? "reboot" : "shut down";
     if (!confirm(`Are you sure you want to ${verb} the device?`)) return;
@@ -324,6 +334,12 @@ export default function SystemPanel() {
               {powerAction === "poweroff" ? "Shutting down..." : "Shut down"}
             </button>
           </div>
+          <button
+            onClick={handleLogout}
+            className="mt-2 w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-text-primary)] hover:text-[var(--color-text-primary)]"
+          >
+            Sign out
+          </button>
         </div>
       </div>
     </aside>

@@ -37,6 +37,9 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 		})
 	})
 
+	// Gate /api/ behind a session cookie (except the auth endpoints themselves).
+	r.Use(middleware.RequireAuth(cfg, cfg.Web.SecretKey, handlers.SessionCookie))
+
 	maxBody := int64(cfg.Web.MaxUploadSizeMB) * 1024 * 1024
 	r.Use(func(next http.Handler) http.Handler {
 		// MaxBytesHandler wraps the ResponseWriter in a type that does not
@@ -74,6 +77,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 
 	configH := handlers.NewConfigHandler(cfg)
 	logsH := handlers.NewLogsHandler(cfg)
+	authH := handlers.NewAuthHandler(cfg)
 
 	updateH := handlers.NewUpdateHandler(cfg)
 	powerH := handlers.NewSystemPowerHandler(cfg)
@@ -90,6 +94,11 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	r.HandleFunc("/canonical.html", captiveH.Detect).Methods("GET")
 
 	api := r.PathPrefix("/api").Subrouter()
+
+	// Auth (login/logout/status are reachable without a session)
+	api.HandleFunc("/login", authH.Login).Methods("POST")
+	api.HandleFunc("/logout", authH.Logout).Methods("POST")
+	api.HandleFunc("/auth/status", authH.Status).Methods("GET")
 
 	// Mode control
 	api.HandleFunc("/status", modeH.Status).Methods("GET")

@@ -70,6 +70,16 @@ class ApiError extends Error {
   }
 }
 
+// UNAUTHORIZED_EVENT is dispatched on window whenever the API returns 401 so the
+// login gate can re-prompt without every caller having to handle it.
+export const UNAUTHORIZED_EVENT = "argus:unauthorized";
+
+function notifyUnauthorized() {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
+}
+
 async function request<T>(
   url: string,
   options?: RequestInit,
@@ -80,6 +90,7 @@ async function request<T>(
   });
 
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized();
     let msg = res.statusText;
     try {
       const body = await res.json();
@@ -103,6 +114,7 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
 async function postForm<T>(url: string, form: FormData): Promise<T> {
   const res = await fetch(url, { method: "POST", body: form });
   if (!res.ok) {
+    if (res.status === 401) notifyUnauthorized();
     let msg = res.statusText;
     try {
       const body = await res.json();
@@ -113,6 +125,28 @@ async function postForm<T>(url: string, form: FormData): Promise<T> {
     throw new ApiError(res.status, msg);
   }
   return res.json() as Promise<T>;
+}
+
+// ──────────────────────────────────────────────
+// Auth
+// ──────────────────────────────────────────────
+
+export interface AuthStatus {
+  enabled: boolean;
+  authenticated: boolean;
+  using_default: boolean;
+}
+
+export function getAuthStatus(): Promise<AuthStatus> {
+  return request<AuthStatus>("/api/auth/status");
+}
+
+export function login(username: string, password: string): Promise<{ status: string; using_default: boolean }> {
+  return post("/api/login", { username, password });
+}
+
+export function logout(): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/logout");
 }
 
 // ──────────────────────────────────────────────

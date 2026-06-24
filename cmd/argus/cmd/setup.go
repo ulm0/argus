@@ -94,6 +94,9 @@ web:
   lightshow_folder: LightShow
   max_upload_size_mb: 2048
   max_upload_chunk_mb: 16
+  auth_enabled: true
+  auth_username: admin
+  auth_password: argus
 
 telegram:
   enabled: false
