@@ -14,6 +14,15 @@ import (
 	partutil "github.com/ulm0/argus/internal/services/partition"
 )
 
+// Uploads are buffered fully in RAM (UploadFile/UploadZip take []byte), so cap
+// each part before reading to keep a single oversized authenticated upload from
+// OOM-killing the daemon on the Pi Zero's ~400 MB. Buffers are pre-sized to the
+// part size to avoid io.ReadAll's doubling growth.
+const (
+	maxLightshowFileBytes = 64 << 20  // 64 MiB per .fseq/.mp3/.wav file
+	maxLightshowZipBytes  = 128 << 20 // 128 MiB per compressed ZIP archive
+)
+
 type LightshowHandler struct {
 	cfg          *config.Config
 	lightshowSvc *lightshow.Service
@@ -109,8 +118,13 @@ func (h *LightshowHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(file)
-	if err != nil {
+	if header.Size > maxLightshowFileBytes {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "file too large"})
+		return
+	}
+
+	data := make([]byte, header.Size)
+	if _, err := io.ReadFull(file, data); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to read file")
 		return
 	}
@@ -151,20 +165,31 @@ func (h *LightshowHandler) UploadMultiple(w http.ResponseWriter, r *http.Request
 	var errors []string
 
 	for _, fh := range files {
+		isZip := strings.HasSuffix(strings.ToLower(fh.Filename), ".zip")
+		limit := int64(maxLightshowFileBytes)
+		if isZip {
+			limit = int64(maxLightshowZipBytes)
+		}
+		if fh.Size > limit {
+			errors = append(errors, fh.Filename+": file too large")
+			continue
+		}
+
 		file, err := fh.Open()
 		if err != nil {
 			errors = append(errors, fh.Filename+": "+err.Error())
 			continue
 		}
 
-		data, err := io.ReadAll(file)
+		data := make([]byte, fh.Size)
+		_, err = io.ReadFull(file, data)
 		file.Close()
 		if err != nil {
 			errors = append(errors, fh.Filename+": read error")
 			continue
 		}
 
-		if strings.HasSuffix(strings.ToLower(fh.Filename), ".zip") {
+		if isZip {
 			count, err := h.lightshowSvc.UploadZip(data, mountPath)
 			if err != nil {
 				errors = append(errors, fh.Filename+": "+err.Error())

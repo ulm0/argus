@@ -18,8 +18,7 @@ const (
 	loopGetStatus64 = 0x4C05
 	loopCtlGetFree  = 0x4C82
 
-	loFlagsReadOnly  = 1
-	loFlagsAutoClear = 4
+	loFlagsReadOnly = 1
 )
 
 type loopInfo64 struct {
@@ -81,7 +80,6 @@ func (m *Manager) Create(imagePath string, readOnly bool) (string, error) {
 	if readOnly {
 		info.Flags |= loFlagsReadOnly
 	}
-	info.Flags |= loFlagsAutoClear
 	copy(info.FileName[:], imagePath)
 
 	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, loopFd.Fd(), loopSetStatus64,

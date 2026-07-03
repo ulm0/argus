@@ -112,20 +112,43 @@ func (m *Manager) GenerateConfig() error {
 		return fmt.Errorf("parse smb template: %w", err)
 	}
 
-	f, err := os.Create(m.cfg.System.SambaConf)
+	// Render to a temp file and rename over the target so a mid-write
+	// failure (crash, power loss, ENOSPC) can't leave a truncated live
+	// smb.conf that breaks the next smbd start.
+	tmp := m.cfg.System.SambaConf + ".tmp"
+	f, err := os.Create(tmp)
 	if err != nil {
 		return fmt.Errorf("create smb.conf: %w", err)
 	}
-	defer f.Close()
 
-	return tmpl.Execute(f, map[string]any{
+	if err := tmpl.Execute(f, map[string]any{
 		"User":         m.cfg.Installation.TargetUser,
 		"MountDir":     m.cfg.Installation.MountDir,
 		"Part1Label":   "gadget_part1",
 		"Part2Label":   "gadget_part2",
 		"Part3Label":   "gadget_part3",
 		"MusicEnabled": m.cfg.DiskImages.MusicEnabled,
-	})
+	}); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("write smb.conf: %w", err)
+	}
+
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return fmt.Errorf("sync smb.conf: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("close smb.conf: %w", err)
+	}
+
+	if err := os.Rename(tmp, m.cfg.System.SambaConf); err != nil {
+		os.Remove(tmp)
+		return fmt.Errorf("rename smb.conf: %w", err)
+	}
+	return nil
 }
 
 // SetPassword sets the Samba password for the target user.

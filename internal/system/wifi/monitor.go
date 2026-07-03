@@ -230,6 +230,31 @@ func (m *Monitor) pingOK() bool {
 	return cmd.Run() == nil
 }
 
+// splitTerse splits one line of `nmcli -t` terse output into fields. nmcli
+// escapes the field separator ':' as '\:' and a literal '\' as '\\' inside
+// values, so a naive strings.Split on ':' corrupts any field (e.g. an SSID)
+// that contains a colon. This walks the line honoring those escapes and
+// returns the unescaped fields.
+func splitTerse(line string) []string {
+	var fields []string
+	var b strings.Builder
+	for i := 0; i < len(line); i++ {
+		if line[i] == '\\' && i+1 < len(line) {
+			b.WriteByte(line[i+1])
+			i++
+			continue
+		}
+		if line[i] == ':' {
+			fields = append(fields, b.String())
+			b.Reset()
+			continue
+		}
+		b.WriteByte(line[i])
+	}
+	fields = append(fields, b.String())
+	return fields
+}
+
 func (m *Monitor) getConnectionInfo() ConnectionStatus {
 	out, err := exec.Command("nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL", "dev", "wifi").Output()
 	if err != nil {
@@ -237,7 +262,7 @@ func (m *Monitor) getConnectionInfo() ConnectionStatus {
 	}
 
 	for _, line := range strings.Split(string(out), "\n") {
-		parts := strings.SplitN(line, ":", 3)
+		parts := splitTerse(line)
 		if len(parts) == 3 && parts[0] == "yes" {
 			var signal int
 			fmt.Sscanf(parts[2], "%d", &signal)
@@ -305,7 +330,7 @@ func (m *Monitor) ScanNetworks(ctx context.Context, rescan bool) ([]Network, err
 	seen := make(map[string]bool)
 	var networks []Network
 	for _, line := range strings.Split(string(out), "\n") {
-		parts := strings.SplitN(line, ":", 3)
+		parts := splitTerse(line)
 		if len(parts) < 3 || parts[0] == "" {
 			continue
 		}

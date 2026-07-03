@@ -121,9 +121,30 @@ export default function SystemPanel() {
   }, []);
 
   useEffect(() => {
-    loadAll();
-    const id = setInterval(loadAll, 15000);
-    return () => clearInterval(id);
+    // The panel is `hidden ... xl:block`, so it is display:none below 1280px.
+    // Only poll while it can actually be visible to avoid waking the Pi's HTTP
+    // stack (nmcli/iw forks) and the phone radio to render nothing.
+    const mql = window.matchMedia("(min-width: 1280px)");
+    let id: ReturnType<typeof setInterval> | null = null;
+
+    const sync = () => {
+      if (mql.matches) {
+        if (id === null) {
+          loadAll();
+          id = setInterval(loadAll, 15000);
+        }
+      } else if (id !== null) {
+        clearInterval(id);
+        id = null;
+      }
+    };
+
+    sync();
+    mql.addEventListener("change", sync);
+    return () => {
+      mql.removeEventListener("change", sync);
+      if (id !== null) clearInterval(id);
+    };
   }, [loadAll]);
 
   const handleModeSwitch = async (mode: "present" | "edit") => {

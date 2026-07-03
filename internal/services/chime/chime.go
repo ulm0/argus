@@ -323,6 +323,14 @@ func (s *Service) UploadChime(data []byte, filename, mountPath string, normalize
 		}
 	}
 
+	// Validate the final result before adding it to the library. Re-encoding fixes
+	// codec/sample-rate/channels but cannot shrink an over-length or over-size clip,
+	// so reject an invalid chime here instead of silently storing one the car ignores.
+	if valid, reason := s.ValidateTeslaWAV(tmpPath); !valid {
+		cleanup(tmpPath)
+		return fmt.Errorf("invalid chime: %s", reason)
+	}
+
 	// Final rename; if it fails, remove the remaining temp file.
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		cleanup(tmpPath)

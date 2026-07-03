@@ -281,7 +281,18 @@ func (m *Manager) startAgentLocked() error {
 	io.WriteString(in, "agent NoInputNoOutput\ndefault-agent\n")
 	m.agentCmd = cmd
 	m.agentIn = in
-	go cmd.Wait() //nolint:errcheck
+	go func() {
+		cmd.Wait() //nolint:errcheck
+		// If this agent exits on its own (bluetoothd restart, adapter reset,
+		// OOM/crash), clear the stale handle so the next startAgentLocked
+		// relaunches it instead of no-oping on a dead process.
+		m.mu.Lock()
+		if m.agentCmd == cmd {
+			m.agentCmd = nil
+			m.agentIn = nil
+		}
+		m.mu.Unlock()
+	}()
 	return nil
 }
 

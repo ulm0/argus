@@ -48,8 +48,8 @@ func TestWriteGenerateConfig_NewFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed stat of written file: %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0644 {
-		t.Fatalf("unexpected file permissions: got=%#o want=%#o", got, 0644)
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("unexpected file permissions: got=%#o want=%#o", got, 0600)
 	}
 }
 

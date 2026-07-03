@@ -304,6 +304,15 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate every section BEFORE mutating anything. h.cfg is the shared,
+	// process-wide config pointer, so applying section-by-section and only then
+	// rejecting a later section would leave the live config partially changed
+	// (and diverged from disk, since Save never runs on the error path).
+	if msg := validatePatch(&req); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+
 	cfg := h.cfg
 
 	if p := req.Network; p != nil {
@@ -313,37 +322,8 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if p := req.OfflineAP; p != nil {
-		// Validate network fields the same way UpdateAPConfig does, so a PATCH
-		// can't smuggle malformed/injected values (newline-injected SSID/passphrase,
-		// non-IP DHCP/CIDR, or a leading-'-' ping target) into hostapd/dnsmasq/ip.
-		if p.SSID != nil && (len(*p.SSID) > 32 || strings.ContainsAny(*p.SSID, "\r\n")) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ssid"})
-			return
-		}
-		if p.Passphrase != nil {
-			if l := len(*p.Passphrase); l < 8 || l > 63 || strings.ContainsAny(*p.Passphrase, "\r\n") {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid passphrase (8-63 chars, no newlines)"})
-				return
-			}
-		}
-		if p.IPv4CIDR != nil {
-			if _, _, err := net.ParseCIDR(*p.IPv4CIDR); err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ipv4_cidr"})
-				return
-			}
-		}
-		if p.DHCPStart != nil && net.ParseIP(*p.DHCPStart) == nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid dhcp_start"})
-			return
-		}
-		if p.DHCPEnd != nil && net.ParseIP(*p.DHCPEnd) == nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid dhcp_end"})
-			return
-		}
-		if p.PingTarget != nil && (*p.PingTarget == "" || strings.HasPrefix(*p.PingTarget, "-")) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid ping_target"})
-			return
-		}
+		// Network fields (SSID/passphrase/CIDR/DHCP/ping target) were validated
+		// up front by validatePatch so nothing malformed reaches hostapd/dnsmasq/ip.
 		if p.Enabled != nil {
 			cfg.OfflineAP.Enabled = *p.Enabled
 		}
@@ -472,59 +452,27 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 			cfg.System.ReapplySysctlOnStart = *p.ReapplySysctlOnStart
 		}
 		if p.WatchdogTimeoutSec != nil {
-			// Match Debian watchdog(8) / TeslaUSB-style minimum (low values risk timing issues on Pi).
-			if *p.WatchdogTimeoutSec < 10 {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "watchdog_timeout_sec must be >= 10"})
-				return
-			}
 			cfg.System.WatchdogTimeoutSec = *p.WatchdogTimeoutSec
 		}
 	}
 
 	if p := req.ViewerPrefs; p != nil {
 		if p.SpeedUnit != nil {
-			unit := strings.TrimSpace(strings.ToLower(*p.SpeedUnit))
-			if unit != "kph" && unit != "mph" {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid speed_unit (must be 'kph' or 'mph')"})
-				return
-			}
-			cfg.ViewerPrefs.SpeedUnit = unit
+			cfg.ViewerPrefs.SpeedUnit = strings.TrimSpace(strings.ToLower(*p.SpeedUnit))
 		}
-		// HUD/Map scale bounds mirror the limits enforced in the web client
-		// (see DashcamPlayer / ArgusHUD). Accept a slightly wider envelope
-		// here so future client tweaks don't require a backend update.
 		if p.HudScale != nil {
-			v := *p.HudScale
-			if v < 0.5 || v > 2.5 {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "hud_scale must be in [0.5, 2.5]"})
-				return
-			}
-			cfg.ViewerPrefs.HudScale = v
+			cfg.ViewerPrefs.HudScale = *p.HudScale
 		}
 		if p.MapScale != nil {
-			v := *p.MapScale
-			if v < 0.4 || v > 3.0 {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "map_scale must be in [0.4, 3.0]"})
-				return
-			}
-			cfg.ViewerPrefs.MapScale = v
+			cfg.ViewerPrefs.MapScale = *p.MapScale
 		}
 	}
 
 	if p := req.Auth; p != nil {
 		if p.Username != nil {
-			u := strings.TrimSpace(*p.Username)
-			if u == "" {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "username must not be empty"})
-				return
-			}
-			cfg.Web.AuthUsername = u
+			cfg.Web.AuthUsername = strings.TrimSpace(*p.Username)
 		}
 		if p.Password != nil {
-			if len(*p.Password) < 4 {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password must be at least 4 characters"})
-				return
-			}
 			cfg.Web.AuthPassword = *p.Password
 		}
 		if p.Enabled != nil {
@@ -534,10 +482,7 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 
 	if req.LogLevel != nil {
 		lvl := strings.TrimSpace(strings.ToLower(*req.LogLevel))
-		if !logger.SetLevelFromString(lvl) {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid log_level: " + *req.LogLevel})
-			return
-		}
+		logger.SetLevelFromString(lvl)
 		cfg.LogLevel = lvl
 	}
 
@@ -553,4 +498,82 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// validatePatch checks every mutable section of a patch request without touching
+// any config, returning a non-empty error message on the first violation. This
+// lets Patch reject bad input before applying any change, so a failure in a late
+// section can't leave earlier sections half-applied to the live config.
+func validatePatch(req *patchRequest) string {
+	// Out-of-range web_port survives Load (setDefaults only re-defaults 0->80) and
+	// bricks ListenAndServe on the next boot, leaving the headless UI unreachable.
+	if p := req.Network; p != nil && p.WebPort != nil && (*p.WebPort < 1 || *p.WebPort > 65535) {
+		return "web_port must be in [1, 65535]"
+	}
+
+	if p := req.OfflineAP; p != nil {
+		// Same checks UpdateAPConfig enforces, so a PATCH can't smuggle
+		// newline-injected SSID/passphrase, non-IP DHCP/CIDR, or a leading-'-'
+		// ping target into hostapd/dnsmasq/ip.
+		if p.SSID != nil && (len(*p.SSID) > 32 || strings.ContainsAny(*p.SSID, "\r\n")) {
+			return "invalid ssid"
+		}
+		if p.Passphrase != nil {
+			if l := len(*p.Passphrase); l < 8 || l > 63 || strings.ContainsAny(*p.Passphrase, "\r\n") {
+				return "invalid passphrase (8-63 chars, no newlines)"
+			}
+		}
+		if p.IPv4CIDR != nil {
+			if _, _, err := net.ParseCIDR(*p.IPv4CIDR); err != nil {
+				return "invalid ipv4_cidr"
+			}
+		}
+		if p.DHCPStart != nil && net.ParseIP(*p.DHCPStart) == nil {
+			return "invalid dhcp_start"
+		}
+		if p.DHCPEnd != nil && net.ParseIP(*p.DHCPEnd) == nil {
+			return "invalid dhcp_end"
+		}
+		if p.PingTarget != nil && (*p.PingTarget == "" || strings.HasPrefix(*p.PingTarget, "-")) {
+			return "invalid ping_target"
+		}
+	}
+
+	// Match Debian watchdog(8) / TeslaUSB-style minimum (low values risk timing issues on Pi).
+	if p := req.Startup; p != nil && p.WatchdogTimeoutSec != nil && *p.WatchdogTimeoutSec < 10 {
+		return "watchdog_timeout_sec must be >= 10"
+	}
+
+	if p := req.ViewerPrefs; p != nil {
+		if p.SpeedUnit != nil {
+			unit := strings.TrimSpace(strings.ToLower(*p.SpeedUnit))
+			if unit != "kph" && unit != "mph" {
+				return "invalid speed_unit (must be 'kph' or 'mph')"
+			}
+		}
+		// HUD/Map scale bounds mirror the limits enforced in the web client
+		// (see DashcamPlayer / ArgusHUD), with a slightly wider envelope so
+		// future client tweaks don't require a backend update.
+		if p.HudScale != nil && (*p.HudScale < 0.5 || *p.HudScale > 2.5) {
+			return "hud_scale must be in [0.5, 2.5]"
+		}
+		if p.MapScale != nil && (*p.MapScale < 0.4 || *p.MapScale > 3.0) {
+			return "map_scale must be in [0.4, 3.0]"
+		}
+	}
+
+	if p := req.Auth; p != nil {
+		if p.Username != nil && strings.TrimSpace(*p.Username) == "" {
+			return "username must not be empty"
+		}
+		if p.Password != nil && len(*p.Password) < 4 {
+			return "password must be at least 4 characters"
+		}
+	}
+
+	if req.LogLevel != nil && !logger.ValidLevel(*req.LogLevel) {
+		return "invalid log_level: " + *req.LogLevel
+	}
+
+	return ""
 }

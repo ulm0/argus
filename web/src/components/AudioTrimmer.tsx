@@ -401,17 +401,20 @@ export default function AudioTrimmer({
     }
   }, [peaks, trimStart, trimEnd, isPlaying, playbackPos]);
 
+  const drawRef = useRef(drawWaveform);
+  drawRef.current = drawWaveform;
+
   useEffect(() => {
     drawWaveform();
   }, [drawWaveform]);
 
   // Responsive resize
   useEffect(() => {
-    const observer = new ResizeObserver(() => drawWaveform());
+    const observer = new ResizeObserver(() => drawRef.current());
     const el = containerRef.current;
     if (el) observer.observe(el);
     return () => observer.disconnect();
-  }, [drawWaveform]);
+  }, [audioBuffer]);
 
   /* ------ Canvas interaction (drag trim markers) ------ */
 
@@ -423,41 +426,6 @@ export default function AudioTrimmer({
       return Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     },
     [],
-  );
-
-  const handleCanvasMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      const frac = canvasPositionToFraction(e.clientX);
-      const startDist = Math.abs(frac - trimStart);
-      const endDist = Math.abs(frac - trimEnd);
-      const threshold = 0.02;
-
-      if (startDist < threshold && startDist <= endDist) {
-        dragRef.current = "start";
-      } else if (endDist < threshold) {
-        dragRef.current = "end";
-      } else if (frac > trimStart && frac < trimEnd) {
-        // Click inside region = seek
-        dragRef.current = "seek";
-        const seekFrac = (frac - trimStart) / (trimEnd - trimStart);
-        setPlaybackPos(seekFrac);
-        if (isPlaying) {
-          stopPlayback();
-          const time = trimStart * totalDuration + seekFrac * trimmedDuration;
-          startPlaybackFrom(time);
-        }
-      } else {
-        // Click outside = move nearest marker
-        if (frac < trimStart) {
-          setTrimStart(frac);
-          dragRef.current = "start";
-        } else {
-          setTrimEnd(frac);
-          dragRef.current = "end";
-        }
-      }
-    },
-    [trimStart, trimEnd, isPlaying, totalDuration, trimmedDuration],
   );
 
   useEffect(() => {
@@ -488,6 +456,7 @@ export default function AudioTrimmer({
 
   const stopPlayback = useCallback(() => {
     if (sourceRef.current) {
+      sourceRef.current.onended = null;
       try {
         sourceRef.current.stop();
       } catch { /* already stopped */ }
@@ -569,6 +538,41 @@ export default function AudioTrimmer({
       startPlaybackFrom();
     }
   }, [isPlaying, stopPlayback, startPlaybackFrom]);
+
+  const handleCanvasMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      const frac = canvasPositionToFraction(e.clientX);
+      const startDist = Math.abs(frac - trimStart);
+      const endDist = Math.abs(frac - trimEnd);
+      const threshold = 0.02;
+
+      if (startDist < threshold && startDist <= endDist) {
+        dragRef.current = "start";
+      } else if (endDist < threshold) {
+        dragRef.current = "end";
+      } else if (frac > trimStart && frac < trimEnd) {
+        // Click inside region = seek
+        dragRef.current = "seek";
+        const seekFrac = (frac - trimStart) / (trimEnd - trimStart);
+        setPlaybackPos(seekFrac);
+        if (isPlaying) {
+          stopPlayback();
+          const time = trimStart * totalDuration + seekFrac * trimmedDuration;
+          startPlaybackFrom(time);
+        }
+      } else {
+        // Click outside = move nearest marker
+        if (frac < trimStart) {
+          setTrimStart(frac);
+          dragRef.current = "start";
+        } else {
+          setTrimEnd(frac);
+          dragRef.current = "end";
+        }
+      }
+    },
+    [trimStart, trimEnd, isPlaying, totalDuration, trimmedDuration, canvasPositionToFraction, stopPlayback, startPlaybackFrom],
+  );
 
   // Cleanup on unmount
   useEffect(() => {

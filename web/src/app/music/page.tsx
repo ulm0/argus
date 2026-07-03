@@ -137,7 +137,8 @@ export default function MusicPage() {
           const form = new FormData();
           form.append("file", file);
           form.append("path", currentPath);
-          await fetch("/api/music/upload", { method: "POST", body: form });
+          const res = await fetch("/api/music/upload", { method: "POST", body: form });
+          if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? res.statusText);
           setUploadProgress((prev) => ({ ...prev, [file.name]: 100 }));
         }
       }

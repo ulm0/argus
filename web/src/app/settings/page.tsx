@@ -1279,10 +1279,10 @@ export default function SettingsPage() {
             <button className={btnPrimaryCls} disabled={saving === "samba"} onClick={saveSambaPassword}>
               {saving === "samba" ? "Saving…" : "Set Password"}
             </button>
-            <button className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)] disabled:opacity-50" onClick={async () => { await api.restartSamba(); showToast("Samba services restarted"); }}>
+            <button className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)] disabled:opacity-50" onClick={async () => { try { await api.restartSamba(); showToast("Samba services restarted"); } catch (e) { showToast(e instanceof Error ? e.message : "Failed", false); } }}>
               Restart Services
             </button>
-            <button className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)] disabled:opacity-50" onClick={async () => { await api.regenerateSambaConfig(); showToast("Samba config regenerated"); }}>
+            <button className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)] disabled:opacity-50" onClick={async () => { try { await api.regenerateSambaConfig(); showToast("Samba config regenerated"); } catch (e) { showToast(e instanceof Error ? e.message : "Failed", false); } }}>
               Regenerate Config
             </button>
           </div>

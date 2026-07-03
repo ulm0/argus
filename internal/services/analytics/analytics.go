@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ulm0/argus/internal/config"
+	"github.com/ulm0/argus/internal/system/mount"
 )
 
 type PartitionUsage struct {
@@ -78,9 +79,14 @@ func (s *Service) GetPartitionUsage() []PartitionUsage {
 		parts = append(parts, partInfo{"part3", s.cfg.DiskImages.MusicLabel})
 	}
 
+	mnt := mount.NewManager()
+
 	for _, p := range parts {
 		for _, ro := range []bool{true, false} {
 			mountPath := s.cfg.MountPath(p.key, ro)
+			if !mnt.IsMounted(mountPath) {
+				continue
+			}
 			usage := getDiskUsage(mountPath)
 			if usage.TotalBytes > 0 {
 				usage.Name = p.key

@@ -12,6 +12,7 @@ import (
 	"github.com/ulm0/argus/internal/api/handlers"
 	"github.com/ulm0/argus/internal/api/middleware"
 	"github.com/ulm0/argus/internal/config"
+	"github.com/ulm0/argus/internal/services/chime"
 	"github.com/ulm0/argus/internal/services/telegram"
 	"github.com/ulm0/argus/internal/services/webhook"
 	system_ap "github.com/ulm0/argus/internal/system/ap"
@@ -19,7 +20,7 @@ import (
 
 // NewRouter sets up the gorilla/mux router with all routes and middleware.
 // telegramSvc should be the process-wide instance started in run.go (Sentry watcher + queue); if nil, a new service is used.
-func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, sentryEventsH *handlers.SentryEventsHandler, webhookSvc *webhook.Service, apMgr *system_ap.Manager) http.Handler {
+func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, sentryEventsH *handlers.SentryEventsHandler, webhookSvc *webhook.Service, apMgr *system_ap.Manager, chimeSvc *chime.Service) http.Handler {
 	r := mux.NewRouter()
 
 	r.Use(middleware.RealIP)
@@ -29,9 +30,12 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	r.Use(middleware.RequireLocalHost(cfg.Web.AllowedHosts))
 	r.Use(func(next http.Handler) http.Handler {
 		// Skip gzip compression for SSE endpoints — the compressor buffers output
-		// and breaks flushing, so EventSource clients never receive events.
+		// and breaks flushing, so EventSource clients never receive events — and
+		// for binary media routes, whose payloads (H.264/JPEG/PNG/MP3/WAV/ZIP) are
+		// already compressed, so re-gzipping them only burns Pi CPU for near-zero
+		// size gain while stripping Content-Length from the response.
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if isStreamPath(r) {
+			if isStreamPath(r) || isBinaryMediaPath(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -62,7 +66,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 
 	modeH := handlers.NewModeHandler(cfg)
 	videoH := handlers.NewVideoHandler(cfg)
-	chimeH := handlers.NewChimeHandler(cfg)
+	chimeH := handlers.NewChimeHandler(cfg, chimeSvc)
 	lightshowH := handlers.NewLightshowHandler(cfg)
 	wrapH := handlers.NewWrapHandler(cfg)
 	musicH := handlers.NewMusicHandler(cfg)
@@ -325,6 +329,30 @@ func isStreamPath(r *http.Request) bool {
 		return true
 	}
 	return false
+}
+
+// isBinaryMediaPath reports whether the request targets a route that serves
+// already-compressed or binary media (video, ZIP, images, audio) via
+// http.ServeFile/ServeContent. These must bypass gzip: re-compressing
+// H.264/JPEG/PNG/MP3/WAV/ZIP wastes CPU on the Pi for near-zero size gain, and
+// gorilla's CompressHandler strips Content-Length, degrading download-size
+// reporting and Range semantics. JSON/text API routes (including the JSON
+// endpoints under /api/videos such as sei, telemetry and session-detail) are
+// intentionally excluded here so they still benefit from compression.
+func isBinaryMediaPath(r *http.Request) bool {
+	p := r.URL.Path
+	return strings.HasPrefix(p, "/api/videos/stream/") ||
+		strings.HasPrefix(p, "/api/videos/download/") ||
+		strings.HasPrefix(p, "/api/videos/download-event/") ||
+		strings.HasPrefix(p, "/api/videos/thumbnail/") ||
+		strings.HasPrefix(p, "/api/videos/session-thumbnail/") ||
+		strings.HasPrefix(p, "/api/chimes/play/") ||
+		strings.HasPrefix(p, "/api/chimes/download/") ||
+		strings.HasPrefix(p, "/api/music/play/") ||
+		strings.HasPrefix(p, "/api/lightshows/play/") ||
+		strings.HasPrefix(p, "/api/lightshows/download/") ||
+		strings.HasPrefix(p, "/api/wraps/thumbnail/") ||
+		strings.HasPrefix(p, "/api/wraps/download/")
 }
 
 // serveFile streams a single file from the embedded FS without going through

@@ -38,6 +38,12 @@ func SetLevelFromString(s string) bool {
 	return true
 }
 
+// ValidLevel reports whether s names a known log level, without applying it.
+func ValidLevel(s string) bool {
+	_, err := logrus.ParseLevel(strings.TrimSpace(strings.ToLower(s)))
+	return err == nil
+}
+
 // LevelString returns the current log level as a lowercase string.
 func LevelString() string {
 	return L.GetLevel().String()

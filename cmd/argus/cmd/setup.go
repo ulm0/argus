@@ -344,6 +344,8 @@ func setupDiskImages(installDir, showSize, musicSize string, cfg *config.Config)
 	if showSize == "" {
 		if v := os.Getenv("ARGUS_SHOW_SIZE"); v != "" {
 			showSize = v
+		} else if cfg.Setup.Part2Size != "" {
+			showSize = cfg.Setup.Part2Size
 		} else {
 			showSize = "10G"
 		}
@@ -351,6 +353,8 @@ func setupDiskImages(installDir, showSize, musicSize string, cfg *config.Config)
 	if musicSize == "" {
 		if v := os.Getenv("ARGUS_MUSIC_SIZE"); v != "" {
 			musicSize = v
+		} else if cfg.Setup.Part3Size != "" {
+			musicSize = cfg.Setup.Part3Size
 		} else {
 			musicSize = "32G"
 		}
@@ -766,7 +770,7 @@ func setupCleanupForeignGadgets() {
 
 func setupMaskDesktopServices() {
 	for _, svc := range []string{"pipewire", "pipewire-pulse", "wireplumber", "colord"} {
-		runCmdSilent("systemctl", "--user", "mask", svc+".service")
+		runCmdSilent("systemctl", "--global", "mask", svc+".service")
 	}
 }
 

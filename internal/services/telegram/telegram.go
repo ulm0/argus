@@ -122,6 +122,15 @@ type Service struct {
 	stopOnce sync.Once
 	watcher  *SentryWatcher
 
+	// cfgMu guards the mutable Telegram config fields (BotToken, ChatID,
+	// OfflineMode, VideoQuality) that Configure writes at runtime while the
+	// watcher and queue goroutines read them.
+	cfgMu sync.Mutex
+
+	// saveMu serializes queue-file persistence so concurrent saveQueue calls
+	// cannot interleave writes to the shared temp file.
+	saveMu sync.Mutex
+
 	httpClient      *http.Client
 	httpClientVideo *http.Client
 
@@ -145,13 +154,12 @@ func NewService(cfg *config.Config) *Service {
 	}
 }
 
-// Start begins watching for Sentry events and processing the queue.
+// Start begins watching for Sentry events and processing the queue. The watcher
+// and queue run regardless of Telegram.Enabled so that enabling alerting at
+// runtime (via /api/telegram/configure or PATCH /api/config) takes effect
+// without a restart; enqueue and send are gated on the live Enabled flag in
+// onSentryEvent and drainQueue.
 func (s *Service) Start(ctx context.Context) {
-	if !s.cfg.Telegram.Enabled {
-		logger.L.Debug("Telegram alerting disabled")
-		return
-	}
-
 	s.loadQueue()
 
 	s.watcher = NewSentryWatcher(s.cfg, s.onSentryEvent)
@@ -159,7 +167,7 @@ func (s *Service) Start(ctx context.Context) {
 
 	go s.processQueue(ctx)
 
-	logger.L.Info("Telegram alerting started")
+	logger.L.Debug("Telegram service started (alerting gated on config)")
 }
 
 // Stop halts the Telegram service. Safe to call multiple times.
@@ -178,17 +186,22 @@ func (s *Service) GetStatus() map[string]any {
 	qLen := s.queue.Len()
 	s.mu.Unlock()
 
+	s.cfgMu.Lock()
+	botConfigured := s.cfg.Telegram.BotToken != ""
+	s.cfgMu.Unlock()
+
 	return map[string]any{
 		"enabled":        s.cfg.Telegram.Enabled,
 		"queue_size":     qLen,
 		"max_queue":      s.cfg.Telegram.MaxQueueSize,
 		"online":         s.isOnline(),
-		"bot_configured": s.cfg.Telegram.BotToken != "",
+		"bot_configured": botConfigured,
 	}
 }
 
 // Configure updates the Telegram configuration.
 func (s *Service) Configure(botToken, chatID, offlineMode, videoQuality string) error {
+	s.cfgMu.Lock()
 	s.cfg.Telegram.BotToken = botToken
 	s.cfg.Telegram.ChatID = chatID
 	if offlineMode != "" {
@@ -197,12 +210,18 @@ func (s *Service) Configure(botToken, chatID, offlineMode, videoQuality string) 
 	if videoQuality != "" {
 		s.cfg.Telegram.VideoQuality = videoQuality
 	}
+	s.cfgMu.Unlock()
 	return s.cfg.Save()
 }
 
 // TestMessage sends a test message to verify the configuration.
 func (s *Service) TestMessage() error {
-	if s.cfg.Telegram.BotToken == "" || s.cfg.Telegram.ChatID == "" {
+	s.cfgMu.Lock()
+	token := s.cfg.Telegram.BotToken
+	chatID := s.cfg.Telegram.ChatID
+	s.cfgMu.Unlock()
+
+	if token == "" || chatID == "" {
 		return fmt.Errorf("Telegram bot token and chat ID must be configured")
 	}
 
@@ -210,7 +229,13 @@ func (s *Service) TestMessage() error {
 }
 
 func (s *Service) onSentryEvent(event SentryEvent) {
-	if s.cfg.Telegram.OfflineMode == "discard" && !s.isOnline() {
+	if !s.cfg.Telegram.Enabled {
+		return
+	}
+	s.cfgMu.Lock()
+	offlineMode := s.cfg.Telegram.OfflineMode
+	s.cfgMu.Unlock()
+	if offlineMode == "discard" && !s.isOnline() {
 		logger.L.WithField("event", event.EventName).Debug("Telegram: discarding event (offline, mode=discard)")
 		return
 	}
@@ -248,7 +273,7 @@ func (s *Service) processQueue(ctx context.Context) {
 }
 
 func (s *Service) drainQueue() {
-	if !s.isOnline() {
+	if !s.cfg.Telegram.Enabled || !s.isOnline() {
 		return
 	}
 
@@ -317,17 +342,25 @@ func (s *Service) redactToken(err error) error {
 		return nil
 	}
 	msg := err.Error()
-	if t := s.cfg.Telegram.BotToken; t != "" {
+	s.cfgMu.Lock()
+	t := s.cfg.Telegram.BotToken
+	s.cfgMu.Unlock()
+	if t != "" {
 		msg = strings.ReplaceAll(msg, t, "***")
 	}
 	return fmt.Errorf("%s", msg)
 }
 
 func (s *Service) sendMessage(text string) error {
-	url := fmt.Sprintf("%s%s/sendMessage", apiBaseURL, s.cfg.Telegram.BotToken)
+	s.cfgMu.Lock()
+	token := s.cfg.Telegram.BotToken
+	chatID := s.cfg.Telegram.ChatID
+	s.cfgMu.Unlock()
+
+	url := fmt.Sprintf("%s%s/sendMessage", apiBaseURL, token)
 
 	payload := map[string]string{
-		"chat_id":    s.cfg.Telegram.ChatID,
+		"chat_id":    chatID,
 		"text":       text,
 		"parse_mode": "Markdown",
 	}
@@ -374,30 +407,45 @@ func (s *Service) sendVideo(videoPath, caption string) error {
 		return fmt.Errorf("video too large for Telegram (%d bytes)", info.Size())
 	}
 
-	url := fmt.Sprintf("%s%s/sendVideo", apiBaseURL, s.cfg.Telegram.BotToken)
+	s.cfgMu.Lock()
+	token := s.cfg.Telegram.BotToken
+	chatID := s.cfg.Telegram.ChatID
+	s.cfgMu.Unlock()
 
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-	writer.WriteField("chat_id", s.cfg.Telegram.ChatID)
-	writer.WriteField("caption", caption)
-
-	part, err := writer.CreateFormFile("video", filepath.Base(videoPath))
-	if err != nil {
-		return err
-	}
+	url := fmt.Sprintf("%s%s/sendVideo", apiBaseURL, token)
 
 	f, err := os.Open(videoPath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
-	if _, err := io.Copy(part, f); err != nil {
-		return fmt.Errorf("copy video: %w", err)
-	}
-	writer.Close()
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+	contentType := writer.FormDataContentType()
 
-	resp, err := s.httpClientVideo.Post(url, writer.FormDataContentType(), &buf)
+	// Stream the multipart body through a pipe so the whole clip (up to
+	// maxFileSize) is never buffered in RAM on the memory-constrained Pi.
+	go func() {
+		defer f.Close()
+		writer.WriteField("chat_id", chatID)
+		writer.WriteField("caption", caption)
+		part, err := writer.CreateFormFile("video", filepath.Base(videoPath))
+		if err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		if _, err := io.Copy(part, f); err != nil {
+			pw.CloseWithError(fmt.Errorf("copy video: %w", err))
+			return
+		}
+		if err := writer.Close(); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		pw.Close()
+	}()
+
+	resp, err := s.httpClientVideo.Post(url, contentType, pr)
 	if err != nil {
 		return s.redactToken(err)
 	}
@@ -448,6 +496,9 @@ func (s *Service) saveQueue() {
 		logger.L.WithError(err).Warn("Telegram: failed to marshal queue")
 		return
 	}
+
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
 
 	tmp := s.queueFilePath() + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {

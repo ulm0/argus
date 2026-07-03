@@ -117,8 +117,6 @@ func (m *Manager) ensureRuntimeDir() {
 // GetStatus returns the current AP status.
 func (m *Manager) GetStatus() Status {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	s := Status{
 		Enabled:       m.cfg.OfflineAP.Enabled,
 		APActive:      m.active,
@@ -130,17 +128,25 @@ func (m *Manager) GetStatus() Status {
 		DHCPEnd:       m.cfg.OfflineAP.DHCPEnd,
 		ShareInternet: m.cfg.OfflineAP.ShareInternet,
 	}
-	if m.active {
-		s.ClientCount = m.clientCount()
-		if m.cfg.OfflineAP.ShareInternet {
-			s.Upstream = upstreamInterface(m.cfg.OfflineAP.VirtualInterface)
+	active := m.active
+	shareInternet := m.cfg.OfflineAP.ShareInternet
+	vif := m.cfg.OfflineAP.VirtualInterface
+	m.mu.Unlock()
+
+	// Run the external `iw`/`ip` commands outside the lock so a status poll does
+	// not block on (or stall) the multi-second AP start/stop transitions that
+	// hold the same mutex.
+	if active {
+		s.ClientCount = clientCount(vif)
+		if shareInternet {
+			s.Upstream = upstreamInterface(vif)
 		}
 	}
 	return s
 }
 
-func (m *Manager) clientCount() int {
-	out, err := exec.Command("iw", "dev", m.cfg.OfflineAP.VirtualInterface, "station", "dump").CombinedOutput()
+func clientCount(vif string) int {
+	out, err := exec.Command("iw", "dev", vif, "station", "dump").CombinedOutput()
 	if err != nil {
 		return 0
 	}
@@ -263,11 +269,15 @@ func (m *Manager) startAPLocked() error {
 	// points every lookup back at the admin UI.
 	dnsmasqConf := filepath.Join(runtimeDir, "dnsmasq.conf")
 	if err := m.writeDnsmasqConf(dnsmasqConf, ip, !m.cfg.OfflineAP.ShareInternet); err != nil {
+		exec.Command("pkill", "-f", "hostapd.*argus").Run()
+		m.cleanupInterface(vif)
 		return fmt.Errorf("write dnsmasq config: %w", err)
 	}
 
 	dnsmasqCmd := exec.Command("dnsmasq", "-C", dnsmasqConf, "--keep-in-foreground")
 	if err := dnsmasqCmd.Start(); err != nil {
+		exec.Command("pkill", "-f", "hostapd.*argus").Run()
+		m.cleanupInterface(vif)
 		return fmt.Errorf("start dnsmasq: %w", err)
 	}
 	m.dnsmasqCmd = dnsmasqCmd
@@ -375,7 +385,7 @@ func (m *Manager) UpdateAPConfig(apCfg APConfig) error {
 		// and passed positionally to iw/nmcli, so disallow '/' and '..' (path
 		// traversal / file-content oracle) and a leading '-' (arg injection).
 		if !validAPText(apCfg.Interface) || len(apCfg.Interface) > 15 ||
-			strings.ContainsAny(apCfg.Interface, ` \t/`) || strings.HasPrefix(apCfg.Interface, "-") {
+			strings.ContainsAny(apCfg.Interface, " \t/") || strings.HasPrefix(apCfg.Interface, "-") {
 			return fmt.Errorf("invalid interface name")
 		}
 		m.cfg.OfflineAP.Interface = apCfg.Interface

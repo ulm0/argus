@@ -154,7 +154,7 @@ export default function WrapsPage() {
           <p className="mt-2 text-sm font-medium text-[var(--color-text-secondary)]">
             {uploading ? "Uploading..." : "Drop PNG files here or click to browse"}
           </p>
-          <input ref={fileInputRef} type="file" multiple accept=".png" className="hidden" onChange={(e) => e.target.files && handleUpload(e.target.files)} />
+          <input ref={fileInputRef} type="file" multiple accept=".png" className="hidden" onChange={(e) => { if (e.target.files) handleUpload(e.target.files); e.target.value = ""; }} />
         </div>
       </section>
 

@@ -70,6 +70,16 @@ export default function ChimesPage() {
     loadAll();
   }, [loadAll]);
 
+  // Stop any in-progress playback when the page unmounts, otherwise the audio
+  // keeps playing after the user navigates away with no UI left to stop it.
+  useEffect(
+    () => () => {
+      audioRef.current?.pause();
+      audioRef.current = null;
+    },
+    [],
+  );
+
   const handlePlay = (filename: string | null) => {
     if (audioRef.current) {
       audioRef.current.pause();
@@ -194,13 +204,24 @@ export default function ChimesPage() {
   const handleAddSchedule = async () => {
     if (!schedName || !schedChime) return;
     try {
-      await api.addSchedule({
+      const res = await api.addSchedule({
         chime_filename: schedChime,
         time: schedTime,
         type: "weekly",
         enabled: schedEnabled,
         name: schedName,
       });
+      setSchedules((prev) => [
+        ...prev,
+        {
+          id: String(res.id),
+          chime_filename: schedChime,
+          time: schedTime,
+          type: "weekly",
+          enabled: schedEnabled,
+          name: schedName,
+        },
+      ]);
       showToast("Schedule created");
       setShowScheduleForm(false);
       setSchedName("");

@@ -193,20 +193,33 @@ func (s *Service) CreateDownloadZip(baseName, mountPath string) (string, error) 
 	defer zipFile.Close()
 
 	w := zip.NewWriter(zipFile)
-	defer w.Close()
 
 	for ext := range validExtensions {
 		filePath := filepath.Join(showDir, baseName+ext)
-		data, err := os.ReadFile(filePath)
+		src, err := os.Open(filePath)
 		if err != nil {
 			continue
 		}
 
 		fw, err := w.Create(baseName + ext)
 		if err != nil {
-			continue
+			src.Close()
+			w.Close()
+			os.Remove(zipPath)
+			return "", err
 		}
-		fw.Write(data)
+		if _, err := io.Copy(fw, src); err != nil {
+			src.Close()
+			w.Close()
+			os.Remove(zipPath)
+			return "", err
+		}
+		src.Close()
+	}
+
+	if err := w.Close(); err != nil {
+		os.Remove(zipPath)
+		return "", err
 	}
 
 	return zipPath, nil

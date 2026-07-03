@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,6 +81,24 @@ func (r *Runner) saveHistory() {
 	os.WriteFile(r.historyFile, data, 0644)
 }
 
+// systemBusy reports whether the disk images are currently live and must not be
+// fsck'd: presented to the car (present mode) or open in a quick-edit RW window.
+// The 2-minute lock-freshness threshold mirrors chime.RunSchedulerTick.
+func (r *Runner) systemBusy() (bool, string) {
+	if data, err := os.ReadFile(r.cfg.StateFile); err == nil {
+		if strings.TrimSpace(string(data)) == "present" {
+			return true, "cannot run fsck in present (USB gadget) mode — switch to edit mode first"
+		}
+	}
+	for _, name := range []string{".quick_edit_part2.lock", ".quick_edit_part3.lock"} {
+		f := filepath.Join(r.cfg.GadgetDir, name)
+		if info, err := os.Stat(f); err == nil && time.Since(info.ModTime()) < 2*time.Minute {
+			return true, "cannot run fsck while a quick-edit operation is in progress"
+		}
+	}
+	return false, ""
+}
+
 // Start begins an fsck check on the specified partitions in the requested mode.
 // Empty mode is treated as ModeQuick (read-only check).
 func (r *Runner) Start(partitions []string, mode Mode) error {
@@ -88,6 +107,14 @@ func (r *Runner) Start(partitions []string, mode Mode) error {
 
 	if r.running {
 		return fmt.Errorf("fsck is already running")
+	}
+
+	// Never fsck an image that may be live: in present mode the car is actively
+	// writing it over the USB gadget, and during a quick-edit window it is
+	// mounted RW locally. Running fsck (even a read-only check) against a
+	// concurrently-written exFAT/FAT image corrupts it / returns garbage.
+	if busy, msg := r.systemBusy(); busy {
+		return fmt.Errorf("%s", msg)
 	}
 
 	if mode != ModeQuick && mode != ModeRepair {

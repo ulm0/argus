@@ -11,6 +11,8 @@ import (
 	"github.com/ulm0/argus/internal/services/chime"
 	"github.com/ulm0/argus/internal/services/cleanup"
 	"github.com/ulm0/argus/internal/services/mode"
+	"github.com/ulm0/argus/internal/system/loop"
+	"github.com/ulm0/argus/internal/system/mount"
 )
 
 // RunStartupSequence runs optional TeslaUSB-style boot steps before the web server is fully relied upon.
@@ -95,7 +97,34 @@ func tryBootCleanup(cfg *config.Config) {
 		return
 	}
 
+	// On a cold boot nothing is mounted yet, and present mode only creates the
+	// read-only view — so temporarily loop-mount the cam image read-write here
+	// (same sequence as SwitchToEdit) and tear it down before present mode runs.
 	part1 := filepath.Join(cfg.Installation.MountDir, "part1")
+	mntMgr := mount.NewManager()
+	loopMgr := loop.NewManager()
+	if !mntMgr.IsMounted(part1) {
+		loopDev, err := loopMgr.Create(cfg.ImgCamPath, false)
+		if err != nil {
+			logger.L.WithError(err).Warn("boot cleanup: loop attach failed")
+			return
+		}
+		fsType, err := mntMgr.DetectFSType(loopDev)
+		if err != nil || fsType == "" {
+			fsType = "auto"
+		}
+		if err := mntMgr.Mount(loopDev, part1, fsType, false); err != nil {
+			_ = loopMgr.Detach(loopDev)
+			logger.L.WithError(err).Warn("boot cleanup: mount failed")
+			return
+		}
+		defer func() {
+			_ = mntMgr.SafeUnmountDir(part1)
+			mntMgr.Sync()
+			_ = loopMgr.DetachAllForFile(cfg.ImgCamPath)
+		}()
+	}
+
 	if _, err := os.Stat(filepath.Join(part1, "TeslaCam")); err != nil {
 		logger.L.Debug("boot cleanup skipped: TeslaCam not reachable (mount part1 first or run after edit mode)")
 		return
@@ -105,6 +134,21 @@ func tryBootCleanup(cfg *config.Config) {
 	if err != nil {
 		logger.L.WithError(err).Warn("boot cleanup: plan failed")
 		return
+	}
+	// CalculateCleanupPlan honors Enabled but not the per-folder BootCleanup
+	// opt-in, so drop folders that did not opt into boot cleanup before deleting
+	// and recompute the totals to keep the plan consistent.
+	plan.TotalCount = 0
+	plan.TotalSize = 0
+	for folder, events := range plan.Breakdown {
+		if !policies[folder].BootCleanup {
+			delete(plan.Breakdown, folder)
+			continue
+		}
+		for _, ev := range events {
+			plan.TotalCount++
+			plan.TotalSize += ev.Size
+		}
 	}
 	rep := cl.ExecuteCleanup(plan, false)
 	logger.L.WithField("deleted", rep.DeletedCount).Info("boot cleanup completed")

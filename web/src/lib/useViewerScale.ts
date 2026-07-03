@@ -39,6 +39,7 @@ export function useViewerScale({
   const [scale, setScale] = useState(defaultValue);
   const debounceRef = useRef<number | null>(null);
   const latestRef = useRef<number>(defaultValue);
+  const userSet = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,7 +59,10 @@ export function useViewerScale({
     api
       .getConfig()
       .then((cfg) => {
-        if (cancelled) return;
+        // Bail if the user has already started interacting; a late config
+        // response must not snap the overlay back to the stale server value
+        // mid-drag while the pending PATCH still saves the drag value.
+        if (cancelled || userSet.current) return;
         const v = kind === "hud" ? cfg.viewer_prefs?.hud_scale : cfg.viewer_prefs?.map_scale;
         if (typeof v === "number" && Number.isFinite(v) && v > 0) {
           const c = clamp(v, min, max);
@@ -91,6 +95,7 @@ export function useViewerScale({
 
   const set = useCallback(
     (next: number) => {
+      userSet.current = true;
       const c = clamp(next, min, max);
       setScale(c);
       latestRef.current = c;

@@ -90,9 +90,36 @@ func (o *Optimizer) applyTCPTuning() {
 }
 
 func (o *Optimizer) setRegulatoryDomain(domain string) {
+	// Only set the domain when it is currently unset/global ("00"). Overwriting
+	// an already-configured domain would clobber the user's real locale (wrong
+	// TX-power/channel limits, blocked 2.4GHz ch 12/13) and defeat
+	// ap.detectCountry, which would then always report this domain regardless of
+	// where the device actually is.
+	if currentRegulatoryDomain() != "" {
+		return
+	}
 	if err := exec.Command("iw", "reg", "set", domain).Run(); err != nil {
 		logger.L.WithError(err).WithField("domain", domain).Warn("set regulatory domain failed")
 	}
+}
+
+// currentRegulatoryDomain returns the active wireless regulatory country code
+// from `iw reg get`, or "" when it is unset/global ("00").
+func currentRegulatoryDomain() string {
+	out, err := exec.Command("iw", "reg", "get").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "country ") {
+			code := strings.TrimSpace(strings.TrimPrefix(line, "country "))
+			if len(code) >= 2 && code[:2] != "00" {
+				return code[:2]
+			}
+		}
+	}
+	return ""
 }
 
 func findGlobPaths(pattern string) ([]string, error) {

@@ -21,10 +21,19 @@ type ChimeHandler struct {
 	chimeSvc *chime.Service
 }
 
-func NewChimeHandler(cfg *config.Config) *ChimeHandler {
+// NewChimeHandler wires the HTTP API to a chime service. svc must be the
+// process-wide instance from run.go (the one whose scheduler tick actually
+// fires and persists); a separate instance would keep an independent in-memory
+// cache, so API edits to schedules/groups would never take effect and could be
+// clobbered by the running scheduler's next save. If svc is nil, a new service
+// is created (tests only).
+func NewChimeHandler(cfg *config.Config, svc *chime.Service) *ChimeHandler {
+	if svc == nil {
+		svc = chime.NewService(cfg)
+	}
 	return &ChimeHandler{
 		cfg:      cfg,
-		chimeSvc: chime.NewService(cfg),
+		chimeSvc: svc,
 	}
 }
 
@@ -93,8 +102,19 @@ func (h *ChimeHandler) Download(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, chimePath)
 }
 
+// maxChimeUploadSize caps a single chime upload. Chimes are short WAV clips;
+// io.ReadAll would otherwise materialize the whole part in RAM, so on the
+// ~400 MB device a large accidental upload (e.g. an MP4) could OOM-kill argus.
+const maxChimeUploadSize = 32 << 20 // 32 MiB
+
 // Upload handles a single chime file upload.
 func (h *ChimeHandler) Upload(w http.ResponseWriter, r *http.Request) {
+	mp := h.mountPath()
+	if mp == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chime partition not available"})
+		return
+	}
+
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no file uploaded"})
@@ -102,7 +122,12 @@ func (h *ChimeHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(file)
+	if header.Size > maxChimeUploadSize {
+		writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "file too large"})
+		return
+	}
+
+	data, err := io.ReadAll(io.LimitReader(file, maxChimeUploadSize))
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, "failed to read file")
 		return
@@ -114,7 +139,7 @@ func (h *ChimeHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		fmt.Sscanf(v, "%f", &targetLUFS)
 	}
 
-	if err := h.chimeSvc.UploadChime(data, header.Filename, h.mountPath(), normalize, targetLUFS); err != nil {
+	if err := h.chimeSvc.UploadChime(data, header.Filename, mp, normalize, targetLUFS); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -124,6 +149,12 @@ func (h *ChimeHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 // UploadBulk handles multiple chime file uploads at once.
 func (h *ChimeHandler) UploadBulk(w http.ResponseWriter, r *http.Request) {
+	mp := h.mountPath()
+	if mp == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chime partition not available"})
+		return
+	}
+
 	if err := r.ParseMultipartForm(int64(h.cfg.Web.MaxUploadSizeMB) * 1024 * 1024); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to parse multipart form"})
 		return
@@ -143,20 +174,25 @@ func (h *ChimeHandler) UploadBulk(w http.ResponseWriter, r *http.Request) {
 
 	var results []map[string]string
 	for _, fh := range files {
+		if fh.Size > maxChimeUploadSize {
+			results = append(results, map[string]string{"filename": fh.Filename, "status": "error", "error": "file too large"})
+			continue
+		}
+
 		f, err := fh.Open()
 		if err != nil {
 			results = append(results, map[string]string{"filename": fh.Filename, "status": "error", "error": err.Error()})
 			continue
 		}
 
-		data, err := io.ReadAll(f)
+		data, err := io.ReadAll(io.LimitReader(f, maxChimeUploadSize))
 		f.Close()
 		if err != nil {
 			results = append(results, map[string]string{"filename": fh.Filename, "status": "error", "error": err.Error()})
 			continue
 		}
 
-		if err := h.chimeSvc.UploadChime(data, fh.Filename, h.mountPath(), normalize, targetLUFS); err != nil {
+		if err := h.chimeSvc.UploadChime(data, fh.Filename, mp, normalize, targetLUFS); err != nil {
 			results = append(results, map[string]string{"filename": fh.Filename, "status": "error", "error": err.Error()})
 			continue
 		}
@@ -170,7 +206,13 @@ func (h *ChimeHandler) UploadBulk(w http.ResponseWriter, r *http.Request) {
 func (h *ChimeHandler) SetActive(w http.ResponseWriter, r *http.Request) {
 	filename := mux.Vars(r)["filename"]
 
-	if err := h.chimeSvc.SetActiveChime(filename, h.mountPath()); err != nil {
+	mp := h.mountPath()
+	if mp == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chime partition not available"})
+		return
+	}
+
+	if err := h.chimeSvc.SetActiveChime(filename, mp); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -182,7 +224,13 @@ func (h *ChimeHandler) SetActive(w http.ResponseWriter, r *http.Request) {
 func (h *ChimeHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	filename := mux.Vars(r)["filename"]
 
-	if err := h.chimeSvc.DeleteChime(filename, h.mountPath()); err != nil {
+	mp := h.mountPath()
+	if mp == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chime partition not available"})
+		return
+	}
+
+	if err := h.chimeSvc.DeleteChime(filename, mp); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -195,7 +243,13 @@ func (h *ChimeHandler) Rename(w http.ResponseWriter, r *http.Request) {
 	oldName := mux.Vars(r)["old"]
 	newName := mux.Vars(r)["new"]
 
-	if err := h.chimeSvc.RenameChime(oldName, newName, h.mountPath()); err != nil {
+	mp := h.mountPath()
+	if mp == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chime partition not available"})
+		return
+	}
+
+	if err := h.chimeSvc.RenameChime(oldName, newName, mp); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

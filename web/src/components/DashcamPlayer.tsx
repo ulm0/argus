@@ -101,8 +101,11 @@ export default function DashcamPlayer({
   const seekBarRef = useRef<HTMLDivElement>(null);
   const thumbnailVideoRefs = useRef<Map<CameraName, HTMLVideoElement>>(new Map());
   const seiAbortRef = useRef<AbortController | null>(null);
+  const seiLoadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Populated only in composed mode; empty in single mode (makes sync calls no-ops)
   const composedRefs = useRef<Map<CameraName, HTMLVideoElement>>(new Map());
+  // Set when onEnded auto-advances the clip so the next clip resumes on load
+  const pendingAutoplayRef = useRef(false);
 
   const activeFile = useMemo(() => {
     const clipTs = clips[clipIndex];
@@ -207,11 +210,25 @@ export default function DashcamPlayer({
     const v = mainVideoRef.current;
     if (!v) return;
     setDuration(v.duration);
+
+    // Resume playback after an auto-advance so multi-clip events play through
+    if (pendingAutoplayRef.current) {
+      pendingAutoplayRef.current = false;
+      v.play()
+        .then(() => {
+          setIsPlaying(true);
+          composedRefs.current.forEach((cv) => {
+            if (cv !== v) { cv.currentTime = v.currentTime; cv.play().catch(() => {}); }
+          });
+        })
+        .catch(() => {});
+    }
   }, []);
 
   const onEnded = useCallback(() => {
     setIsPlaying(false);
     if (clipIndex < clips.length - 1) {
+      pendingAutoplayRef.current = true;
       setClipIndex((i) => i + 1);
     }
   }, [clipIndex, clips.length]);
@@ -318,6 +335,10 @@ export default function DashcamPlayer({
       seiAbortRef.current.abort();
       seiAbortRef.current = null;
     }
+    if (seiLoadingTimerRef.current) {
+      clearTimeout(seiLoadingTimerRef.current);
+      seiLoadingTimerRef.current = null;
+    }
   }, []);
 
   const loadTelemetry = useCallback(async (file: string) => {
@@ -340,14 +361,14 @@ export default function DashcamPlayer({
       const frames = data.frames ?? [];
       setSeiFrames(frames);
       setSeiProgress(`${frames.length} telemetry frames`);
-      setTimeout(() => setSeiLoading(false), 500);
+      seiLoadingTimerRef.current = setTimeout(() => setSeiLoading(false), 500);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") {
         setSeiLoading(false);
         return;
       }
       setSeiProgress(`Failed: ${err instanceof Error ? err.message : "unknown error"}`);
-      setTimeout(() => setSeiLoading(false), 2000);
+      seiLoadingTimerRef.current = setTimeout(() => setSeiLoading(false), 2000);
     }
   }, [abortSei, telemetryUrlFn]);
 
@@ -395,11 +416,21 @@ export default function DashcamPlayer({
     updateHudScale(hudScale + step);
   }, [hudScale, updateHudScale]);
 
-  const handleMapScaleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const step = e.deltaY < 0 ? 0.1 : -0.1;
-    updateMapScale(mapScale + step);
-  }, [mapScale, updateMapScale]);
+  // React registers root wheel listeners as passive, so e.preventDefault() in a
+  // React onWheel handler is a no-op. Attach a native non-passive listener via a
+  // ref-cleanup callback so wheel-resizing the map doesn't also scroll the page.
+  const mapScaleRef = useRef(mapScale);
+  mapScaleRef.current = mapScale;
+  const mapWheelRef = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const step = e.deltaY < 0 ? 0.1 : -0.1;
+      updateMapScale(mapScaleRef.current + step);
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [updateMapScale]);
 
   // Switch camera — no-op in composed mode
   const switchCamera = useCallback((cam: CameraName) => {
@@ -539,8 +570,8 @@ export default function DashcamPlayer({
           {/* Map overlay — bottom-right of composed grid */}
           {mapEnabled && seiFrames.length > 0 && (
             <div
+              ref={mapWheelRef}
               className="group absolute bottom-3 right-3 z-20"
-              onWheel={handleMapScaleWheel}
               title={`Map size: ${mapScale.toFixed(2)}x (scroll or drag corner to resize)`}
             >
               <div className="relative" style={{ transform: `scale(${mapScale})`, transformOrigin: "bottom right" }}>
@@ -607,8 +638,8 @@ export default function DashcamPlayer({
           {/* Map overlay — bottom-right */}
           {mapEnabled && seiFrames.length > 0 && (
             <div
+              ref={mapWheelRef}
               className="group absolute bottom-3 right-3 z-20"
-              onWheel={handleMapScaleWheel}
               title={`Map size: ${mapScale.toFixed(2)}x (scroll or drag corner to resize)`}
             >
               <div className="relative" style={{ transform: `scale(${mapScale})`, transformOrigin: "bottom right" }}>

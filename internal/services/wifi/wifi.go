@@ -86,7 +86,9 @@ func (m *Monitor) GetCurrentConnection() Connection {
 
 // ScanNetworks returns available WiFi networks.
 func (m *Monitor) ScanNetworks() ([]Network, error) {
-	out, err := exec.Command("nmcli", "-t", "-f", "SSID,SIGNAL,FREQ,SECURITY,IN-USE", "dev", "wifi", "list", "--rescan", "yes").CombinedOutput()
+	// SSID is last because it may contain escaped colons in terse output; the
+	// preceding fields never do, so SplitN with the field count is safe.
+	out, err := exec.Command("nmcli", "-t", "-f", "SIGNAL,FREQ,SECURITY,IN-USE,SSID", "dev", "wifi", "list", "--rescan", "yes").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("wifi scan failed: %w", err)
 	}
@@ -102,21 +104,21 @@ func (m *Monitor) ScanNetworks() ([]Network, error) {
 		if len(fields) < 5 {
 			continue
 		}
-		ssid := fields[0]
+		ssid := unescapeNmcli(fields[4])
 		if ssid == "" || seen[ssid] {
 			continue
 		}
 		seen[ssid] = true
 
 		var signal int
-		fmt.Sscanf(fields[1], "%d", &signal)
+		fmt.Sscanf(fields[0], "%d", &signal)
 
 		networks = append(networks, Network{
 			SSID:      ssid,
 			Signal:    signal,
-			Frequency: fields[2],
-			Security:  fields[3],
-			InUse:     fields[4] == "*",
+			Frequency: fields[1],
+			Security:  fields[2],
+			InUse:     fields[3] == "*",
 		})
 	}
 

@@ -6,6 +6,8 @@ import type { LogLine, LogPriority } from "@/lib/types";
 
 const MAX_LINES = 1000;
 
+type KeyedLine = LogLine & { id: number };
+
 const PRIORITY_STYLES: Record<LogPriority, string> = {
   error: "text-red-400",
   warn:  "text-amber-400",
@@ -23,7 +25,7 @@ const PRIORITY_BADGE: Record<LogPriority, string> = {
 const UNITS = ["argus", "NetworkManager", "hostapd", "smbd", "sshd", "kernel"];
 
 export default function LogsPage() {
-  const [lines, setLines] = useState<LogLine[]>([]);
+  const [lines, setLines] = useState<KeyedLine[]>([]);
   const [connected, setConnected] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const [filter, setFilter] = useState<LogPriority | "all">("all");
@@ -34,12 +36,20 @@ export default function LogsPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const esRef = useRef<EventSource | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const bufferRef = useRef<KeyedLine[]>([]);
+  const idRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
 
   const connect = useCallback(() => {
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
     }
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    bufferRef.current = [];
     setLines([]);
     setConnected(false);
 
@@ -48,13 +58,25 @@ export default function LogsPage() {
 
     es.onopen = () => setConnected(true);
 
+    // Coalesce bursts (200-line replay + follow tail) into one render per frame.
+    const flush = () => {
+      rafRef.current = null;
+      const incoming = bufferRef.current;
+      if (incoming.length === 0) return;
+      bufferRef.current = [];
+      setLines((prev) => {
+        const next = prev.concat(incoming);
+        return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
+      });
+    };
+
     es.onmessage = (e) => {
       try {
         const line = JSON.parse(e.data) as LogLine;
-        setLines((prev) => {
-          const next = [...prev, line];
-          return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
-        });
+        bufferRef.current.push({ ...line, id: idRef.current++ });
+        if (rafRef.current === null) {
+          rafRef.current = requestAnimationFrame(flush);
+        }
       } catch {
         // skip malformed lines
       }
@@ -62,7 +84,9 @@ export default function LogsPage() {
 
     es.onerror = () => {
       setConnected(false);
-      es.close();
+      // In follow mode keep the stream so EventSource auto-reconnects after a
+      // transient drop; only close when the server ends the initial dump.
+      if (!follow) es.close();
     };
   }, [unit, follow]);
 
@@ -70,12 +94,16 @@ export default function LogsPage() {
     connect();
     return () => {
       esRef.current?.close();
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
     };
   }, [connect]);
 
   useEffect(() => {
     if (autoScroll && bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: "smooth" });
+      bottomRef.current.scrollIntoView({ behavior: "auto" });
     }
   }, [lines, autoScroll]);
 
@@ -193,9 +221,9 @@ export default function LogsPage() {
         ) : (
           <table className="w-full border-collapse">
             <tbody>
-              {visible.map((line, i) => (
+              {visible.map((line) => (
                 <tr
-                  key={i}
+                  key={line.id}
                   className="border-b border-[var(--color-border)]/30 hover:bg-[var(--color-bg-tertiary)]/50"
                 >
                   <td className="w-[180px] whitespace-nowrap px-3 py-1 text-[var(--color-text-muted)]">
