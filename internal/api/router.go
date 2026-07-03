@@ -30,8 +30,14 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	r.Use(func(next http.Handler) http.Handler {
 		// Skip gzip compression for SSE endpoints — the compressor buffers output
 		// and breaks flushing, so EventSource clients never receive events.
+		// Also skip it for audio/video playback endpoints: CompressHandler strips
+		// Content-Length (browsers lose duration/buffering info) and gzips 206
+		// range responses whose Content-Range describes the uncompressed bytes,
+		// which corrupts playback (frozen or glitchy audio) in clients that send
+		// Accept-Encoding: gzip on media requests. The payloads are already
+		// compressed formats, so gzip only burns CPU anyway.
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if isStreamPath(r) {
+			if isStreamPath(r) || isMediaPath(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -323,6 +329,23 @@ func isStreamPath(r *http.Request) bool {
 	switch r.URL.Path {
 	case "/api/events/stream", "/api/logs":
 		return true
+	}
+	return false
+}
+
+// isMediaPath reports whether the request targets an endpoint that serves
+// audio/video bytes for in-browser playback. These must be delivered identity-
+// encoded with Content-Length and byte-range support intact.
+func isMediaPath(r *http.Request) bool {
+	for _, p := range []string{
+		"/api/music/play/",
+		"/api/chimes/play/",
+		"/api/lightshows/play/",
+		"/api/videos/stream/",
+	} {
+		if strings.HasPrefix(r.URL.Path, p) {
+			return true
+		}
 	}
 	return false
 }
