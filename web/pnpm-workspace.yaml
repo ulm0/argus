@@ -1,3 +1,9 @@
 allowBuilds:
   sharp: true
   unrs-resolver: true
+
+# Force patched transitive versions (Dependabot GHSA-qx2v-qp2m-jg93,
+# GHSA-4x5r-pxfx-6jf8). next 16.2.6 pulls postcss 8.4.31 and @babel/core 7.29.0.
+overrides:
+  postcss@<8.5.10: 8.5.13
+  '@babel/core@<=7.29.0': ^7.29.6
