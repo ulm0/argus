@@ -284,6 +284,10 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 	videoFullPath := filepath.Join(folderPath, event, videoFile)
 	hash := h.videoSvc.ThumbnailHash(videoFullPath)
 	thumbPath := filepath.Join(h.cfg.ThumbnailDir, folder, event, camera+"_"+hash+".jpg")
+	if !withinBase(thumbPath, h.cfg.ThumbnailDir) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
+		return
+	}
 
 	if _, err := os.Stat(thumbPath); err != nil {
 		width, _ := strconv.Atoi(r.URL.Query().Get("w"))
@@ -407,6 +411,10 @@ func (h *VideoHandler) SessionThumbnail(w http.ResponseWriter, r *http.Request) 
 	videoFullPath := filepath.Join(folderPath, target)
 	hash := h.videoSvc.ThumbnailHash(videoFullPath)
 	thumbPath := filepath.Join(h.cfg.ThumbnailDir, folder, "sessions", session+"_"+hash+".jpg")
+	if !withinBase(thumbPath, h.cfg.ThumbnailDir) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid path"})
+		return
+	}
 
 	if _, err := os.Stat(thumbPath); err != nil {
 		width, _ := strconv.Atoi(r.URL.Query().Get("w"))
