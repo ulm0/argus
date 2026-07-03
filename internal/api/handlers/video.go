@@ -68,15 +68,9 @@ func (h *VideoHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tcPath := h.videoSvc.GetTeslaCamPath()
-	if tcPath == "" {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "TeslaCam directory not found"})
-		return
-	}
-
-	folderPath := filepath.Join(tcPath, filepath.Clean(folder))
-	if !withinBase(folderPath, tcPath) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid folder path"})
+	folderPath := h.resolveFolderPath(folder)
+	if folderPath == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "folder not found"})
 		return
 	}
 
@@ -458,6 +452,14 @@ func (h *VideoHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.videoSvc.DeleteEvent(folderPath, event); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	// Prune any generated thumbnails for this event so they don't accumulate on
+	// the SD card once the source videos are gone. Best-effort: they are written
+	// to ThumbnailDir/{folder}/{event}/ (see Thumbnail). folder and event are
+	// already validated against traversal by resolveFolderPath/DeleteEvent above.
+	if err := os.RemoveAll(filepath.Join(h.cfg.ThumbnailDir, folder, event)); err != nil {
+		logger.L.WithField("folder", folder).WithField("event", event).WithError(err).Warn("failed to prune event thumbnails")
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "event": event})

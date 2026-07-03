@@ -57,23 +57,21 @@ export default function AnalyticsPage() {
   }, []);
 
   const loadAll = useCallback(async () => {
-    try {
-      const [analytics, system, fsck, history] = await Promise.all([
-        api.getDashboard(),
-        api.getSystemMetrics(),
-        api.getFsckStatus(),
-        api.getFsckHistory(),
-      ]);
-      setDashboard(analytics);
-      setSystemMetrics(system);
-      setFsckStatus(fsck);
-      setFsckRunning(fsck.running);
-      setFsckHistory(history.history || []);
-    } catch {
-      showToast("Failed to load analytics", false);
-    } finally {
-      setLoading(false);
+    const [analytics, system, fsck, history] = await Promise.allSettled([
+      api.getDashboard(),
+      api.getSystemMetrics(),
+      api.getFsckStatus(),
+      api.getFsckHistory(),
+    ]);
+    if (analytics.status === "fulfilled") setDashboard(analytics.value);
+    if (system.status === "fulfilled") setSystemMetrics(system.value);
+    if (fsck.status === "fulfilled") {
+      setFsckStatus(fsck.value);
+      setFsckRunning(fsck.value.running);
     }
+    if (history.status === "fulfilled") setFsckHistory(history.value.history || []);
+    if (analytics.status === "rejected") showToast("Failed to load analytics", false);
+    setLoading(false);
   }, [showToast]);
 
   useEffect(() => { loadAll(); }, [loadAll]);

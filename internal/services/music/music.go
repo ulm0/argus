@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ulm0/argus/internal/config"
 )
@@ -70,7 +71,7 @@ func (s *Service) ListFiles(mountPath, relPath string) (*ListResult, error) {
 		CurrentPath: relPath,
 	}
 
-	result.UsedBytes = getDiskUsed(musicDir)
+	result.UsedBytes, result.FreeBytes, result.TotalBytes = getDiskUsage(musicDir)
 
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".") {
@@ -169,6 +170,7 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 	if !isWithinDir(uploadDir, musicDir) {
 		return false, fmt.Errorf("path traversal detected")
 	}
+	pruneStaleUploads(filepath.Join(musicDir, ".uploads"))
 	os.MkdirAll(uploadDir, 0755)
 
 	// Save chunk
@@ -227,6 +229,29 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 	os.RemoveAll(uploadDir)
 
 	return true, nil
+}
+
+// pruneStaleUploads removes chunk directories from abandoned chunked uploads
+// (client sent some chunks then vanished). An in-progress upload's dir keeps a
+// fresh mtime as chunks are written, so anything untouched for a day is dead.
+// ponytail: 24h TTL, swept opportunistically on each new upload; a dedicated
+// janitor goroutine only if uploads ever churn hard enough to matter.
+func pruneStaleUploads(uploadsDir string) {
+	entries, err := os.ReadDir(uploadsDir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-24 * time.Hour)
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		os.RemoveAll(filepath.Join(uploadsDir, e.Name()))
+	}
 }
 
 // DeleteFile removes a music file.

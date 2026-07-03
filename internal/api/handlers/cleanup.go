@@ -82,7 +82,12 @@ func (h *CleanupHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		DryRun bool `json:"dry_run"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	// A malformed/empty body must not silently default DryRun=false and trigger a
+	// real deletion — require an explicit, well-formed request.
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
 
 	plan, err := h.cleanupSvc.CalculateCleanupPlan(partitionPath)
 	if err != nil {

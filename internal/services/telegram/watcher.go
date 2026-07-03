@@ -148,18 +148,36 @@ func (w *SentryWatcher) checkDir(ctx context.Context, dir string, seen map[strin
 				return
 			}
 
+			// Tesla creates the event directory (event.json) first and copies the
+			// .mp4 clips in afterwards; they may not exist yet at the 5s mark. The
+			// dir is already marked seen, so the poll loop won't respawn us — retry
+			// here until videos appear or a deadline passes, otherwise the alert is
+			// lost forever. (seen[] stays owned by the poll goroutine → no race.)
 			eventDir := filepath.Join(dir, eventName)
-			videos := w.findVideos(eventDir)
-
-			if len(videos) > 0 {
-				event := SentryEvent{
-					EventDir:  eventDir,
-					EventName: eventName,
-					Timestamp: time.Now(),
-					Videos:    videos,
-					Type:      eventType,
+			deadline := time.Now().Add(3 * time.Minute)
+			for {
+				videos := w.findVideos(eventDir)
+				if len(videos) > 0 {
+					w.callback(SentryEvent{
+						EventDir:  eventDir,
+						EventName: eventName,
+						Timestamp: time.Now(),
+						Videos:    videos,
+						Type:      eventType,
+					})
+					return
 				}
-				w.callback(event)
+				if time.Now().After(deadline) {
+					logger.L.WithField("event", eventName).Warn("Telegram: no videos found for event before deadline, dropping")
+					return
+				}
+				select {
+				case <-time.After(10 * time.Second):
+				case <-ctx.Done():
+					return
+				case <-w.stopCh:
+					return
+				}
 			}
 		}(name)
 	}

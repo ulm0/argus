@@ -139,7 +139,7 @@ func writeGenerateConfig(path, content string, force bool) (wrote bool, err erro
 		return false, fmt.Errorf("close temp file: %w", err)
 	}
 
-	if err := os.Chmod(tmpName, 0644); err != nil {
+	if err := os.Chmod(tmpName, 0600); err != nil {
 		return false, fmt.Errorf("chmod temp file: %w", err)
 	}
 

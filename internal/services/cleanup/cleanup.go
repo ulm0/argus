@@ -283,12 +283,32 @@ func (s *Service) ExecuteCleanup(plan *CleanupPlan, dryRun bool) CleanupReport {
 				report.Errors = append(report.Errors, fmt.Sprintf("delete %s/%s: %v", ev.Folder, ev.Name, err))
 				continue
 			}
+			s.removeEventThumbnails(ev)
 			report.DeletedCount++
 			report.DeletedSize += float64(ev.Size) / (1024 * 1024 * 1024)
 		}
 	}
 
 	return report
+}
+
+// removeEventThumbnails deletes the cached thumbnails belonging to a deleted
+// event so the on-disk thumbnail cache doesn't accumulate orphans over the
+// device's lifetime. Dir-based events (Saved/Sentry) cache their thumbnails
+// under <ThumbnailDir>/<folder>/<event>/; session events (RecentClips) cache
+// theirs under <ThumbnailDir>/<folder>/sessions/ as <session>_<hash>.jpg.
+func (s *Service) removeEventThumbnails(ev EventToDelete) {
+	if s.cfg.ThumbnailDir == "" {
+		return
+	}
+	if isEventDir(ev) {
+		os.RemoveAll(filepath.Join(s.cfg.ThumbnailDir, ev.Folder, ev.Name))
+		return
+	}
+	matches, _ := filepath.Glob(filepath.Join(s.cfg.ThumbnailDir, ev.Folder, "sessions", ev.Name+"_*.jpg"))
+	for _, m := range matches {
+		os.Remove(m)
+	}
 }
 
 // CleanupOrphanedThumbnails removes thumbnails that no longer have corresponding videos.

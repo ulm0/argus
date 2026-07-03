@@ -71,6 +71,27 @@ func (q *QuickEditor) quickEdit(partition string, lunNumber int, imgPath string,
 	}
 	defer os.Remove(lockFile)
 
+	// Keep the lock's mtime fresh while the operation runs. Operations can run up
+	// to their (multi-minute) timeout, but this stale check and the concurrent
+	// actors that honour the lock (chime.RunSchedulerTick, mode.waitQuickEditLocks)
+	// treat a lock older than ~2min as dead and delete it. Touching it every 30s
+	// keeps a live operation's lock always fresh so none of them races in.
+	stopRefresh := make(chan struct{})
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stopRefresh:
+				return
+			case <-t.C:
+				now := time.Now()
+				_ = os.Chtimes(lockFile, now, now)
+			}
+		}
+	}()
+	defer close(stopRefresh)
+
 	roPath := q.cfg.MountPath(partition, true)
 	rwPath := q.cfg.MountPath(partition, false)
 
@@ -97,6 +118,7 @@ func (q *QuickEditor) quickEdit(partition string, lunNumber int, imgPath string,
 	// 4. Create RW loop device and mount
 	loopDev, err := q.loopMgr.Create(imgPath, false)
 	if err != nil {
+		q.restoreRO(imgPath, roPath, "")
 		q.restoreLUN(lunNumber, imgPath)
 		return fmt.Errorf("create RW loop: %w", err)
 	}
@@ -104,6 +126,7 @@ func (q *QuickEditor) quickEdit(partition string, lunNumber int, imgPath string,
 	fsType, err := q.mountMgr.DetectFSType(loopDev)
 	if err != nil {
 		q.loopMgr.Detach(loopDev)
+		q.restoreRO(imgPath, roPath, "")
 		q.restoreLUN(lunNumber, imgPath)
 		return fmt.Errorf("detect fs type: %w", err)
 	}
@@ -111,6 +134,7 @@ func (q *QuickEditor) quickEdit(partition string, lunNumber int, imgPath string,
 	logger.L.WithField("loop", loopDev).WithField("path", rwPath).WithField("fs", fsType).Debug("quick_edit: mounting RW")
 	if err := q.mountMgr.Mount(loopDev, rwPath, fsType, false); err != nil {
 		q.loopMgr.Detach(loopDev)
+		q.restoreRO(imgPath, roPath, fsType)
 		q.restoreLUN(lunNumber, imgPath)
 		return fmt.Errorf("mount RW: %w", err)
 	}
@@ -129,15 +153,35 @@ func (q *QuickEditor) quickEdit(partition string, lunNumber int, imgPath string,
 	case callbackErr = <-done:
 	case <-ctx.Done():
 		callbackErr = fmt.Errorf("quick edit timed out after %s", timeout)
-		logger.L.WithField("partition", partition).Warn("quick_edit: callback timed out, proceeding with cleanup")
+		logger.L.WithField("partition", partition).Warn("quick_edit: callback timed out, waiting for it to stop before cleanup")
+		// Give the (ctx-aware) callback a bounded grace period to observe the
+		// cancellation and stop writing. Unmounting while it still holds files
+		// open under rwPath would let its writes land on the underlying root fs
+		// after a lazy detach.
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			logger.L.WithField("partition", partition).Error("quick_edit: callback did not return after timeout; cleaning up anyway")
+		}
 	}
 
 	// 6. Cleanup: sync, unmount, detach, restore
 	q.mountMgr.Sync()
 
 	logger.L.WithField("path", rwPath).Debug("quick_edit: unmounting RW")
-	if err := q.mountMgr.SafeUnmountDir(rwPath); err != nil {
-		logger.L.WithError(err).WithField("path", rwPath).Warn("failed to unmount RW")
+	// Require a CLEAN unmount before touching the LUN: if the RW mount can't be
+	// fully removed (open files / a lazy detach that leaves the fs live),
+	// restoring the gadget LUN would re-expose the same FAT image to the car
+	// while it is still mounted RW locally — two writers, guaranteed corruption.
+	// Fail safe: leave the LUN cleared (partition temporarily unavailable to the
+	// car) and surface the error; the next full mode switch reconciles it.
+	if err := q.mountMgr.UnmountClean(rwPath); err != nil {
+		logger.L.WithError(err).WithField("path", rwPath).Error("quick_edit: RW unmount not clean; leaving LUN cleared to avoid dual-writer corruption")
+		_ = q.loopMgr.Detach(loopDev)
+		if callbackErr == nil {
+			callbackErr = fmt.Errorf("RW unmount failed, LUN left cleared to prevent corruption: %w", err)
+		}
+		return callbackErr
 	}
 
 	if err := q.loopMgr.Detach(loopDev); err != nil {
@@ -145,14 +189,7 @@ func (q *QuickEditor) quickEdit(partition string, lunNumber int, imgPath string,
 	}
 
 	// 7. Restore RO loop + mount
-	roLoop, err := q.loopMgr.Create(imgPath, true)
-	if err != nil {
-		logger.L.WithError(err).WithField("image", imgPath).Warn("failed to create RO loop")
-	} else {
-		if err := q.mountMgr.Mount(roLoop, roPath, fsType, true); err != nil {
-			logger.L.WithError(err).WithField("path", roPath).Warn("failed to remount RO")
-		}
-	}
+	q.restoreRO(imgPath, roPath, fsType)
 
 	// 8. Restore LUN
 	q.restoreLUN(lunNumber, imgPath)
@@ -161,6 +198,27 @@ func (q *QuickEditor) quickEdit(partition string, lunNumber int, imgPath string,
 	q.mountMgr.DropCaches()
 
 	return callbackErr
+}
+
+// restoreRO re-creates the RO loop device and remounts roPath. It is best-effort:
+// errors are logged and swallowed. If fsType is empty it is detected from the RO
+// loop, falling back to "vfat".
+func (q *QuickEditor) restoreRO(imgPath, roPath, fsType string) {
+	roLoop, err := q.loopMgr.Create(imgPath, true)
+	if err != nil {
+		logger.L.WithError(err).WithField("image", imgPath).Warn("failed to create RO loop")
+		return
+	}
+	if fsType == "" {
+		if detected, derr := q.mountMgr.DetectFSType(roLoop); derr != nil || detected == "" {
+			fsType = "vfat"
+		} else {
+			fsType = detected
+		}
+	}
+	if err := q.mountMgr.Mount(roLoop, roPath, fsType, true); err != nil {
+		logger.L.WithError(err).WithField("path", roPath).Warn("failed to remount RO")
+	}
 }
 
 func (q *QuickEditor) restoreLUN(lunNumber int, imgPath string) {

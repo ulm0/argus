@@ -72,13 +72,14 @@ type cpuTimes struct {
 }
 
 func readCPUUsagePercent() float64 {
+	// Hold the lock across the sample so concurrent cache misses share a
+	// single 200ms double-sample instead of each running their own. Blocked
+	// callers re-check the cache below and return the value the winner computed.
 	cpuCacheMu.Lock()
+	defer cpuCacheMu.Unlock()
 	if time.Now().Before(cpuCacheExp) {
-		v := cpuCacheVal
-		cpuCacheMu.Unlock()
-		return v
+		return cpuCacheVal
 	}
-	cpuCacheMu.Unlock()
 
 	t1, err := readCPUTimes()
 	if err != nil {
@@ -97,10 +98,8 @@ func readCPUUsagePercent() float64 {
 		usage = (1 - idleDelta/totalDelta) * 100
 	}
 
-	cpuCacheMu.Lock()
 	cpuCacheVal = usage
 	cpuCacheExp = time.Now().Add(cpuCacheTTL)
-	cpuCacheMu.Unlock()
 	return usage
 }
 

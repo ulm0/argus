@@ -24,6 +24,7 @@ export default function HomePage() {
   const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -46,11 +47,14 @@ export default function HomePage() {
 
   const switchMode = useCallback(async (mode: "present" | "edit") => {
     setSwitching(true);
+    setSwitchError(null);
     try {
       if (mode === "present") await api.switchToPresent();
       else await api.switchToEdit();
       setStatus(await api.getStatus());
-    } catch {}
+    } catch (e) {
+      setSwitchError(e instanceof Error ? e.message : "Mode switch failed");
+    }
     setSwitching(false);
   }, []);
 
@@ -108,6 +112,9 @@ export default function HomePage() {
             ))}
           </div>
         </div>
+        {switchError && (
+          <p className="mt-3 text-xs text-[var(--color-danger)]">{switchError}</p>
+        )}
       </div>
 
       {/* Storage */}

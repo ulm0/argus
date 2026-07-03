@@ -90,6 +90,13 @@ func (h *MusicHandler) UploadChunk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reject out-of-range indices: a negative index or total_chunks <= 0 corrupts
+	// assembly (empty/garbage output) and can leave orphan chunk dirs behind.
+	if totalChunks <= 0 || chunkIndex < 0 || chunkIndex >= totalChunks {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid chunk range"})
+		return
+	}
+
 	if uploadID == "" {
 		uploadID = music.GenerateUploadID()
 	}

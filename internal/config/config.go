@@ -211,8 +211,21 @@ func Load(path string) (*Config, error) {
 	}
 
 	cfg.ConfigFilePath = path
+
+	// Detect whether setDefaults will (re)generate the web secret key. When it
+	// does, persist it once here so the key stays stable across restarts;
+	// otherwise every reboot rotates the HMAC key and invalidates all existing
+	// login sessions (session cookies are signed with Web.SecretKey).
+	persistKey := cfg.Web.SecretKey == "" || cfg.Web.SecretKey == defaultSecretKey
+
 	cfg.setDefaults()
 	cfg.computePaths()
+
+	if persistKey {
+		// Best-effort: failing to persist is non-fatal (the in-memory key still
+		// works for this process), so it must not turn Load into a hard error.
+		_ = cfg.Save()
+	}
 
 	return cfg, nil
 }

@@ -76,9 +76,14 @@ export default function MusicUploader({
         } else if (entry.isDirectory) {
           const dirEntry = entry as FileSystemDirectoryEntry;
           const reader = dirEntry.createReader();
-          const entries = await new Promise<FileSystemEntry[]>((resolve, reject) =>
-            reader.readEntries(resolve, reject),
-          );
+          const entries: FileSystemEntry[] = [];
+          let batch: FileSystemEntry[];
+          do {
+            batch = await new Promise<FileSystemEntry[]>((resolve, reject) =>
+              reader.readEntries(resolve, reject),
+            );
+            entries.push(...batch);
+          } while (batch.length > 0);
           for (const child of entries) {
             await traverseEntry(child, path ? `${path}/${entry.name}` : entry.name);
           }

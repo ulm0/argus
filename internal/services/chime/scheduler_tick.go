@@ -104,9 +104,8 @@ func weeklyMatchesNow(sch *Schedule, t time.Time) bool {
 		return false
 	}
 	wd := int(t.Weekday())
-	monFirst := (wd + 6) % 7
 	for _, d := range sch.Days {
-		if d == monFirst || d == wd {
+		if d == wd {
 			return true
 		}
 	}

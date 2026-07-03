@@ -37,6 +37,16 @@ export default function LightshowsPage() {
     loadShows();
   }, [loadShows]);
 
+  // Stop any in-progress playback when the page unmounts, otherwise the audio
+  // keeps playing after the user navigates away with no UI left to stop it.
+  useEffect(
+    () => () => {
+      audioRef.current?.pause();
+      audioRef.current = null;
+    },
+    [],
+  );
+
   const handleUpload = async (files: FileList | File[]) => {
     if (!files.length) return;
     setUploading(true);

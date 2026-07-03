@@ -12,7 +12,7 @@ const DEFAULT_UNIT: SpeedUnit = "kph";
 // Source of truth is /api/config viewer_prefs.speed_unit.
 export function useSpeedUnit(): [SpeedUnit, (u: SpeedUnit) => void] {
   const [unit, setUnit] = useState<SpeedUnit>(DEFAULT_UNIT);
-  const hydrated = useRef(false);
+  const userSet = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -27,7 +27,9 @@ export function useSpeedUnit(): [SpeedUnit, (u: SpeedUnit) => void] {
     api
       .getConfig()
       .then((cfg) => {
-        if (cancelled) return;
+        // Bail if unmounted or the user already picked a unit — don't clobber
+        // their selection with a stale in-flight server value.
+        if (cancelled || userSet.current) return;
         const serverUnit = cfg.viewer_prefs?.speed_unit;
         if (serverUnit === "mph" || serverUnit === "kph") {
           setUnit(serverUnit);
@@ -36,9 +38,6 @@ export function useSpeedUnit(): [SpeedUnit, (u: SpeedUnit) => void] {
       })
       .catch(() => {
         // Server unreachable — keep cached/default value.
-      })
-      .finally(() => {
-        hydrated.current = true;
       });
 
     return () => {
@@ -47,6 +46,7 @@ export function useSpeedUnit(): [SpeedUnit, (u: SpeedUnit) => void] {
   }, []);
 
   const set = useCallback((u: SpeedUnit) => {
+    userSet.current = true;
     setUnit(u);
     try { localStorage.setItem(STORAGE_KEY, u); } catch {}
     // Persist server-side; ignore failures (cache will retry on next mount).

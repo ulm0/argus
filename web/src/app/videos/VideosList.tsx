@@ -69,10 +69,12 @@ export default function VideosListPage() {
   const [hasNext, setHasNext] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadingEvents, setLoadingEvents] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const reqRef = useRef(0);
 
   const showToast = useCallback((msg: string, ok = true) => {
     setToast({ msg, ok });
@@ -92,8 +94,11 @@ export default function VideosListPage() {
 
   const loadEvents = useCallback(
     async (folder: FolderTab, pageNum: number, append = false) => {
-      if (!append) setLoadingMore(false);
-      else setLoadingMore(true);
+      const reqId = ++reqRef.current;
+      if (!append) {
+        setLoadingMore(false);
+        setLoadingEvents(true);
+      } else setLoadingMore(true);
 
       try {
         if (folder === "RecentClips") {
@@ -103,6 +108,7 @@ export default function VideosListPage() {
             20,
             "sessions",
           )) as VideoSessionsResponse;
+          if (reqId !== reqRef.current) return;
           setSessions((prev) =>
             append ? [...prev, ...(res.sessions || [])] : res.sessions || [],
           );
@@ -113,6 +119,7 @@ export default function VideosListPage() {
             folder,
             pageNum,
           )) as VideoEventsResponse;
+          if (reqId !== reqRef.current) return;
           setEvents((prev) =>
             append ? [...prev, ...(res.events || [])] : res.events || [],
           );
@@ -121,9 +128,13 @@ export default function VideosListPage() {
         }
         setPage(pageNum);
       } catch {
+        if (reqId !== reqRef.current) return;
         showToast("Failed to load events", false);
       } finally {
-        setLoadingMore(false);
+        if (reqId === reqRef.current) {
+          setLoadingMore(false);
+          setLoadingEvents(false);
+        }
       }
     },
     [showToast],
@@ -350,7 +361,13 @@ export default function VideosListPage() {
         </div>
       )}
 
-      {events.length === 0 && sessions.length === 0 && !loading && (
+      {loadingEvents && events.length === 0 && sessions.length === 0 && (
+        <div className="flex justify-center py-12">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--color-border)] border-t-[var(--color-accent)]" />
+        </div>
+      )}
+
+      {events.length === 0 && sessions.length === 0 && !loading && !loadingEvents && (
         <div className="py-12 text-center text-sm text-[var(--color-text-muted)]">
           No events found in {activeTab}
         </div>

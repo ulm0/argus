@@ -275,11 +275,16 @@ export class DashcamMP4 {
     const entryCount = this.view.getUint32(stts.start + 4);
     const durations: number[] = [];
     let readPos = stts.start + 8;
-    for (let i = 0; i < entryCount; i++) {
+    // Clamp against the stts box capacity and a sane sample cap so a corrupt
+    // clip with a garbage entryCount or per-entry count can't allocate billions
+    // of entries and OOM/hang this synchronous main-thread parse.
+    const maxEntries = Math.floor((stts.end - readPos) / 8);
+    const n = Math.min(entryCount, maxEntries);
+    for (let i = 0; i < n; i++) {
       const count = this.view.getUint32(readPos);
       const delta = this.view.getUint32(readPos + 4);
       const ms = (delta / timescale) * 1000;
-      for (let j = 0; j < count; j++) durations.push(ms);
+      for (let j = 0; j < count && durations.length < 1_000_000; j++) durations.push(ms);
       readPos += 8;
     }
 
@@ -302,12 +307,11 @@ export class DashcamMP4 {
       if (nalSize < 1 || cursor + nalSize > this.buffer.byteLength) break;
 
       const nalType = this.view.getUint8(cursor) & 0x1f;
-      const nalData = new Uint8Array(
-        this.buffer.slice(cursor, cursor + nalSize),
-      );
 
       if (nalType === 6) {
-        pendingSei = decodeSeiNal(nalData);
+        // Only SEI NALs are decoded; use a zero-copy view instead of copying
+        // every (mostly slice) NAL's bytes.
+        pendingSei = decodeSeiNal(new Uint8Array(this.buffer, cursor, nalSize));
       } else if (nalType === 5 || nalType === 1) {
         const frameIndex = frames.length;
         frames.push({

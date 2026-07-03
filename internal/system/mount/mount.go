@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -49,19 +50,63 @@ func (m *Manager) Unmount(target string, maxRetries int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for i := 0; i < maxRetries; i++ {
-		if err := m.unmountImpl(target, false); err == nil {
-			return nil
-		}
-
-		if i < maxRetries-1 {
-			_ = exec.Command("fuser", "-km", target).Run()
-			time.Sleep(time.Duration(500*(i+1)) * time.Millisecond)
-		}
+	if err := m.unmountRetry(target, maxRetries); err == nil {
+		return nil
 	}
 
 	// Last resort: lazy unmount
 	return m.unmountImpl(target, true)
+}
+
+// unmountRetry attempts a non-lazy unmount up to maxRetries times, killing
+// foreign mount holders between attempts. It returns the last error if every
+// attempt fails and does NOT fall back to a lazy detach. Caller must hold m.mu.
+func (m *Manager) unmountRetry(target string, maxRetries int) error {
+	var err error
+	for i := 0; i < maxRetries; i++ {
+		if err = m.unmountImpl(target, false); err == nil {
+			return nil
+		}
+		if i < maxRetries-1 {
+			killForeignMountHolders(target)
+			time.Sleep(time.Duration(500*(i+1)) * time.Millisecond)
+		}
+	}
+	return err
+}
+
+// UnmountClean unmounts target with retries but never falls back to a lazy
+// MNT_DETACH. A nil return therefore guarantees the filesystem is truly gone
+// (no process still holds it, no dirty pages linger) — required before
+// re-exposing the backing image to the car via a gadget LUN, where a lingering
+// local RW mount would create two concurrent writers on one FAT image.
+func (m *Manager) UnmountClean(target string) error {
+	if !m.IsMounted(target) {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.unmountRetry(target, 3)
+}
+
+// killForeignMountHolders SIGKILLs every process holding the target filesystem
+// open except this process, so an unmount retry can free the mount without
+// killing the argus daemon itself (which routinely holds FDs under these paths).
+func killForeignMountHolders(target string) {
+	out, err := exec.Command("fuser", "-m", target).Output()
+	if err != nil {
+		return
+	}
+	self := os.Getpid()
+	for _, field := range strings.Fields(string(out)) {
+		pid, err := strconv.Atoi(field)
+		if err != nil || pid == self {
+			continue
+		}
+		if p, err := os.FindProcess(pid); err == nil {
+			_ = p.Kill()
+		}
+	}
 }
 
 // IsMounted checks if a path is a mount point.

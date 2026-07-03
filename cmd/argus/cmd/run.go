@@ -120,7 +120,7 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 				}
 			}()
 
-			router := api.NewRouter(cfg, webFS, tgSvc, sentryEventsH, webhookSvc, apMgr)
+			router := api.NewRouter(cfg, webFS, tgSvc, sentryEventsH, webhookSvc, apMgr, chSvc)
 
 			addr := fmt.Sprintf(":%d", cfg.Network.WebPort)
 			server := &http.Server{
@@ -137,23 +137,29 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+			shutdownDone := make(chan struct{})
 			go func() {
 				sig := <-sigCh
 				logger.L.WithField("signal", sig).Info("received signal, shutting down")
 				runCancel()
-				tgSvc.Stop()
-				webhookSvc.Stop()
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				if err := server.Shutdown(ctx); err != nil {
 					logger.L.WithError(err).Warn("graceful shutdown timed out")
 				}
+				tgSvc.Stop()
+				webhookSvc.Stop()
+				close(shutdownDone)
 			}()
 
 			logger.L.WithField("addr", addr).Info("listening")
 			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				return fmt.Errorf("server error: %w", err)
 			}
+			// ListenAndServe only returns ErrServerClosed after the signal
+			// goroutine called server.Shutdown; wait for that drain to finish
+			// before exiting so in-flight requests aren't cut off.
+			<-shutdownDone
 			logger.L.Info("Argus stopped")
 			return nil
 		},

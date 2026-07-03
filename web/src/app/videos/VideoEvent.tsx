@@ -46,7 +46,9 @@ export default function VideoEventPage({ folder, event }: Props) {
         let foundCurrent = false;
 
         while (!cancelled) {
-          const res = (await api.getVideos(folder, page)) as VideoEventsResponse;
+          // Use the backend's max page size (100) to minimize the number of
+          // sequential round-trips when scanning for the current event.
+          const res = (await api.getVideos(folder, page, 100)) as VideoEventsResponse;
           const pageEvents = res.events ?? [];
 
           for (const ev of pageEvents) {

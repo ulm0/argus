@@ -114,11 +114,18 @@ func (s *Service) SwitchToPresent() error {
 		return fmt.Errorf("gadget bind: %w", err)
 	}
 
-	if err := s.mountPresentReadOnlyLocal(mntMgr, loopMgr); err != nil {
-		return err
+	// The gadget is now presenting to the car; record "present" immediately so
+	// consumers (CurrentMode, AccessiblePath, chime scheduling) don't trust a
+	// stale token if the local RO mount step below fails.
+	if err := s.writeStateFile("present"); err != nil {
+		return fmt.Errorf("write present state: %w", err)
 	}
 
-	return s.writeStateFile("present")
+	if err := s.mountPresentReadOnlyLocal(mntMgr, loopMgr); err != nil {
+		logger.L.WithError(err).Warn("mount present read-only local views")
+	}
+
+	return nil
 }
 
 // SwitchToEdit puts the system into "edit" mode:

@@ -39,10 +39,14 @@ func VerifySession(secret, token string, now time.Time) (username string, ok boo
 	if err != nil {
 		return "", false
 	}
-	name, expStr, found := strings.Cut(string(raw), "|")
-	if !found {
+	// Split on the LAST separator: the expiry never contains '|', but the
+	// username legitimately can, so cutting on the first '|' would misparse it.
+	payload := string(raw)
+	i := strings.LastIndex(payload, "|")
+	if i < 0 {
 		return "", false
 	}
+	name, expStr := payload[:i], payload[i+1:]
 	exp, err := strconv.ParseInt(expStr, 10, 64)
 	if err != nil || now.Unix() >= exp {
 		return "", false
