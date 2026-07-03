@@ -248,7 +248,10 @@ func (s *Service) GetEvents(folderPath string, page, perPage int) ([]Event, bool
 
 // GetEventDetails returns full details for a single event.
 func (s *Service) GetEventDetails(folderPath, eventName string) (*Event, error) {
-	eventDir := filepath.Join(folderPath, eventName)
+	eventDir := filepath.Join(folderPath, filepath.Clean(eventName))
+	if !strings.HasPrefix(eventDir, folderPath+string(filepath.Separator)) {
+		return nil, fmt.Errorf("invalid event name: path traversal detected")
+	}
 	if _, err := os.Stat(eventDir); err != nil {
 		return nil, fmt.Errorf("event not found: %s", eventName)
 	}

@@ -118,8 +118,14 @@ func (s *Service) SaveFile(data io.Reader, filename, mountPath, relPath string) 
 
 	os.MkdirAll(targetDir, 0755)
 
-	// Atomic write: write to temp, fsync, rename
+	// Atomic write: write to temp, fsync, rename. tmpPath is a raw string
+	// append, so re-check it stays within musicDir: a filename that collapses
+	// destPath to musicDir itself (".", "..", "/") would otherwise land the temp
+	// file in a sibling directory outside the root.
 	tmpPath := destPath + ".tmp"
+	if !isWithinDir(tmpPath, musicDir) {
+		return fmt.Errorf("path traversal detected")
+	}
 	f, err := os.Create(tmpPath)
 	if err != nil {
 		return fmt.Errorf("create temp: %w", err)
@@ -193,7 +199,13 @@ func (s *Service) HandleChunk(uploadID, filename string, chunkIndex, totalChunks
 
 	// Assemble final file (targetDir/destPath were validated above).
 	os.MkdirAll(targetDir, 0755)
+	// tmpPath is a raw string append; re-check it stays within musicDir so a
+	// filename collapsing destPath to musicDir (e.g. "/") can't escape to a
+	// sibling directory outside the root.
 	tmpPath := destPath + ".assembling"
+	if !isWithinDir(tmpPath, musicDir) {
+		return false, fmt.Errorf("path traversal detected")
+	}
 
 	assembled, err := os.Create(tmpPath)
 	if err != nil {
@@ -297,7 +309,7 @@ func (s *Service) MoveFile(mountPath, srcRel, destRel, newName string) error {
 	destDir := filepath.Join(musicDir, filepath.Clean(destRel))
 	destPath := filepath.Join(destDir, newName)
 
-	if !isWithinDir(srcPath, musicDir) || !isWithinDir(destPath, musicDir) {
+	if !isWithinDir(srcPath, musicDir) || !isWithinDir(destDir, musicDir) || !isWithinDir(destPath, musicDir) {
 		return fmt.Errorf("path traversal detected")
 	}
 
