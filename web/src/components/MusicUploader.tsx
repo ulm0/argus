@@ -24,6 +24,12 @@ interface MusicUploaderProps {
 
 let fileIdCounter = 0;
 
+// Same set the music browser treats as playable (isAudio in app/music/page.tsx).
+// The server stores whatever it is given, so without this a dropped album folder
+// pushes cover art, .DS_Store and PDFs over the car's slow link. Deliberately
+// permissive — a stray file costs less than a rejected track.
+const AUDIO_RE = /\.(mp3|wav|flac|aac|ogg|m4a|wma)$/i;
+
 export default function MusicUploader({
   uploadUrl = "/api/music/upload-chunk",
   chunkSizeMB = 2,
@@ -33,22 +39,25 @@ export default function MusicUploader({
   const [queue, setQueue] = useState<QueuedFile[]>([]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [skipped, setSkipped] = useState<string[]>([]);
   const abortRef = useRef<AbortController | null>(null);
 
   const chunkSize = chunkSizeMB * 1024 * 1024;
 
   const enqueueFiles = useCallback(
     (files: File[], basePath = "") => {
-      const newItems: QueuedFile[] = files.map((file) => ({
-        id: `file-${++fileIdCounter}`,
-        file,
-        relativePath: basePath
-          ? `${basePath}/${file.webkitRelativePath || file.name}`
-          : file.name,
-        status: "pending" as FileStatus,
-        progress: 0,
-      }));
+      setSkipped(files.filter((f) => !AUDIO_RE.test(f.name)).map((f) => f.name));
+      const newItems: QueuedFile[] = files
+        .filter((f) => AUDIO_RE.test(f.name))
+        .map((file) => ({
+          id: `file-${++fileIdCounter}`,
+          file,
+          relativePath: basePath
+            ? `${basePath}/${file.webkitRelativePath || file.name}`
+            : file.name,
+          status: "pending" as FileStatus,
+          progress: 0,
+        }));
       setQueue((prev) => [...prev, ...newItems]);
     },
     [],
@@ -134,19 +143,19 @@ export default function MusicUploader({
       fd.append("total_chunks", String(totalChunks));
       if (uploadId) fd.append("upload_id", uploadId);
 
-      const res = await fetch(uploadUrl, {
-        method: "POST",
-        body: fd,
-        signal,
-      });
-
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || res.statusText);
+      // One retry: the server keeps received chunks for 24h keyed by upload_id,
+      // so a dropped chunk on flaky car WiFi resumes instead of restarting.
+      let data: { upload_id?: string } | null = null;
+      for (let attempt = 0; attempt < 2 && !data; attempt++) {
+        try {
+          const res = await fetch(uploadUrl, { method: "POST", body: fd, signal });
+          if (!res.ok) throw new Error((await res.text()) || res.statusText);
+          data = await res.json();
+        } catch (err) {
+          if (attempt === 1 || (err as Error).name === "AbortError") throw err;
+        }
       }
-
-      const data = await res.json();
-      if (!uploadId && data.upload_id) {
+      if (!uploadId && data?.upload_id) {
         uploadId = data.upload_id;
       }
 
@@ -216,14 +225,13 @@ export default function MusicUploader({
   return (
     <div className="w-full space-y-4">
       {/* Drop zone */}
-      <div
+      <label
         onDragOver={(e) => {
           e.preventDefault();
           setIsDragOver(true);
         }}
         onDragLeave={() => setIsDragOver(false)}
         onDrop={handleDrop}
-        onClick={() => inputRef.current?.click()}
         className={`
           relative flex flex-col items-center justify-center gap-3 rounded-sm border-2 border-dashed
           px-6 py-10 cursor-pointer transition-all duration-200
@@ -252,17 +260,40 @@ export default function MusicUploader({
             Drop files or folders here
           </p>
           <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-            or click to browse &middot; Chunk size: {chunkSizeMB} MB
+            or click to browse &middot; audio files only &middot; Chunk size: {chunkSizeMB} MB
           </p>
         </div>
         <input
-          ref={inputRef}
           type="file"
           multiple
           onChange={handleFileInput}
-          className="hidden"
+          className="sr-only"
         />
-      </div>
+      </label>
+
+      {/* Skipped files — named, so a missing track is visible rather than silent */}
+      {skipped.length > 0 && (
+        <div className="rounded-sm border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-4 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-sm font-medium text-[var(--color-warning)]">
+              Skipped {skipped.length} non-audio file{skipped.length !== 1 ? "s" : ""}
+            </p>
+            <button
+              onClick={() => setSkipped([])}
+              className="shrink-0 text-xs font-medium text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
+          <ul className="mt-1 space-y-0.5">
+            {skipped.map((name) => (
+              <li key={name} className="truncate text-xs text-[var(--color-text-muted)]">
+                {name}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Action buttons */}
       {queue.length > 0 && (

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ulm0/argus/internal/logger"
+	"github.com/ulm0/argus/internal/system/mount"
 	"github.com/ulm0/argus/internal/system/samba"
 )
 
@@ -24,6 +25,8 @@ func (s *Service) prepareSystemForPresent() error {
 	if err := s.waitQuickEditLocks(quickEditLockTimeout); err != nil {
 		return err
 	}
+
+	s.ensureTrackModeFolder()
 
 	sm := samba.NewManager(s.cfg)
 	for _, part := range s.cfg.USBPartitions() {
@@ -50,6 +53,20 @@ func (s *Service) prepareSystemForPresent() error {
 	}
 
 	return nil
+}
+
+// ensureTrackModeFolder creates the root-level TeslaTrackMode folder on the cam
+// image, without which the car records no Track Mode telemetry at all. Setup
+// seeds it, so this only covers installs that predate that seeding; it needs the
+// RW mount, which is still up here on the way out of edit mode.
+func (s *Service) ensureTrackModeFolder() {
+	rwPath := s.cfg.MountPath("part1", false)
+	if !mount.NewManager().IsMounted(rwPath) {
+		return
+	}
+	if err := os.MkdirAll(filepath.Join(rwPath, "TeslaTrackMode"), 0755); err != nil {
+		logger.L.WithError(err).Warn("create TeslaTrackMode folder")
+	}
 }
 
 func (s *Service) waitQuickEditLocks(timeout time.Duration) error {

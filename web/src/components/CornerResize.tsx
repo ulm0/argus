@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 
 type Corner = "tl" | "tr" | "bl" | "br";
 
@@ -27,9 +27,10 @@ const CONFIG: Record<
 };
 
 // Drag-to-resize affordance for scaled overlays (HUD, Map). Renders a small
-// invisible-by-default grip at the requested corner; the parent container is
-// expected to expose `group` so the grip fades in on hover. While dragging,
-// mouse deltas are converted to a scale offset and clamped to [min, max].
+// grip at the requested corner; the parent container is expected to expose
+// `group` so the grip fades in on hover (it stays visible on touch, where
+// there is no hover to reveal it). While dragging, pointer deltas are
+// converted to a scale offset and clamped to [min, max].
 export default function CornerResize({
   scale,
   onChange,
@@ -39,44 +40,58 @@ export default function CornerResize({
   sensitivity = 220,
 }: CornerResizeProps) {
   const cfg = CONFIG[corner];
+  const dragRef = useRef<{ x: number; y: number; scale: number } | null>(null);
 
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.stopPropagation();
-
-      const startX = e.clientX;
-      const startY = e.clientY;
-      const startScale = scale;
-
-      const onMove = (ev: MouseEvent) => {
-        const dx = ev.clientX - startX;
-        const dy = ev.clientY - startY;
-        const delta = (cfg.x * dx + cfg.y * dy) / sensitivity;
-        const next = Math.min(max, Math.max(min, startScale + delta));
-        onChange(next);
-      };
-
-      const onUp = () => {
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
-      };
-
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
+      dragRef.current = { x: e.clientX, y: e.clientY, scale };
+      e.currentTarget.setPointerCapture(e.pointerId);
     },
-    [scale, onChange, min, max, sensitivity, cfg.x, cfg.y],
+    [scale],
+  );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const start = dragRef.current;
+      if (!start) return;
+      const delta =
+        (cfg.x * (e.clientX - start.x) + cfg.y * (e.clientY - start.y)) / sensitivity;
+      onChange(Math.min(max, Math.max(min, start.scale + delta)));
+    },
+    [onChange, min, max, sensitivity, cfg.x, cfg.y],
+  );
+
+  const onPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = null;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+  }, []);
+
+  const onKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const step = e.key === "ArrowUp" ? 0.1 : e.key === "ArrowDown" ? -0.1 : 0;
+      if (!step) return;
+      e.preventDefault();
+      onChange(Math.min(max, Math.max(min, scale + step)));
+    },
+    [scale, onChange, min, max],
   );
 
   return (
     <div
-      onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onKeyDown={onKeyDown}
       role="slider"
+      tabIndex={0}
       aria-label="Resize"
       aria-valuemin={min}
       aria-valuemax={max}
       aria-valuenow={scale}
-      className={`absolute ${cfg.pos} z-30 flex h-4 w-4 items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-90 hover:!opacity-100`}
+      className={`absolute ${cfg.pos} z-30 flex h-4 w-4 touch-none items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-90 hover:!opacity-100 [@media(pointer:coarse)]:opacity-90`}
       style={{ cursor: cfg.cursor }}
       title="Drag to resize"
     >

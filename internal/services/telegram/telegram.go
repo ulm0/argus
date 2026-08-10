@@ -188,6 +188,7 @@ func (s *Service) GetStatus() map[string]any {
 
 	s.cfgMu.Lock()
 	botConfigured := s.cfg.Telegram.BotToken != ""
+	chatID := s.cfg.Telegram.ChatID
 	s.cfgMu.Unlock()
 
 	return map[string]any{
@@ -196,20 +197,44 @@ func (s *Service) GetStatus() map[string]any {
 		"max_queue":      s.cfg.Telegram.MaxQueueSize,
 		"online":         s.isOnline(),
 		"bot_configured": botConfigured,
+		"chat_id":        chatID,
 	}
 }
 
-// Configure updates the Telegram configuration.
+// Configure updates the Telegram configuration. Empty values keep the stored
+// setting: the UI clears the token field after every save, so an unconditional
+// assignment would wipe the credentials whenever an unrelated field changes.
 func (s *Service) Configure(botToken, chatID, offlineMode, videoQuality string) error {
 	s.cfgMu.Lock()
-	s.cfg.Telegram.BotToken = botToken
-	s.cfg.Telegram.ChatID = chatID
+	if botToken != "" {
+		s.cfg.Telegram.BotToken = botToken
+	}
+	if chatID != "" {
+		s.cfg.Telegram.ChatID = chatID
+	}
 	if offlineMode != "" {
 		s.cfg.Telegram.OfflineMode = offlineMode
 	}
 	if videoQuality != "" {
 		s.cfg.Telegram.VideoQuality = videoQuality
 	}
+	// Having both credentials IS the on switch. Nothing else in the UI writes
+	// Enabled, so without this a user could save a token, get a successful test
+	// message, and still never receive a single Sentry alert. ClearCredentials is
+	// the off switch.
+	s.cfg.Telegram.Enabled = s.cfg.Telegram.BotToken != "" && s.cfg.Telegram.ChatID != ""
+	s.cfgMu.Unlock()
+	return s.cfg.Save()
+}
+
+// ClearCredentials wipes the bot token and chat ID and turns alerting off.
+// Configure treats an empty string as "keep the stored value", so without this
+// there is no way to remove a token once saved.
+func (s *Service) ClearCredentials() error {
+	s.cfgMu.Lock()
+	s.cfg.Telegram.BotToken = ""
+	s.cfg.Telegram.ChatID = ""
+	s.cfg.Telegram.Enabled = false
 	s.cfgMu.Unlock()
 	return s.cfg.Save()
 }

@@ -46,14 +46,25 @@ func (h *ChimeHandler) mountPath() string {
 	return ""
 }
 
+// editMountPath returns the read-write mount, which only exists in Edit mode.
+// Present mode exposes part2 read-only, so writing through AccessiblePath would
+// fail with EROFS halfway through instead of a clean 503.
+func (h *ChimeHandler) editMountPath() string {
+	return editMountPath(h.cfg, "part2")
+}
+
 func (h *ChimeHandler) chimesDir() string {
 	return filepath.Join(h.mountPath(), h.cfg.Web.ChimesFolder)
+}
+
+func (h *ChimeHandler) boomboxDir() string {
+	return filepath.Join(h.mountPath(), h.cfg.Web.BoomboxFolder)
 }
 
 // List returns all chimes plus active chime info.
 func (h *ChimeHandler) List(w http.ResponseWriter, r *http.Request) {
 	mp := h.mountPath()
-	chimes := h.chimeSvc.ListChimes(mp)
+	chimes := h.chimeSvc.ListChimes(mp, h.cfg.Web.ChimesFolder)
 	if chimes == nil {
 		chimes = []string{}
 	}
@@ -78,8 +89,11 @@ func (h *ChimeHandler) PlayActive(w http.ResponseWriter, r *http.Request) {
 
 // Play serves a specific chime file for playback.
 func (h *ChimeHandler) Play(w http.ResponseWriter, r *http.Request) {
+	h.serveAudio(w, r, h.chimesDir())
+}
+
+func (h *ChimeHandler) serveAudio(w http.ResponseWriter, r *http.Request, base string) {
 	filename := mux.Vars(r)["filename"]
-	base := h.chimesDir()
 	chimePath := filepath.Join(base, filepath.Clean(filename))
 	if !strings.HasPrefix(chimePath, base+string(filepath.Separator)) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid filename"})
@@ -109,9 +123,15 @@ const maxChimeUploadSize = 32 << 20 // 32 MiB
 
 // Upload handles a single chime file upload.
 func (h *ChimeHandler) Upload(w http.ResponseWriter, r *http.Request) {
-	mp := h.mountPath()
+	h.uploadOne(w, r, h.cfg.Web.ChimesFolder)
+}
+
+// uploadOne runs the shared upload pipeline (re-encode, optional normalize,
+// validate) into the given library folder.
+func (h *ChimeHandler) uploadOne(w http.ResponseWriter, r *http.Request, folder string) {
+	mp := h.editMountPath()
 	if mp == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chime partition not available"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "partition not available for writing"})
 		return
 	}
 
@@ -139,7 +159,7 @@ func (h *ChimeHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		fmt.Sscanf(v, "%f", &targetLUFS)
 	}
 
-	if err := h.chimeSvc.UploadChime(data, header.Filename, mp, normalize, targetLUFS); err != nil {
+	if err := h.chimeSvc.UploadChime(data, header.Filename, mp, folder, normalize, targetLUFS); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -149,9 +169,9 @@ func (h *ChimeHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 // UploadBulk handles multiple chime file uploads at once.
 func (h *ChimeHandler) UploadBulk(w http.ResponseWriter, r *http.Request) {
-	mp := h.mountPath()
+	mp := h.editMountPath()
 	if mp == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chime partition not available"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "partition not available for writing"})
 		return
 	}
 
@@ -192,7 +212,7 @@ func (h *ChimeHandler) UploadBulk(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if err := h.chimeSvc.UploadChime(data, fh.Filename, mp, normalize, targetLUFS); err != nil {
+		if err := h.chimeSvc.UploadChime(data, fh.Filename, mp, h.cfg.Web.ChimesFolder, normalize, targetLUFS); err != nil {
 			results = append(results, map[string]string{"filename": fh.Filename, "status": "error", "error": err.Error()})
 			continue
 		}
@@ -206,9 +226,9 @@ func (h *ChimeHandler) UploadBulk(w http.ResponseWriter, r *http.Request) {
 func (h *ChimeHandler) SetActive(w http.ResponseWriter, r *http.Request) {
 	filename := mux.Vars(r)["filename"]
 
-	mp := h.mountPath()
+	mp := h.editMountPath()
 	if mp == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chime partition not available"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "partition not available for writing"})
 		return
 	}
 
@@ -222,15 +242,19 @@ func (h *ChimeHandler) SetActive(w http.ResponseWriter, r *http.Request) {
 
 // Delete removes a chime file from the library.
 func (h *ChimeHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	h.deleteOne(w, r, h.cfg.Web.ChimesFolder)
+}
+
+func (h *ChimeHandler) deleteOne(w http.ResponseWriter, r *http.Request, folder string) {
 	filename := mux.Vars(r)["filename"]
 
-	mp := h.mountPath()
+	mp := h.editMountPath()
 	if mp == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chime partition not available"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "partition not available for writing"})
 		return
 	}
 
-	if err := h.chimeSvc.DeleteChime(filename, mp); err != nil {
+	if err := h.chimeSvc.DeleteChime(filename, mp, folder); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -243,9 +267,9 @@ func (h *ChimeHandler) Rename(w http.ResponseWriter, r *http.Request) {
 	oldName := mux.Vars(r)["old"]
 	newName := mux.Vars(r)["new"]
 
-	mp := h.mountPath()
+	mp := h.editMountPath()
 	if mp == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "chime partition not available"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "partition not available for writing"})
 		return
 	}
 
@@ -259,14 +283,49 @@ func (h *ChimeHandler) Rename(w http.ResponseWriter, r *http.Request) {
 
 // Filenames returns just the list of chime filenames (lightweight endpoint).
 func (h *ChimeHandler) Filenames(w http.ResponseWriter, r *http.Request) {
-	chimes := h.chimeSvc.ListChimes(h.mountPath())
+	chimes := h.chimeSvc.ListChimes(h.mountPath(), h.cfg.Web.ChimesFolder)
 	if chimes == nil {
 		chimes = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"filenames": chimes})
 }
 
+// --- Boombox endpoints (same pipeline as chimes, different folder) ---
+
+// maxBoomboxPlayable is how many Boombox sounds the car actually offers: the
+// first 5 files alphabetically. Extra files are stored but unreachable.
+const maxBoomboxPlayable = 5
+
+// ListBoombox returns the Boombox sound library.
+func (h *ChimeHandler) ListBoombox(w http.ResponseWriter, r *http.Request) {
+	sounds := h.chimeSvc.ListChimes(h.mountPath(), h.cfg.Web.BoomboxFolder)
+	if sounds == nil {
+		sounds = []string{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sounds": sounds, "max_playable": maxBoomboxPlayable})
+}
+
+// UploadBoombox handles a single Boombox sound upload.
+func (h *ChimeHandler) UploadBoombox(w http.ResponseWriter, r *http.Request) {
+	h.uploadOne(w, r, h.cfg.Web.BoomboxFolder)
+}
+
+// PlayBoombox serves a Boombox sound for playback.
+func (h *ChimeHandler) PlayBoombox(w http.ResponseWriter, r *http.Request) {
+	h.serveAudio(w, r, h.boomboxDir())
+}
+
+// DeleteBoombox removes a Boombox sound.
+func (h *ChimeHandler) DeleteBoombox(w http.ResponseWriter, r *http.Request) {
+	h.deleteOne(w, r, h.cfg.Web.BoomboxFolder)
+}
+
 // --- Scheduler endpoints ---
+
+// ListSchedules returns every schedule, enabled or not.
+func (h *ChimeHandler) ListSchedules(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"schedules": h.chimeSvc.Scheduler().ListSchedules(false)})
+}
 
 // AddSchedule creates a new chime schedule.
 func (h *ChimeHandler) AddSchedule(w http.ResponseWriter, r *http.Request) {

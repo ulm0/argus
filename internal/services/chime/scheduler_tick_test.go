@@ -30,6 +30,21 @@ func TestScheduleMatchesNow_Holiday(t *testing.T) {
 	}
 }
 
+// A weekly schedule with no days selected means every day; before this it was
+// dead on arrival because the UI never sent a days list.
+func TestScheduleMatchesNow_WeeklyEmptyDays(t *testing.T) {
+	now := time.Date(2026, time.August, 10, 7, 15, 0, 0, time.Local)
+	s := &Schedule{Type: ScheduleWeekly, Time: "07:15"}
+	if !scheduleMatchesNow(s, now) {
+		t.Fatal("expected weekly schedule with no days to match")
+	}
+
+	s.Days = []int{int(time.Sunday)}
+	if scheduleMatchesNow(s, now) {
+		t.Fatal("expected Sunday-only schedule not to match a Monday")
+	}
+}
+
 func TestScheduleMatchesNow_Recurring(t *testing.T) {
 	now := time.Now()
 	last := now.Add(-16 * time.Minute)

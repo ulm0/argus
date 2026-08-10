@@ -100,8 +100,10 @@ func weeklyMatchesNow(sch *Schedule, t time.Time) bool {
 	if t.Hour() != h || t.Minute() != m {
 		return false
 	}
+	// No days selected means every day; schedules persisted before the UI had a
+	// day picker have an empty list and would otherwise never fire.
 	if len(sch.Days) == 0 {
-		return false
+		return true
 	}
 	wd := int(t.Weekday())
 	for _, d := range sch.Days {

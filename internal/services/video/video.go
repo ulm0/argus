@@ -2,6 +2,7 @@ package video
 
 import (
 	"archive/zip"
+	"context"
 	"crypto/md5"
 	"encoding/binary"
 	"encoding/json"
@@ -78,6 +79,10 @@ func NewService(cfg *config.Config) *Service {
 	}
 }
 
+// KeepMarker is an empty file placed inside an event directory to exempt that
+// event from automatic cleanup.
+const KeepMarker = ".argus-keep"
+
 type Event struct {
 	Name              string            `json:"name"`
 	Datetime          string            `json:"datetime"`
@@ -89,6 +94,17 @@ type Event struct {
 	Encrypted         map[string]bool   `json:"encrypted_videos"`
 	Clips             []string          `json:"clips,omitempty"`
 	StartingClipIndex int               `json:"starting_clip_index"`
+	TriggerOffsetSec  float64           `json:"trigger_offset_sec"`
+	Kept              bool              `json:"kept"`
+	// Pointers because 0 is a legal coordinate: with plain float64 + omitempty an
+	// event on the equator or the prime meridian would drop the field entirely.
+	EstLat *float64 `json:"est_lat,omitempty"`
+	EstLon *float64 `json:"est_lon,omitempty"`
+	Camera string   `json:"camera,omitempty"`
+	// Neighbouring event directory names in newest-first order. Only the
+	// single-event path fills these in (see EventNeighbors).
+	Prev string `json:"prev,omitempty"`
+	Next string `json:"next,omitempty"`
 }
 
 type Folder struct {
@@ -188,9 +204,10 @@ func (s *Service) GetFolders() []Folder {
 	return folders
 }
 
-// GetEvents returns paginated events from a TeslaCam subfolder.
-func (s *Service) GetEvents(folderPath string, page, perPage int) ([]Event, bool) {
-	key := fmt.Sprintf("%s:%d:%d", folderPath, page, perPage)
+// GetEvents returns paginated events from a TeslaCam subfolder. A non-empty
+// before ("YYYY-MM-DD") skips everything recorded after that day.
+func (s *Service) GetEvents(folderPath string, page, perPage int, before string) ([]Event, bool) {
+	key := fmt.Sprintf("%s:%d:%d:%s", folderPath, page, perPage, before)
 
 	s.eventMu.RLock()
 	if entry, ok := s.eventCache[key]; ok && time.Now().Before(entry.expiry) {
@@ -217,6 +234,19 @@ func (s *Service) GetEvents(folderPath string, page, perPage int) ([]Event, bool
 	sort.Slice(dirs, func(i, j int) bool {
 		return dirs[i].Name() > dirs[j].Name()
 	})
+
+	// Event directories are timestamp-named ("2024-01-02_15-04-05"), so a
+	// lexical upper bound is a date bound.
+	if before != "" {
+		cutoff := before + "_99"
+		kept := dirs[:0]
+		for _, d := range dirs {
+			if d.Name() <= cutoff {
+				kept = append(kept, d)
+			}
+		}
+		dirs = kept
+	}
 
 	// Paginate
 	start := page * perPage
@@ -258,6 +288,67 @@ func (s *Service) GetEventDetails(folderPath, eventName string) (*Event, error) 
 
 	event := s.parseEvent(eventDir, eventName)
 	return &event, nil
+}
+
+// EventNeighbors returns the event directory names surrounding eventName in
+// newest-first order ("" when there is none). It only reads the parent
+// directory — no per-event parsing — so the UI can render prev/next chips
+// without paging the whole folder through the API.
+func (s *Service) EventNeighbors(folderPath, eventName string) (prev, next string) {
+	entries, err := os.ReadDir(folderPath)
+	if err != nil {
+		return "", ""
+	}
+
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+
+	for i, n := range names {
+		if n != eventName {
+			continue
+		}
+		if i > 0 {
+			prev = names[i-1]
+		}
+		if i < len(names)-1 {
+			next = names[i+1]
+		}
+		break
+	}
+	return prev, next
+}
+
+// ToggleKeep flips the keep marker on an event and reports its new state.
+func (s *Service) ToggleKeep(folderPath, eventName string) (bool, error) {
+	eventDir := filepath.Join(folderPath, filepath.Clean(eventName))
+	if !strings.HasPrefix(eventDir, folderPath+string(filepath.Separator)) {
+		return false, fmt.Errorf("invalid event name: path traversal detected")
+	}
+	if info, err := os.Stat(eventDir); err != nil || !info.IsDir() {
+		return false, fmt.Errorf("event not found: %s", eventName)
+	}
+
+	marker := filepath.Join(eventDir, KeepMarker)
+	if fileExists(marker) {
+		if err := os.Remove(marker); err != nil {
+			return false, err
+		}
+		s.invalidateFolderCache(folderPath)
+		return false, nil
+	}
+
+	f, err := os.Create(marker)
+	if err != nil {
+		return false, err
+	}
+	f.Close()
+	s.invalidateFolderCache(folderPath)
+	return true, nil
 }
 
 // GroupVideosBySession groups videos by their timestamp session for RecentClips.
@@ -423,6 +514,28 @@ func (s *Service) GenerateThumbnail(videoPath, outputPath string, width, height 
 	return nil
 }
 
+// ExportClip stream-copies the [start, end] window of a video into w as MP4.
+// `-c copy` keeps CPU near zero on a Pi Zero; the output has to be fragmented
+// because the regular mp4 muxer cannot rewrite its index on a pipe.
+func (s *Service) ExportClip(ctx context.Context, w io.Writer, videoPath string, start, end float64) error {
+	var stderr strings.Builder
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-ss", strconv.FormatFloat(start, 'f', 3, 64),
+		"-to", strconv.FormatFloat(end, 'f', 3, 64),
+		"-i", videoPath,
+		"-c", "copy",
+		"-movflags", "frag_keyframe+empty_moov",
+		"-f", "mp4", "pipe:1",
+	)
+	cmd.Stdout = w
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("ffmpeg: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
 // ThumbnailHash generates a unique hash for cache-busting.
 func (s *Service) ThumbnailHash(videoPath string) string {
 	info, err := os.Stat(videoPath)
@@ -488,6 +601,16 @@ func (s *Service) parseEvent(eventDir, name string) Event {
 			if ts, ok := ej["timestamp"].(string); ok {
 				event.Datetime = ts
 			}
+			// est_lat/est_lon are the only location source for events whose
+			// video is encrypted or corrupt; Tesla writes them as strings.
+			event.EstLat = parseJSONFloat(ej["est_lat"])
+			event.EstLon = parseJSONFloat(ej["est_lon"])
+			switch c := ej["camera"].(type) {
+			case string:
+				event.Camera = c
+			case float64:
+				event.Camera = strconv.FormatInt(int64(c), 10)
+			}
 		}
 	}
 
@@ -497,6 +620,7 @@ func (s *Service) parseEvent(eventDir, name string) Event {
 
 	// Check for thumbnail
 	event.HasThumbnail = fileExists(filepath.Join(eventDir, "thumb.png"))
+	event.Kept = fileExists(filepath.Join(eventDir, KeepMarker))
 
 	// Scan for video files
 	entries, err := os.ReadDir(eventDir)
@@ -538,8 +662,60 @@ func (s *Service) parseEvent(eventDir, name string) Event {
 	sort.Strings(event.Clips)
 
 	event.StartingClipIndex = computeStartingClipIndex(event.Clips, event.Datetime)
+	event.TriggerOffsetSec = computeTriggerOffset(event.Clips, event.Datetime)
 
 	return event
+}
+
+// parseJSONFloat reads a number Tesla writes as a JSON string (est_lat/est_lon).
+// nil for absent or unparseable, so callers can tell "no location" from 0.
+func parseJSONFloat(v any) *float64 {
+	switch t := v.(type) {
+	case float64:
+		return &t
+	case string:
+		f, err := strconv.ParseFloat(t, 64)
+		if err != nil {
+			return nil
+		}
+		return &f
+	}
+	return nil
+}
+
+// parseEventTime parses a trigger timestamp in any of the formats Tesla writes
+// to event.json, falling back to the event directory naming. Zero when unparseable.
+func parseEventTime(datetime string) time.Time {
+	for _, layout := range []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05",
+		"2006-01-02_15-04-05",
+		"2006-01-02 15:04:05",
+	} {
+		if t, err := time.Parse(layout, datetime); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+// computeTriggerOffset returns the seconds from the start of the first clip to
+// the event trigger, for marking the moment on the player timeline. 0 when
+// either timestamp is unparseable or the trigger predates the first clip.
+func computeTriggerOffset(clips []string, datetime string) float64 {
+	if len(clips) == 0 {
+		return 0
+	}
+	eventTime := parseEventTime(datetime)
+	first, err := time.Parse("2006-01-02_15-04-05", clips[0])
+	if err != nil || eventTime.IsZero() {
+		return 0
+	}
+	offset := eventTime.Sub(first).Seconds()
+	if offset < 0 {
+		return 0
+	}
+	return offset
 }
 
 // computeStartingClipIndex finds the index of the clip that contains or immediately
@@ -552,19 +728,7 @@ func computeStartingClipIndex(clips []string, datetime string) int {
 		return 0
 	}
 
-	// Parse event time — try ISO 8601 first, then the folder-name format
-	var eventTime time.Time
-	for _, layout := range []string{
-		time.RFC3339,
-		"2006-01-02T15:04:05",
-		"2006-01-02_15-04-05",
-		"2006-01-02 15:04:05",
-	} {
-		if t, err := time.Parse(layout, datetime); err == nil {
-			eventTime = t
-			break
-		}
-	}
+	eventTime := parseEventTime(datetime)
 	if eventTime.IsZero() {
 		return 0
 	}
@@ -626,7 +790,7 @@ func (s *Service) CollectEventArchiveFiles(folderPath, eventName string) ([]Even
 	return files, nil
 }
 
-// WriteEventZip streams a DEFLATE-compressed ZIP of files into w. The caller
+// WriteEventZip streams a ZIP of files into w. The caller
 // must invoke CollectEventArchiveFiles first to validate the event; mid-
 // stream errors here cannot be surfaced to the HTTP client (headers will
 // already be flushed) and should be logged instead.
@@ -651,7 +815,16 @@ func addFileToZip(zw *zip.Writer, f EventArchiveFile) error {
 		return err
 	}
 	header.Name = f.Name
-	header.Method = zip.Deflate
+	// H.264 and PNG/JPEG are already compressed, so DEFLATE on the hundreds of
+	// megabytes of video in an event buys ~nothing and costs minutes of Pi Zero
+	// CPU while the user waits on the download. Only the small text metadata is
+	// worth compressing.
+	switch strings.ToLower(filepath.Ext(f.Name)) {
+	case ".mp4", ".png", ".jpg", ".jpeg":
+		header.Method = zip.Store
+	default:
+		header.Method = zip.Deflate
+	}
 	src, err := os.Open(f.Path)
 	if err != nil {
 		return err

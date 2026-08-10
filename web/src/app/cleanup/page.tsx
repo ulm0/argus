@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import * as api from "@/lib/api";
 import type { CleanupPlan, CleanupPolicy, CleanupReport } from "@/lib/types";
 import { formatBytes } from "@/lib/format";
+import { useToast } from "@/components/Toast";
 
 const DEFAULT_KEEP_LAST = 50;
 
@@ -18,12 +19,7 @@ export default function CleanupPage() {
   const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [executing, setExecuting] = useState(false);
-  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
-
-  const showToast = useCallback((msg: string, ok = true) => {
-    setToast({ msg, ok });
-    setTimeout(() => setToast(null), 3000);
-  }, []);
+  const { showToast } = useToast();
 
   const reload = useCallback(() => {
     setLoading(true);
@@ -89,9 +85,19 @@ export default function CleanupPage() {
   };
 
   const handleExecute = async () => {
-    if (!confirm("Run cleanup now? Selected events will be permanently deleted.")) return;
     setExecuting(true);
     try {
+      // The server recalculates the plan at execute time, so confirm against a
+      // plan fetched now — not whatever the Impact card happened to show.
+      const { plan: fresh } = await api.getPreview();
+      setPlan(fresh);
+      if (
+        !confirm(
+          `Delete ${fresh.total_count} events (${formatBytes(fresh.total_size)})? This cannot be undone.`,
+        )
+      ) {
+        return;
+      }
       const report = await api.executeCleanup(false);
       setLastReport(report);
       setPlan(null);
@@ -115,12 +121,6 @@ export default function CleanupPage() {
 
   return (
     <div className="w-full space-y-6 p-6 lg:p-8">
-      {toast && (
-        <div className={`fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-sm px-4 py-3 text-sm font-medium shadow-lg ${toast.ok ? "bg-[var(--color-success)] text-white" : "bg-[var(--color-danger)] text-white"}`}>
-          {toast.msg}
-        </div>
-      )}
-
       <div>
         <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">Cleanup</h1>
         <p className="mt-1 text-sm text-[var(--color-text-muted)]">

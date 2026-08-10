@@ -51,7 +51,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("light");
 
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
+    let stored: Theme | null = null;
+    try { stored = localStorage.getItem(STORAGE_KEY) as Theme | null; } catch {}
     const initial = stored ?? "system";
     const resolved = resolveTheme(initial);
 
@@ -75,7 +76,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [theme]);
 
   const setTheme = useCallback((next: Theme) => {
-    localStorage.setItem(STORAGE_KEY, next);
+    // Safari private mode throws on setItem — the toggle must still work for
+    // this session even when the choice cannot be persisted.
+    try { localStorage.setItem(STORAGE_KEY, next); } catch {}
     const resolved = resolveTheme(next);
     setThemeState(next);
     setResolvedTheme(resolved);

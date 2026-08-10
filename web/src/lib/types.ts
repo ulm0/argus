@@ -44,6 +44,18 @@ export interface VideoEvent {
   encrypted_videos: Record<string, boolean>;
   clips?: string[];
   starting_clip_index?: number;
+  /** Seconds from the start of the first clip to the event trigger. */
+  trigger_offset_sec?: number;
+  /** Neighbouring event directory names, newest-first ordering. */
+  prev?: string;
+  next?: string;
+  /** True when a `.argus-keep` marker pins the event against cleanup. */
+  kept?: boolean;
+  /** GPS estimate written by Tesla into event.json. */
+  est_lat?: number;
+  est_lon?: number;
+  /** Tesla's triggering camera index, as written in event.json. */
+  camera?: string;
 }
 
 export interface SessionGroup {
@@ -394,6 +406,21 @@ export interface TelegramStatus {
   max_queue: number;
   online: boolean;
   bot_configured: boolean;
+  /** Echoed back so the settings field round-trips; the token never is. */
+  chat_id?: string;
+}
+
+// Archive
+
+export interface ArchiveStatus {
+  enabled: boolean;
+  ssid: string;
+  target_path: string;
+  include_recent: boolean;
+  running: boolean;
+  last_run?: string;
+  last_error?: string;
+  copied_total: number;
 }
 
 // Update
@@ -473,7 +500,6 @@ export interface NetworkConfigPublic {
 export interface OfflineAPPublic {
   enabled: boolean;
   ssid: string;
-  passphrase: string;
   channel: number;
   ipv4_cidr: string;
   dhcp_start: string;
@@ -500,7 +526,8 @@ export interface WebConfigPublic {
 
 export interface TelegramConfigPublic {
   enabled: boolean;
-  bot_token: string;
+  /** The token itself is never sent to the browser — only whether one is set. */
+  bot_token_set: boolean;
   chat_id: string;
   offline_mode: string;
   max_queue_size: number;
@@ -530,6 +557,19 @@ export interface ViewerPrefsConfigPublic {
   map_scale: number;
 }
 
+export interface ArchiveConfigPublic {
+  enabled: boolean;
+  ssid: string;
+  target_path: string;
+  include_recent: boolean;
+}
+
+export interface AuthConfigPublic {
+  enabled: boolean;
+  username: string;
+  using_default: boolean;
+}
+
 export interface StorageInfo {
   cam_name: string;
   cam_label: string;
@@ -553,6 +593,8 @@ export interface ConfigResponse {
   update: UpdateConfigPublic;
   startup: StartupConfigPublic;
   viewer_prefs: ViewerPrefsConfigPublic;
+  archive: ArchiveConfigPublic;
+  auth: AuthConfigPublic;
   log_level: string;
   storage: StorageInfo;
 }

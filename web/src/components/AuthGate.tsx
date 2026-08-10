@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "@/lib/api";
 import { UNAUTHORIZED_EVENT } from "@/lib/api";
 
@@ -9,6 +9,10 @@ type Phase = "loading" | "authed" | "login";
 export default function AuthGate({ children }: { children: React.ReactNode }) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [usingDefault, setUsingDefault] = useState(false);
+  // Once the app has rendered, a mid-session 401 shows the form as an overlay
+  // instead of unmounting the app — otherwise an expiring session silently
+  // discards whatever the user was half-way through typing.
+  const wasAuthed = useRef(false);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -32,6 +36,10 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (phase === "authed") wasAuthed.current = true;
+  }, [phase]);
+
   // Any API 401 anywhere re-prompts for login.
   useEffect(() => {
     const onUnauthorized = () => setPhase("login");
@@ -49,8 +57,12 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
         setUsingDefault(res.using_default);
         setPassword("");
         setPhase("authed");
-      } catch {
-        setError("Invalid username or password");
+      } catch (e) {
+        setError(
+          e instanceof api.ApiError && e.status === 401
+            ? "Invalid username or password"
+            : "Couldn't reach the device — check your Wi-Fi connection",
+        );
       } finally {
         setSubmitting(false);
       }
@@ -66,10 +78,8 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (phase === "login") {
-    return (
-      <div className="flex h-screen w-full items-center justify-center p-6">
-        <form
+  const loginForm = (
+    <form
           onSubmit={onSubmit}
           className="w-full max-w-sm rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-primary)] p-6 shadow-sm"
         >
@@ -104,7 +114,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded-md bg-[var(--color-accent)] px-3 py-2 text-sm font-medium text-[var(--color-accent-text)] transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="w-full rounded-md bg-[var(--color-accent)] px-3 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {submitting ? "Signing in…" : "Sign in"}
           </button>
@@ -114,7 +124,25 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
               Default credentials are <code>admin</code> / <code>argus</code>. Change them in Settings.
             </p>
           )}
-        </form>
+    </form>
+  );
+
+  if (phase === "login") {
+    // Session expired mid-use: keep the app mounted behind a modal so nothing
+    // in progress is lost. First-load login still replaces the screen.
+    if (wasAuthed.current) {
+      return (
+        <>
+          {children}
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-6">
+            {loginForm}
+          </div>
+        </>
+      );
+    }
+    return (
+      <div className="flex h-screen w-full items-center justify-center p-6">
+        {loginForm}
       </div>
     );
   }

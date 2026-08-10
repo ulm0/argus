@@ -24,6 +24,10 @@ const defaultKeepLast = 50
 // Mirrors the regexp used by the video service.
 var sessionPattern = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})-(.+)\.\w+$`)
 
+// keepMarker is the file a user drops in an event directory (via the web UI) to
+// pin it. Mirrors video.KeepMarker.
+const keepMarker = ".argus-keep"
+
 // FolderPolicy controls retention for a single TeslaCam subfolder.
 //
 // Old configs used three independent knobs (age/size/count) that operated on
@@ -362,6 +366,11 @@ func collectEventDirs(folder, folderPath string, entries []os.DirEntry) []EventT
 			continue
 		}
 		eventDir := filepath.Join(folderPath, e.Name())
+		// Pinned events are exempt from retention, so they also drop out of the
+		// preview counts. Mirrors video.KeepMarker.
+		if _, err := os.Stat(filepath.Join(eventDir, keepMarker)); err == nil {
+			continue
+		}
 		size, files, mtime := summarizeDir(eventDir)
 		events = append(events, EventToDelete{
 			Folder:   folder,

@@ -4,12 +4,15 @@
   --color-bg-primary: #ffffff;
   --color-bg-secondary: #fafafa;
   --color-bg-tertiary: #f0f0f0;
-  --color-bg-sidebar: #171717;
+  --color-bg-sidebar: #2a2a2a;
+  --color-sidebar-muted: #a2a3a5;
   --color-bg-card: #ffffff;
   --color-bg-card-nested: #f0f0f0;
   --color-text-primary: #171717;
   --color-text-secondary: #757575;
-  --color-text-muted: #a2a3a5;
+  /* 4.5:1 on the white card background — muted carries every field label and
+     timestamp, and bright sunlight is exactly when it gets read. */
+  --color-text-muted: #6a6c6f;
   --color-border: #e0e0e0;
   --color-border-light: #f0f0f0;
   --color-accent: #005aff;
@@ -30,12 +33,13 @@
   --color-bg-primary: #171717;
   --color-bg-secondary: #1a1a1a;
   --color-bg-tertiary: #2a2a2a;
-  --color-bg-sidebar: #171717;
+  --color-bg-sidebar: #2a2a2a;
+  --color-sidebar-muted: #a2a3a5;
   --color-bg-card: #242424;
   --color-bg-card-nested: #2a2a2a;
   --color-text-primary: #f0f0f0;
   --color-text-secondary: #a2a3a5;
-  --color-text-muted: #757575;
+  --color-text-muted: #8a8b8d;
   --color-border: #414141;
   --color-border-light: #2a2a2a;
   --color-accent: #2e78ff;
@@ -58,6 +62,25 @@
 
 html {
   scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+
+  /* Spinners are the only signal that a request on a flaky link is still alive.
+     Freezing them into a static ring is worse than the motion they cost. */
+  .animate-spin {
+    animation-duration: 1s !important;
+  }
 }
 
 body {

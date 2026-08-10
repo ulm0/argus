@@ -1,6 +1,8 @@
 import type {
   AppStatus,
   APConfig,
+  ArchiveConfigPublic,
+  ArchiveStatus,
   APStatus,
   BluetoothDevice,
   BluetoothStatus,
@@ -80,14 +82,54 @@ function notifyUnauthorized() {
   }
 }
 
+// Requests are bounded so a Pi that stops answering mid-request surfaces as an
+// error instead of a spinner that never resolves. Uploads get a much longer
+// budget — writing tens of MB to a USB-backed loop image on a Pi Zero is slow
+// but legitimate.
+const REQUEST_TIMEOUT_MS = 15_000;
+const UPLOAD_TIMEOUT_MS = 120_000;
+// SLOW_TIMEOUT_MS covers the handful of endpoints that do real work synchronously
+// before answering — a mode switch unmounts, tears down loops and rebinds the USB
+// gadget; cleanup deletes hundreds of directories; fsck and Samba restarts shell
+// out. Timing those out at 15s would report "device not responding" for an
+// operation that is still running and about to succeed.
+const SLOW_TIMEOUT_MS = 180_000;
+
+// UNREACHABLE_STATUS marks an ApiError that never reached the server (timeout,
+// DNS failure, link dropped). Callers can tell it apart from a real HTTP error.
+export const UNREACHABLE_STATUS = 0;
+
+// toApiError normalises a fetch rejection. A timeout, an abort, or a TypeError
+// (the shape fetch uses for every network-layer failure) all mean the same
+// thing to the user: the device did not answer.
+function toApiError(err: unknown): ApiError {
+  if (err instanceof ApiError) return err;
+  if (
+    (err instanceof DOMException &&
+      (err.name === "TimeoutError" || err.name === "AbortError")) ||
+    err instanceof TypeError
+  ) {
+    return new ApiError(UNREACHABLE_STATUS, "Device not responding");
+  }
+  return new ApiError(UNREACHABLE_STATUS, err instanceof Error ? err.message : "Request failed");
+}
+
 async function request<T>(
   url: string,
   options?: RequestInit,
 ): Promise<T> {
-  const res = await fetch(url, {
-    headers: { "Content-Type": "application/json", ...options?.headers },
-    ...options,
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      ...options,
+      // After the spread so an explicit caller signal wins, but an absent one
+      // still gets a deadline.
+      signal: options?.signal ?? AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw toApiError(err);
+  }
 
   if (!res.ok) {
     if (res.status === 401) notifyUnauthorized();
@@ -111,8 +153,27 @@ async function post<T>(url: string, body?: unknown): Promise<T> {
   });
 }
 
-async function postForm<T>(url: string, form: FormData): Promise<T> {
-  const res = await fetch(url, { method: "POST", body: form });
+// postSlow is post() with the long deadline, for the endpoints that block on
+// real device work rather than returning a job handle.
+async function postSlow<T>(url: string, body?: unknown): Promise<T> {
+  return request<T>(url, {
+    method: "POST",
+    body: body != null ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(SLOW_TIMEOUT_MS),
+  });
+}
+
+async function postForm<T>(url: string, form: FormData, signal?: AbortSignal): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      body: form,
+      signal: signal ?? AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw toApiError(err);
+  }
   if (!res.ok) {
     if (res.status === 401) notifyUnauthorized();
     let msg = res.statusText;
@@ -158,11 +219,11 @@ export function getStatus(): Promise<AppStatus> {
 }
 
 export function switchToPresent(): Promise<StatusResponse> {
-  return post<StatusResponse>("/api/present");
+  return postSlow<StatusResponse>("/api/present");
 }
 
 export function switchToEdit(): Promise<StatusResponse> {
-  return post<StatusResponse>("/api/edit");
+  return postSlow<StatusResponse>("/api/edit");
 }
 
 export function getGadgetState(): Promise<GadgetState> {
@@ -170,7 +231,7 @@ export function getGadgetState(): Promise<GadgetState> {
 }
 
 export function recoverGadget(): Promise<StatusResponse> {
-  return post<StatusResponse>("/api/gadget/recover");
+  return postSlow<StatusResponse>("/api/gadget/recover");
 }
 
 export function getOperationStatus(): Promise<OperationStatus> {
@@ -181,21 +242,30 @@ export function getOperationStatus(): Promise<OperationStatus> {
 // Videos
 // ──────────────────────────────────────────────
 
-export function getVideos(folder?: string, page = 0, perPage = 20, mode?: "sessions"): Promise<VideoListResponse | VideoEventsResponse | VideoSessionsResponse> {
+export function getVideos(
+  folder?: string,
+  page = 0,
+  perPage = 20,
+  mode?: "sessions",
+  // before is a YYYY-MM-DD date; the server drops events newer than it so the
+  // list can jump straight to a day instead of scrolling through months.
+  before?: string,
+): Promise<VideoListResponse | VideoEventsResponse | VideoSessionsResponse> {
   const params = new URLSearchParams();
   if (folder) params.set("folder", folder);
   if (page) params.set("page", String(page));
   if (perPage !== 20) params.set("per_page", String(perPage));
   if (mode) params.set("mode", mode);
+  if (before) params.set("before", before);
   return request(`/api/videos?${params}`);
 }
 
 export function getEvent(folder: string, event: string): Promise<VideoEvent> {
-  return request<VideoEvent>(`/api/videos/${encodeURIComponent(folder)}/${encodeURIComponent(event)}`);
+  return request<VideoEvent>(`/api/videos/${encodePath(folder)}/${encodeURIComponent(event)}`);
 }
 
 export function getSessionDetail(folder: string, session: string): Promise<VideoEvent> {
-  return request<VideoEvent>(`/api/videos/session-detail/${encodeURIComponent(folder)}/${encodeURIComponent(session)}`);
+  return request<VideoEvent>(`/api/videos/session-detail/${encodePath(folder)}/${encodeURIComponent(session)}`);
 }
 
 export function streamURL(relativePath: string): string {
@@ -215,7 +285,7 @@ export function telemetryURL(relativePath: string): string {
 }
 
 export function downloadEventURL(folder: string, event: string): string {
-  return `/api/videos/download-event/${encodeURIComponent(folder)}/${encodeURIComponent(event)}`;
+  return `/api/videos/download-event/${encodePath(folder)}/${encodeURIComponent(event)}`;
 }
 
 export function thumbnailURL(folder: string, event: string, camera?: string, w?: number, h?: number): string {
@@ -224,11 +294,23 @@ export function thumbnailURL(folder: string, event: string, camera?: string, w?:
   if (w) params.set("w", String(w));
   if (h) params.set("h", String(h));
   const qs = params.toString();
-  return `/api/videos/thumbnail/${encodeURIComponent(folder)}/${encodeURIComponent(event)}${qs ? `?${qs}` : ""}`;
+  return `/api/videos/thumbnail/${encodePath(folder)}/${encodeURIComponent(event)}${qs ? `?${qs}` : ""}`;
 }
 
 export function deleteEvent(folder: string, event: string): Promise<StatusResponse> {
-  return post<StatusResponse>(`/api/videos/delete/${encodeURIComponent(folder)}/${encodeURIComponent(event)}`);
+  return post<StatusResponse>(`/api/videos/delete/${encodePath(folder)}/${encodeURIComponent(event)}`);
+}
+
+// keepEvent toggles the `.argus-keep` marker that excludes an event from cleanup.
+export function keepEvent(folder: string, event: string): Promise<{ kept: boolean }> {
+  return post<{ kept: boolean }>(`/api/videos/keep/${encodePath(folder)}/${encodeURIComponent(event)}`);
+}
+
+// exportURL trims a single camera file to [start, end] seconds server-side and
+// returns it as a downloadable MP4 — the shareable form of "here's the moment".
+export function exportURL(relativePath: string, start: number, end: number): string {
+  const params = new URLSearchParams({ start: start.toFixed(2), end: end.toFixed(2) });
+  return `/api/videos/export/${encodePath(relativePath)}?${params}`;
 }
 
 // ──────────────────────────────────────────────
@@ -274,6 +356,10 @@ export function playActiveChimeURL(): string {
 // ──────────────────────────────────────────────
 // Chime Scheduler
 // ──────────────────────────────────────────────
+
+export function listSchedules(): Promise<{ schedules: Schedule[] | null }> {
+  return request<{ schedules: Schedule[] | null }>("/api/chimes/schedules");
+}
 
 export function addSchedule(schedule: Omit<Schedule, "id">): Promise<StatusResponse> {
   return post<StatusResponse>("/api/chimes/schedule/add", schedule);
@@ -325,6 +411,28 @@ export function removeChimeFromGroup(groupId: string, filename: string): Promise
 
 export function setRandomMode(enabled: boolean, groupId: string): Promise<StatusResponse> {
   return post<StatusResponse>("/api/chimes/groups/random-mode", { enabled, group_id: groupId });
+}
+
+// ──────────────────────────────────────────────
+// Boombox (custom sounds, same partition/pipeline as chimes)
+// ──────────────────────────────────────────────
+
+export function getBoombox(): Promise<{ sounds: string[] | null; max_playable: number }> {
+  return request<{ sounds: string[] | null; max_playable: number }>("/api/boombox");
+}
+
+export function uploadBoombox(file: File): Promise<StatusResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  return postForm<StatusResponse>("/api/boombox/upload", form);
+}
+
+export function deleteBoombox(filename: string): Promise<StatusResponse> {
+  return post<StatusResponse>(`/api/boombox/delete/${encodeURIComponent(filename)}`);
+}
+
+export function playBoomboxURL(filename: string): string {
+  return `/api/boombox/play/${encodeURIComponent(filename)}`;
 }
 
 // ──────────────────────────────────────────────
@@ -467,7 +575,7 @@ export function getPreview(): Promise<CleanupPreviewResponse> {
 }
 
 export function executeCleanup(dryRun = false): Promise<CleanupReport> {
-  return post<CleanupReport>("/api/cleanup/execute", { dry_run: dryRun });
+  return postSlow<CleanupReport>("/api/cleanup/execute", { dry_run: dryRun });
 }
 
 // ──────────────────────────────────────────────
@@ -478,7 +586,7 @@ export function startFsck(partitions?: string[], mode?: FsckMode): Promise<Statu
   const body: { partitions?: string[]; mode?: FsckMode } = {};
   if (partitions && partitions.length > 0) body.partitions = partitions;
   if (mode) body.mode = mode;
-  return post<StatusResponse>("/api/fsck/start", body);
+  return postSlow<StatusResponse>("/api/fsck/start", body);
 }
 
 export function getFsckStatus(): Promise<FsckStatus> {
@@ -506,7 +614,7 @@ export function getAPStatus(): Promise<APStatus> {
 }
 
 export function forceAP(mode: "auto" | "on" | "off"): Promise<StatusResponse> {
-  return post<StatusResponse>("/api/ap/force", { mode });
+  return postSlow<StatusResponse>("/api/ap/force", { mode });
 }
 
 export function configureAP(config: Partial<APConfig>): Promise<{ status: string; config: APConfig }> {
@@ -570,7 +678,7 @@ export function scanWifi(): Promise<WifiScanResponse> {
 }
 
 export function configureWifi(ssid: string, password: string): Promise<StatusResponse> {
-  return post<StatusResponse>("/api/wifi/configure", { ssid, password });
+  return postSlow<StatusResponse>("/api/wifi/configure", { ssid, password });
 }
 
 export function dismissWifiStatus(): Promise<StatusResponse> {
@@ -612,7 +720,19 @@ export function configureTelegram(
 }
 
 export function testTelegram(): Promise<StatusResponse> {
-  return post<StatusResponse>("/api/telegram/test");
+  return postSlow<StatusResponse>("/api/telegram/test");
+}
+
+// ──────────────────────────────────────────────
+// Archive
+// ──────────────────────────────────────────────
+
+export function getArchiveStatus(): Promise<ArchiveStatus> {
+  return request<ArchiveStatus>("/api/archive/status");
+}
+
+export function runArchive(): Promise<StatusResponse> {
+  return post<StatusResponse>("/api/archive/run");
 }
 
 // ──────────────────────────────────────────────
@@ -651,11 +771,11 @@ export function setSambaEnabled(enabled: boolean): Promise<{ enabled: boolean }>
 }
 
 export function restartSamba(): Promise<StatusResponse> {
-  return post<StatusResponse>("/api/samba/restart");
+  return postSlow<StatusResponse>("/api/samba/restart");
 }
 
 export function regenerateSambaConfig(): Promise<StatusResponse> {
-  return post<StatusResponse>("/api/samba/regenerate");
+  return postSlow<StatusResponse>("/api/samba/regenerate");
 }
 
 export { ApiError };
@@ -668,14 +788,28 @@ export function getConfig(): Promise<ConfigResponse> {
   return request<ConfigResponse>("/api/config");
 }
 
+// The PATCH body is not the mirror of the GET response for the sections that
+// hold secrets: the server never returns the Telegram bot token or the AP
+// passphrase, but it does accept them. Spell those two out rather than deriving
+// them from the read shapes.
+type TelegramPatch = Omit<Partial<TelegramConfigPublic>, "bot_token_set"> & {
+  bot_token?: string;
+};
+
+type OfflineAPPatch = Partial<OfflineAPPublic> & { passphrase?: string };
+
+type AuthPatch = { enabled?: boolean; username?: string; password?: string };
+
 type ConfigPatch = {
+  archive?: Partial<ArchiveConfigPublic>;
   network?: Partial<NetworkConfigPublic>;
-  offline_ap?: Partial<OfflineAPPublic>;
+  offline_ap?: OfflineAPPatch;
   web?: Partial<WebConfigPublic>;
-  telegram?: Partial<TelegramConfigPublic>;
+  telegram?: TelegramPatch;
   update?: Partial<UpdateConfigPublic>;
   startup?: Partial<StartupConfigPublic>;
   viewer_prefs?: Partial<ViewerPrefsConfigPublic>;
+  auth?: AuthPatch;
   log_level?: string;
 };
 

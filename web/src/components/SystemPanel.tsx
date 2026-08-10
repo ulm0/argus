@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import * as api from "@/lib/api";
+import PowerControls from "@/components/PowerControls";
+import { EDIT_MODE_CONFIRM } from "@/components/EditModeBanner";
+import { useToast } from "@/components/Toast";
 import type {
   AppStatus,
   APStatus,
@@ -39,7 +42,7 @@ function ModeBadge({ mode, label }: { mode: ModeToken; label: string }) {
 //   -65 .. -75 → 2 bars, yellow  (fair)
 //   -75 .. -85 → 1 bar,  red     (weak)
 //   < -85      → 0 bars, red     (no usable signal)
-function SignalStrength({ rssi }: { rssi: number }) {
+export function SignalStrength({ rssi }: { rssi: number }) {
   let bars: number;
   let color: string;
   if (rssi >= -55) {
@@ -78,7 +81,7 @@ function SignalStrength({ rssi }: { rssi: number }) {
   );
 }
 
-function StatusBadge({ active, activeLabel, inactiveLabel }: { active: boolean; activeLabel: string; inactiveLabel: string }) {
+export function StatusBadge({ active, activeLabel, inactiveLabel }: { active: boolean; activeLabel: string; inactiveLabel: string }) {
   return (
     <span
       className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-semibold ${
@@ -101,9 +104,13 @@ export default function SystemPanel() {
   const [telegram, setTelegram] = useState<TelegramStatus | null>(null);
   const [samba, setSamba] = useState<SambaStatus | null>(null);
   const [switching, setSwitching] = useState(false);
-  const [powerAction, setPowerAction] = useState<"reboot" | "poweroff" | null>(null);
+  // Two consecutive all-failed polls means everything on screen is older than
+  // two poll intervals — derived from the polling already in place.
+  const [failedPolls, setFailedPolls] = useState(0);
+  const { showToast } = useToast();
 
   const loadAll = useCallback(async () => {
+    if (document.hidden) return;
     const results = await Promise.allSettled([
       api.getStatus(),
       api.getAPStatus(),
@@ -118,6 +125,7 @@ export default function SystemPanel() {
     if (results[3].status === "fulfilled") setGadget(results[3].value);
     if (results[4].status === "fulfilled") setTelegram(results[4].value);
     if (results[5].status === "fulfilled") setSamba(results[5].value);
+    setFailedPolls((n) => (results.some((r) => r.status === "fulfilled") ? 0 : n + 1));
   }, []);
 
   useEffect(() => {
@@ -139,57 +147,52 @@ export default function SystemPanel() {
       }
     };
 
+    // Returning to a backgrounded tab must show fresh data, not whatever was on
+    // screen when it was hidden (loadAll no-ops while hidden).
+    const onVisibility = () => {
+      if (!document.hidden && mql.matches) loadAll();
+    };
+
     sync();
     mql.addEventListener("change", sync);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       mql.removeEventListener("change", sync);
+      document.removeEventListener("visibilitychange", onVisibility);
       if (id !== null) clearInterval(id);
     };
   }, [loadAll]);
 
   const handleModeSwitch = async (mode: "present" | "edit") => {
+    if (mode === "edit" && !confirm(EDIT_MODE_CONFIRM)) return;
     setSwitching(true);
     try {
       if (mode === "present") await api.switchToPresent();
       else await api.switchToEdit();
       const s = await api.getStatus();
       setStatus(s);
-    } catch {
-      // silently ignore
+    } catch (e) {
+      // A silent failure leaves the badge showing a mode the device is not in —
+      // the user drives off believing Sentry is recording.
+      showToast(e instanceof Error ? e.message : "Mode switch failed", false);
     } finally {
       setSwitching(false);
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await api.logout();
-    } catch {
-      /* ignore — we reload regardless */
-    }
-    // Reload so AuthGate re-evaluates auth status (shows login if enabled).
-    window.location.reload();
-  };
-
-  const handlePower = async (action: "reboot" | "poweroff") => {
-    const verb = action === "reboot" ? "reboot" : "shut down";
-    if (!confirm(`Are you sure you want to ${verb} the device?`)) return;
-    setPowerAction(action);
-    try {
-      if (action === "reboot") await api.rebootSystem();
-      else await api.powerOffSystem();
-    } catch {
-      // The request will be cut off as the host goes down — that's expected.
-      // Anything truly fatal will surface when the user reloads the page.
     }
   };
 
   return (
     <aside className="hidden w-72 shrink-0 overflow-y-auto border-l border-[var(--color-border)] bg-[var(--color-bg-primary)] xl:block">
       <div className="p-5">
-        <h2 className="text-xs font-semibold tracking-wider text-[var(--color-text-muted)]">
-          System Status
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-semibold tracking-wider text-[var(--color-text-muted)]">
+            System Status
+          </h2>
+          {failedPolls >= 2 && (
+            <span className="rounded bg-[var(--color-warning-bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--color-warning)]">
+              Data stale
+            </span>
+          )}
+        </div>
 
         {/* Mode */}
         <div className="mt-5 rounded bg-[var(--color-bg-card-nested)] p-4">
@@ -223,6 +226,9 @@ export default function SystemPanel() {
               {switching ? "..." : "Edit"}
             </button>
           </div>
+          <p className="mt-2 text-[10px] text-[var(--color-text-muted)]">
+            Present: car records · Edit: manage files
+          </p>
         </div>
 
         {/* Hostname */}
@@ -339,28 +345,7 @@ export default function SystemPanel() {
           <span className="text-xs font-medium tracking-wider text-[var(--color-text-muted)]">
             Power
           </span>
-          <div className="mt-3 flex gap-2">
-            <button
-              onClick={() => handlePower("reboot")}
-              disabled={powerAction !== null}
-              className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-warning)] hover:text-[var(--color-warning)] disabled:opacity-50"
-            >
-              {powerAction === "reboot" ? "Rebooting..." : "Restart"}
-            </button>
-            <button
-              onClick={() => handlePower("poweroff")}
-              disabled={powerAction !== null}
-              className="flex-1 rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-danger)] hover:text-[var(--color-danger)] disabled:opacity-50"
-            >
-              {powerAction === "poweroff" ? "Shutting down..." : "Shut down"}
-            </button>
-          </div>
-          <button
-            onClick={handleLogout}
-            className="mt-2 w-full rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] px-3 py-2 text-xs font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-text-primary)] hover:text-[var(--color-text-primary)]"
-          >
-            Sign out
-          </button>
+          <PowerControls />
         </div>
       </div>
     </aside>

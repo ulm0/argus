@@ -160,6 +160,7 @@ All runtime settings are in `~/.argus/config.yaml`.
 | `telegram` | alerting configuration, video quality, offline queueing |
 | `webhook` | HTTP callback URL and HMAC-SHA256 signing secret |
 | `update` | update strategy and channel |
+| `archive` | automatic copy of clips off the car on a known WiFi network |
 | `viewer_prefs` | speed unit, HUD scale, map scale |
 
 ### Unattended defaults (new setups)
@@ -202,28 +203,49 @@ Some changes take effect on next service restart or reboot.
 ### Video management
 
 - Browse SavedClips, SentryClips, and RecentClips by event
+- **Find an event fast** — jump to a date, filter by trigger reason, and browse
+  secondary archive folders from the same tabs
 - Play videos with multi-camera switching and HTTP range support
+- **Event-wide timeline** — one seek bar across all of an event's 1-minute clips,
+  with clip boundaries and the trigger moment marked
+- **Deep links** — `?clip=&t=` in the URL points at an exact moment
+- **Clip export** — trim an in/out range and download it as a shareable MP4
+- **Pin events** (`.argus-keep`) so cleanup can never delete the clip you need
+- Multi-camera grid view (up to 6 angles, including B-pillar cameras), opt-in so
+  opening an event does not start six streams at once on a Pi Zero
+- Playback speed, frame stepping, and pointer/touch scrubbing
 - Encrypted clip detection (Tesla-locked files displayed distinctly)
 - SEI telemetry extraction — GPS, speed, battery, gear, and more as overlay or JSON
+- Event GPS estimate and triggering camera read from `event.json`
 - HUD overlay and interactive map overlay with configurable scale
 - Download individual video files or full events as ZIP (all cameras + metadata)
 - Per-event thumbnails auto-generated from the first available camera
 - Session grouping for RecentClips
 - Optional secondary archive path for historical TeslaCam data
 
-### Chime management
+### Chime and Boombox management
 
 - Upload, rename, delete, and preview lock chimes
 - Set the active lock chime
-- **Chime scheduling** — weekly, specific date, holiday, or recurring schedules
+- **Chime scheduling** — weekly (with a day picker), specific date, holiday, or recurring schedules
 - **Chime groups** — organize chimes for random selection
 - **Random mode** — randomly pick from a configured group on each event or at boot
+- **Boombox sounds** — manage the `Boombox` folder with the same pipeline; the car
+  offers the first five files alphabetically
 - Duration constraints enforced for Tesla compatibility
 
 ### Lightshow and wraps
 
 - Upload, download, and delete light shows (FSEQ + audio pairs)
+- **Upload validation** — FSEQ v2 header, uncompressed data, 15–100 ms step time,
+  and 44.1 kHz audio, so a bad show fails at upload instead of silently at the car
 - Upload, thumbnail-preview, download, and delete wrap images
+
+### Track Mode
+
+- The root-level `TeslaTrackMode` folder is created at setup and re-checked on every
+  boot, so Performance cars can record lap telemetry. Retrieve the CSVs and lap
+  videos over the Samba share.
 
 ### Music management
 
@@ -241,8 +263,26 @@ Some changes take effect on next service restart or reboot.
 ### Cleanup
 
 - Per-folder retention policies (keep last N events for SavedClips, SentryClips, RecentClips)
-- Dry-run preview before executing
+- Dry-run preview before executing, and a confirmation that states the actual counts
+- Pinned events are always skipped
 - Optional boot-time cleanup
+
+### Archive off the car
+
+Evidence otherwise dies with the car. When enabled, Argus copies event directories to
+a mounted target (a CIFS share, an external drive) whenever it joins a configured WiFi
+network — sequential, resumable, and skipping whatever is already there.
+
+```yaml
+archive:
+  enabled: true
+  ssid: "home-wifi"      # empty means any WiFi connection
+  target_path: /mnt/nas  # must already be mounted
+  include_recent: false  # also copy RecentClips, which Tesla rotates hourly
+```
+
+Configure it from **Settings → Archive**, which also shows the last run, the last
+error, and a **Sync now** button.
 
 ### Networking and connectivity
 
@@ -266,7 +306,21 @@ Some changes take effect on next service restart or reboot.
 
 ### System power
 
-- Reboot and power off from the web UI
+- Reboot and power off from the web UI, on any screen size, with a confirmation
+  that says shutting down means physically re-powering the device
+
+### Phone-first UI
+
+The device lives in a car, so the console is designed to be driven from a phone:
+
+- USB mode, power, sign-out, WiFi/AP signal and USB-gadget bind state are reachable
+  at every breakpoint, not just on a desktop
+- A **device unreachable** banner replaces silently stale data when the link drops,
+  and every request is timeout-bounded
+- Actions that can cut your own connection — switching to Edit mode, connecting the
+  Pi to WiFi, forcing the hotspot off — say so before they run
+- Sentry alerts persist and link straight to the clip
+- Touch-sized controls, keyboard operability, and live regions for async status
 
 ### Updates
 
@@ -277,7 +331,8 @@ Some changes take effect on next service restart or reboot.
 ### Real-time features
 
 - Server-Sent Events (SSE) for live log streaming and Sentry event notifications
-- System metrics dashboard with periodic polling
+- Log viewer with real journal priorities, kernel ring buffer, filtering, and export
+- System metrics dashboard with polling that pauses while the tab is hidden
 
 ### Display preferences (server-persisted)
 

@@ -5,6 +5,7 @@ import AuthGate from "@/components/AuthGate";
 import Sidebar from "@/components/Sidebar";
 import SystemPanel from "@/components/SystemPanel";
 import SentryAlert from "@/components/SentryAlert";
+import { ToastProvider } from "@/components/Toast";
 import "./globals.css";
 
 const inter = Inter({
@@ -22,6 +23,9 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  // Required for env(safe-area-inset-*) to resolve, so fixed-position toasts and
+  // alerts clear the home indicator on notched phones.
+  viewportFit: "cover",
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#fafafa" },
     { media: "(prefers-color-scheme: dark)", color: "#171717" },
@@ -45,10 +49,14 @@ export default function RootLayout({
       <body className="flex h-screen overflow-hidden bg-[var(--color-bg-secondary)] text-[var(--color-text-primary)] font-[family-name:var(--font-inter)]">
         <ThemeProvider>
           <AuthGate>
-            <Sidebar />
-            <main className="flex-1 overflow-y-auto">{children}</main>
-            <SystemPanel />
-            <SentryAlert />
+            <ToastProvider>
+              <Sidebar />
+              {/* pt-16 clears Sidebar's fixed hamburger, which otherwise sits on
+                  every page's <h1> below lg. */}
+              <main className="flex-1 overflow-y-auto pt-16 lg:pt-0">{children}</main>
+              <SystemPanel />
+              <SentryAlert />
+            </ToastProvider>
           </AuthGate>
         </ThemeProvider>
       </body>

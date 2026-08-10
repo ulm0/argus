@@ -239,9 +239,5 @@ func (h *LightshowHandler) resolveMountPath(partition string) string {
 }
 
 func (h *LightshowHandler) editMountPath(partition string) string {
-	path := h.cfg.MountPath(partition, false)
-	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		return path
-	}
-	return ""
+	return editMountPath(h.cfg, partition)
 }

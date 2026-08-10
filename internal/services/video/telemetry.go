@@ -1,6 +1,7 @@
 package video
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -38,9 +39,25 @@ type TelemetryFrame struct {
 	Sei  *SeiTelemetry `json:"sei"`
 }
 
+// telemetrySem caps concurrent telemetry parses. Each one walks a whole MP4, and
+// the player fetches telemetry per clip, so dragging the event-wide seek bar
+// across N clip boundaries would otherwise fork N full parses at once — on a
+// single-core Pi that is the entire CPU.
+// ponytail: single global slot; raise to 2 only if telemetry latency measurably drags.
+var telemetrySem = make(chan struct{}, 1)
+
 // ExtractTelemetry parses Tesla SEI NAL units from an MP4 file and writes JSON.
 // Only frames with non-nil SEI are emitted, keeping the response small (~5-15 KB).
-func (s *Service) ExtractTelemetry(w http.ResponseWriter, videoPath string) {
+func (s *Service) ExtractTelemetry(ctx context.Context, w http.ResponseWriter, videoPath string) {
+	// Queue for a slot, but drop out if the client already gave up: a request
+	// nobody is waiting on must not still cost a full-file parse.
+	select {
+	case telemetrySem <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
+	defer func() { <-telemetrySem }()
+
 	f, err := os.Open(videoPath)
 	if err != nil {
 		http.Error(w, `{"error":"video not found"}`, http.StatusNotFound)
@@ -48,8 +65,11 @@ func (s *Service) ExtractTelemetry(w http.ResponseWriter, videoPath string) {
 	}
 	defer f.Close()
 
-	frames, err := parseTelemetryFrames(f)
+	frames, err := parseTelemetryFrames(ctx, f)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		http.Error(w, `{"error":"telemetry extraction failed"}`, http.StatusInternalServerError)
 		return
 	}
@@ -71,7 +91,7 @@ func (s *Service) ExtractTelemetry(w http.ResponseWriter, videoPath string) {
 
 // ── MP4 parsing ──────────────────────────────────────────────────────────────
 
-func parseTelemetryFrames(f *os.File) ([]TelemetryFrame, error) {
+func parseTelemetryFrames(ctx context.Context, f *os.File) ([]TelemetryFrame, error) {
 	fi, err := f.Stat()
 	if err != nil {
 		return nil, err
@@ -145,7 +165,7 @@ func parseTelemetryFrames(f *os.File) ([]TelemetryFrame, error) {
 	if _, err := f.Seek(mdatRef.dataStart, io.SeekStart); err != nil {
 		return nil, err
 	}
-	return streamMdat(f, mdatRef.dataSize, durations)
+	return streamMdat(ctx, f, mdatRef.dataSize, durations)
 }
 
 // parseMoov extracts the video timescale and per-frame durations (in ms) from moov bytes.
@@ -257,7 +277,7 @@ func findBox(buf []byte, start, end int, name string) (dataStart, dataEnd int, o
 
 // streamMdat reads NAL units from the mdat stream and builds TelemetryFrames.
 // Uses O(1) memory for individual NAL reads; SEI payloads are typically < 1 KB.
-func streamMdat(f *os.File, mdatSize int64, durations []float64) ([]TelemetryFrame, error) {
+func streamMdat(ctx context.Context, f *os.File, mdatSize int64, durations []float64) ([]TelemetryFrame, error) {
 	var frames []TelemetryFrame
 	frameIdx := 0
 	timeMs := 0.0
@@ -266,7 +286,13 @@ func streamMdat(f *os.File, mdatSize int64, durations []float64) ([]TelemetryFra
 	lenBuf := make([]byte, 4)
 	bytesLeft := mdatSize
 
-	for bytesLeft >= 5 {
+	for nal := 0; bytesLeft >= 5; nal++ {
+		// This loop is the expensive half of the parse, so a disconnected client
+		// has to be able to stop it. Checked every 256 NALs to keep the check off
+		// the hot path.
+		if nal&0xff == 0 && ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if _, err := io.ReadFull(f, lenBuf); err != nil {
 			break
 		}

@@ -20,6 +20,7 @@ import (
 	"github.com/ulm0/argus/internal/boot"
 	"github.com/ulm0/argus/internal/config"
 	"github.com/ulm0/argus/internal/logger"
+	"github.com/ulm0/argus/internal/services/archive"
 	"github.com/ulm0/argus/internal/services/chime"
 	"github.com/ulm0/argus/internal/services/mode"
 	"github.com/ulm0/argus/internal/services/telegram"
@@ -120,7 +121,10 @@ func NewRunCmd(webContent *embed.FS) *cobra.Command {
 				}
 			}()
 
-			router := api.NewRouter(cfg, webFS, tgSvc, sentryEventsH, webhookSvc, apMgr, chSvc)
+			archiveSvc := archive.NewService(cfg)
+			archiveSvc.Start(runCtx)
+
+			router := api.NewRouter(cfg, webFS, tgSvc, sentryEventsH, webhookSvc, apMgr, chSvc, archiveSvc)
 
 			addr := fmt.Sprintf(":%d", cfg.Network.WebPort)
 			server := &http.Server{
