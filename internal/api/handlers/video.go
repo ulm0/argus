@@ -25,6 +25,21 @@ type thumbFlight struct {
 	err  error
 }
 
+// isSafePathToken validates a single path component intended for file names.
+// It rejects separators, traversal markers, and non [A-Za-z0-9_-] characters.
+func isSafePathToken(s string) bool {
+	if s == "" || strings.Contains(s, "/") || strings.Contains(s, "\\") || strings.Contains(s, "..") {
+		return false
+	}
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 var thumbFlights sync.Map // key: thumbPath → *thumbFlight
 
 // thumbSem caps concurrent ffmpeg thumbnail processes. A cold list page makes
@@ -380,6 +395,10 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 	}
 	if videoFile == "" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no unencrypted video available for thumbnail"})
+		return
+	}
+	if !isSafePathToken(camera) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid camera"})
 		return
 	}
 
