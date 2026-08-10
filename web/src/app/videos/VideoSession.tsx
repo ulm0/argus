@@ -56,7 +56,7 @@ export default function VideoSessionPage({ folder, session }: Props) {
         </a>
         <span>/</span>
         <a
-          href={`/videos/${encodeURIComponent(folder)}`}
+          href={`/videos/${folder.split("/").map(encodeURIComponent).join("/")}`}
           className="hover:text-[var(--color-text-primary)] transition-colors"
         >
           {folder}
@@ -85,6 +85,7 @@ export default function VideoSessionPage({ folder, session }: Props) {
           event={details}
           streamUrlFn={(file) => api.streamURL(`${folder}/${file}`)}
           telemetryUrlFn={(file) => api.telemetryURL(`${folder}/${file}`)}
+          downloadUrlFn={(file) => api.downloadURL(`${folder}/${file}`)}
         />
       </div>
     </div>

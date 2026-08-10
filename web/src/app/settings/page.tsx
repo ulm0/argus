@@ -3,7 +3,8 @@
 import { useEffect, useState, useCallback } from "react";
 import type React from "react";
 import * as api from "@/lib/api";
-import type { ConfigResponse, APStatus, WifiStatus, WifiNetwork, SavedWifiNetwork, BluetoothStatus, BluetoothDevice, TelegramStatus, SambaStatus } from "@/lib/types";
+import type { ArchiveStatus, ConfigResponse, APStatus, UpdateStatus, WifiStatus, WifiNetwork, SavedWifiNetwork, BluetoothStatus, BluetoothDevice, TelegramStatus, SambaStatus } from "@/lib/types";
+import { useToast } from "@/components/Toast";
 import { useSpeedUnit } from "@/lib/useSpeedUnit";
 import type { SpeedUnit } from "@/lib/useSpeedUnit";
 import { useMapTheme } from "@/lib/useMapTheme";
@@ -50,7 +51,7 @@ export default function SettingsPage() {
   const [cfg, setCfg] = useState<ConfigResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const { showToast } = useToast();
 
   // Editable states — Web
   const [webMaxChimeSize, setWebMaxChimeSize] = useState(0);
@@ -68,6 +69,14 @@ export default function SettingsPage() {
   // Editable states — Update
   const [updateAuto, setUpdateAuto] = useState(false);
   const [updateCheckOnStartup, setUpdateCheckOnStartup] = useState(true);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+
+  // Editable states — Archive (copy clips off the car onto a home NAS/disk)
+  const [archiveEnabled, setArchiveEnabled] = useState(false);
+  const [archiveSSID, setArchiveSSID] = useState("");
+  const [archivePath, setArchivePath] = useState("");
+  const [archiveIncludeRecent, setArchiveIncludeRecent] = useState(false);
+  const [archiveStatus, setArchiveStatus] = useState<ArchiveStatus | null>(null);
 
   // Editable states — Startup & reliability
   const [bootPresentOnStart, setBootPresentOnStart] = useState(false);
@@ -83,6 +92,9 @@ export default function SettingsPage() {
   const [webhookEnabled, setWebhookEnabled] = useState(false);
   const [webhookURL, setWebhookURL] = useState("");
   const [webhookSecret, setWebhookSecret] = useState("");
+  // A failed load leaves the form showing disabled/empty defaults; saving those
+  // would wipe a working webhook, so the section stays locked until it loads.
+  const [webhookLoaded, setWebhookLoaded] = useState(false);
 
   // Network — AP basic
   const [apStatus, setApStatus] = useState<APStatus | null>(null);
@@ -95,6 +107,7 @@ export default function SettingsPage() {
   const [wifiNetworks, setWifiNetworks] = useState<WifiNetwork[]>([]);
   const [wifiSSID, setWifiSSID] = useState("");
   const [wifiPass, setWifiPass] = useState("");
+  const [wifiNotice, setWifiNotice] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [savedWifi, setSavedWifi] = useState<SavedWifiNetwork[]>([]);
   const [btStatus, setBtStatus] = useState<BluetoothStatus | null>(null);
@@ -107,6 +120,7 @@ export default function SettingsPage() {
   const [tgChatID, setTgChatID] = useState("");
   const [tgOffline, setTgOffline] = useState("queue");
   const [tgQuality, setTgQuality] = useState("hd");
+  const [telegramLoaded, setTelegramLoaded] = useState(false);
 
   // File sharing — Samba
   const [sambaStatus, setSambaStatus] = useState<SambaStatus | null>(null);
@@ -125,27 +139,42 @@ export default function SettingsPage() {
   const [apPingTarget, setApPingTarget] = useState("");
   const [apRetrySeconds, setApRetrySeconds] = useState(0);
 
-  const showToast = useCallback((msg: string, ok = true) => {
-    setToast({ msg, ok });
-    setTimeout(() => setToast(null), 3000);
-  }, []);
-
   const loadWebhook = useCallback(async () => {
     try {
       const data = await api.getWebhookStatus();
       setWebhookEnabled(data.enabled);
       setWebhookURL(data.url);
+      setWebhookLoaded(true);
+    } catch {
+      setWebhookLoaded(false);
+    }
+  }, []);
+
+  const loadTelegram = useCallback(async () => {
+    try {
+      const tg = await api.getTelegramStatus();
+      setTelegramStatus(tg);
+      // Round-trip the chat ID so saving another field cannot blank it.
+      setTgChatID(tg.chat_id ?? "");
+      setTelegramLoaded(true);
+    } catch {
+      setTelegramLoaded(false);
+    }
+  }, []);
+
+  const loadArchiveStatus = useCallback(async () => {
+    try {
+      setArchiveStatus(await api.getArchiveStatus());
     } catch {}
   }, []);
 
   const loadNetwork = useCallback(async () => {
-    const [ap, wifi, saved, bt, btDev, tg, smb] = await Promise.allSettled([
+    const [ap, wifi, saved, bt, btDev, smb] = await Promise.allSettled([
       api.getAPStatus(),
       api.getWifiStatus(),
       api.getSavedWifi(),
       api.getBluetoothStatus(),
       api.getBluetoothDevices(),
-      api.getTelegramStatus(),
       api.getSambaStatus(),
     ]);
     if (ap.status === "fulfilled") {
@@ -159,9 +188,17 @@ export default function SettingsPage() {
     if (saved.status === "fulfilled") setSavedWifi(saved.value.networks || []);
     if (bt.status === "fulfilled") setBtStatus(bt.value);
     if (btDev.status === "fulfilled") setBtDevices(btDev.value.devices || []);
-    if (tg.status === "fulfilled") setTelegramStatus(tg.value);
     if (smb.status === "fulfilled") setSambaStatus(smb.value);
   }, []);
+
+  const dismissWifiChange = useCallback(async () => {
+    try {
+      await api.dismissWifiStatus();
+      setWifiStatus(await api.getWifiStatus());
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    }
+  }, [showToast]);
 
   const refreshSavedWifi = useCallback(async () => {
     try {
@@ -296,6 +333,14 @@ export default function SettingsPage() {
       setWebMaxChunk(data.web.max_upload_chunk_mb);
       setUpdateAuto(data.update.auto_update);
       setUpdateCheckOnStartup(data.update.check_on_startup);
+      setArchiveEnabled(data.archive.enabled);
+      setArchiveSSID(data.archive.ssid);
+      setArchivePath(data.archive.target_path);
+      setArchiveIncludeRecent(data.archive.include_recent);
+      // Seeded from the server so saving the Telegram card cannot overwrite
+      // these two with the component's "queue"/"hd" defaults.
+      setTgOffline(data.telegram.offline_mode || "queue");
+      setTgQuality(data.telegram.video_quality || "hd");
       setBootPresentOnStart(data.startup.boot_present_on_start);
       setBootBlockUntilReady(data.startup.boot_block_until_ready);
       setBootCleanupOnStart(data.startup.boot_cleanup_on_start);
@@ -348,6 +393,17 @@ export default function SettingsPage() {
   }, [apSSID, apPass, showToast]);
 
   const forceAP = useCallback(async (mode: "auto" | "on" | "off") => {
+    // "Always off" sits one tap from "Always on" and can cut the only link the
+    // user is browsing over, with no way back short of physical access.
+    if (
+      mode === "off" &&
+      apStatus?.active &&
+      !confirm(
+        "The hotspot will stop now and will NOT come back when Wi-Fi drops. If you are connected through it, you will be disconnected.",
+      )
+    ) {
+      return;
+    }
     try {
       await api.forceAP(mode);
       showToast(`AP mode: ${mode}`);
@@ -355,7 +411,7 @@ export default function SettingsPage() {
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Failed", false);
     }
-  }, [showToast]);
+  }, [showToast, apStatus]);
 
   const toggleShareInternet = useCallback(async (enabled: boolean) => {
     try {
@@ -368,18 +424,34 @@ export default function SettingsPage() {
   }, [showToast]);
 
   const connectWifi = useCallback(async () => {
+    if (
+      apStatus?.active &&
+      !confirm(
+        `Your phone will lose this connection while the Pi joins ${wifiSSID}. Reconnect to the hotspot or to that network afterwards.`,
+      )
+    ) {
+      return;
+    }
     setSaving("wifi");
+    setWifiPass("");
+    // The Pi joins the network on the same radio that serves this page, so the
+    // response usually never arrives. Say what will happen up front instead of
+    // waiting for a reply that a torn-down link cannot deliver.
+    setWifiNotice(
+      `Joining ${wifiSSID}… the hotspot drops while the Pi switches networks. If this page stops responding, reconnect to the hotspot (or to ${wifiSSID}) and reload — the result is shown at the top of this card.`,
+    );
     try {
       await api.configureWifi(wifiSSID, wifiPass);
-      setWifiPass("");
-      showToast("WiFi configuration saved");
+      // The reply arrived, so this link survived — the warning no longer
+      // applies and the change_status banner reports the real outcome.
+      setWifiNotice(null);
       setWifiStatus(await api.getWifiStatus());
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : "Failed", false);
+    } catch {
+      // A timeout here is the expected outcome, not a failure.
     } finally {
       setSaving(null);
     }
-  }, [wifiSSID, wifiPass, showToast]);
+  }, [wifiSSID, wifiPass, apStatus]);
 
   const scanWifi = useCallback(async () => {
     setScanning(true);
@@ -399,13 +471,50 @@ export default function SettingsPage() {
       await api.configureTelegram(tgBotToken, tgChatID, tgOffline, tgQuality);
       setTgBotToken("");
       showToast("Telegram configuration saved");
-      setTelegramStatus(await api.getTelegramStatus());
+      await loadTelegram();
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Failed", false);
     } finally {
       setSaving(null);
     }
-  }, [tgBotToken, tgChatID, tgOffline, tgQuality, showToast]);
+  }, [tgBotToken, tgChatID, tgOffline, tgQuality, showToast, loadTelegram]);
+
+  // Blank fields mean "keep current" since the save path stopped wiping stored
+  // credentials, so removing them needs the handler's explicit flag. Posted
+  // directly because configureTelegram() takes no flag argument.
+  const clearTelegram = useCallback(async () => {
+    if (!confirm("Clear the stored Telegram bot token and chat ID?")) return;
+    setSaving("telegram-clear");
+    try {
+      const res = await fetch("/api/telegram/configure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clear_credentials: true }),
+      });
+      if (!res.ok) throw new Error("Failed to clear credentials");
+      setTgBotToken("");
+      setTgChatID("");
+      showToast("Telegram credentials cleared");
+      await loadTelegram();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    } finally {
+      setSaving(null);
+    }
+  }, [showToast, loadTelegram]);
+
+  const runArchive = useCallback(async () => {
+    setSaving("archive-run");
+    try {
+      await api.runArchive();
+      showToast("Archive sync started");
+      await loadArchiveStatus();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Failed", false);
+    } finally {
+      setSaving(null);
+    }
+  }, [showToast, loadArchiveStatus]);
 
   const testTelegram = useCallback(async () => {
     try {
@@ -446,11 +555,19 @@ export default function SettingsPage() {
     }
   }, [showToast]);
 
-  useEffect(() => {
+  const reloadAll = useCallback(() => {
+    setLoading(true);
     loadConfig();
     loadWebhook();
+    loadTelegram();
     loadNetwork();
-  }, [loadConfig, loadWebhook, loadNetwork]);
+    loadArchiveStatus();
+    api.getUpdateStatus().then(setUpdateStatus).catch(() => {});
+  }, [loadConfig, loadWebhook, loadTelegram, loadNetwork, loadArchiveStatus]);
+
+  useEffect(() => {
+    reloadAll();
+  }, [reloadAll]);
 
   const saveSection = useCallback(
     async (section: string, patch: Parameters<typeof api.patchConfig>[0]) => {
@@ -478,27 +595,17 @@ export default function SettingsPage() {
 
   if (!cfg) {
     return (
-      <div className="flex min-h-full items-center justify-center p-8">
+      <div className="flex min-h-full flex-col items-center justify-center gap-4 p-8">
         <p className="text-sm text-[var(--color-text-muted)]">Failed to load configuration.</p>
+        <button className={btnPrimaryCls} onClick={reloadAll}>
+          Retry
+        </button>
       </div>
     );
   }
 
   return (
     <div className="mx-auto max-w-3xl space-y-8 p-6">
-      {/* Toast */}
-      {toast && (
-        <div
-          className={`fixed bottom-6 right-6 z-50 rounded px-4 py-3 text-sm font-medium shadow-lg transition-all ${
-            toast.ok
-              ? "bg-[var(--color-accent)] text-white"
-              : "bg-red-500 text-white"
-          }`}
-        >
-          {toast.msg}
-        </div>
-      )}
-
       <div>
         <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">Settings</h1>
         <p className="mt-1 text-sm text-[var(--color-text-muted)]">
@@ -507,342 +614,39 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      {/* ── Log Level ──────────────────────────── */}
-      <div className={cardCls}>
-        <SectionHeader
-          title="Logging"
-          description="Set the application log verbosity. Changes take effect immediately."
-        />
-        <div className="max-w-xs">
-          <label className={fieldLabel} htmlFor="log-level">
-            Log level
-          </label>
-          <select
-            id="log-level"
-            value={logLevel}
-            onChange={(e) => setLogLevel(e.target.value)}
-            className={inputCls}
-          >
-            <option value="trace">Trace</option>
-            <option value="debug">Debug</option>
-            <option value="info">Info</option>
-            <option value="warning">Warning</option>
-            <option value="error">Error</option>
-            <option value="fatal">Fatal</option>
-          </select>
-        </div>
-        <div className="mt-5 flex justify-end">
-          <button
-            className={btnPrimaryCls}
-            disabled={saving === "log_level"}
-            onClick={() =>
-              saveSection("log_level", { log_level: logLevel })
-            }
-          >
-            {saving === "log_level" ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </div>
-
-      {/* ── Storage (read-only) ─────────────────── */}
-      <div className={cardCls}>
-        <SectionHeader
-          title={<>Storage<ReadOnlyBadge /></>}
-          description="Partition layout configured at setup time. To change these, re-run argus setup."
-        />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <span className={fieldLabel}>Install directory</span>
-            <div className={roValue}>{cfg.storage.install_dir}</div>
-          </div>
-          <div>
-            <span className={fieldLabel}>Mount directory</span>
-            <div className={roValue}>{cfg.storage.mount_dir}</div>
-          </div>
-          <div>
-            <span className={fieldLabel}>System user</span>
-            <div className={roValue}>{cfg.storage.target_user}</div>
-          </div>
-          <div>
-            <span className={fieldLabel}>Music filesystem</span>
-            <div className={roValue}>{cfg.storage.music_fs}</div>
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
+      {/* Jump nav — twelve stacked cards is a lot of thumb-scrolling on a phone. */}
+      {/* top-16 below lg keeps the first chip out from under Sidebar's fixed
+          hamburger, the same clearance <main> gets with pt-16. */}
+      <nav className="sticky top-16 z-10 -mx-6 overflow-x-auto bg-[var(--color-bg-secondary)] px-6 py-2 lg:top-0">
+        <div className="flex w-max gap-2">
           {[
-            { label: "TeslaCam", always: true },
-            { label: "LightShow", active: cfg.storage.part2_enabled },
-            { label: "Chimes", active: cfg.storage.chimes_enabled && cfg.storage.part2_enabled },
-            { label: "Wraps", active: cfg.storage.wraps_enabled && cfg.storage.part2_enabled },
-            { label: "Music", active: cfg.storage.music_enabled },
-          ].map(({ label, active, always }) => (
-            <span key={label} className={badgeCls(always ?? active ?? false)}>
+            ["ap", "Access Point"],
+            ["wifi", "WiFi"],
+            ["bluetooth", "Bluetooth"],
+            ["telegram", "Telegram"],
+            ["webhook", "Webhook"],
+            ["samba", "Samba"],
+            ["archive", "Archive"],
+            ["logging", "Logging"],
+            ["storage", "Storage"],
+            ["updates", "Updates"],
+            ["startup", "Startup"],
+            ["limits", "Limits"],
+            ["display", "Display"],
+          ].map(([id, label]) => (
+            <a
+              key={id}
+              href={`#${id}`}
+              className="whitespace-nowrap rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-3 py-1.5 text-xs font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)]"
+            >
               {label}
-            </span>
+            </a>
           ))}
         </div>
-      </div>
-
-      {/* ── Update ─────────────────────────────── */}
-      <div className={cardCls}>
-        <SectionHeader
-          title="Updates"
-          description="Control how Argus checks for and installs new releases."
-        />
-        <div className="space-y-4">
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={updateAuto}
-              onChange={(e) => setUpdateAuto(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--color-accent)]"
-            />
-            <span className="text-sm text-[var(--color-text-primary)]">
-              Auto-update on new release
-            </span>
-          </label>
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={updateCheckOnStartup}
-              onChange={(e) => setUpdateCheckOnStartup(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--color-accent)]"
-            />
-            <span className="text-sm text-[var(--color-text-primary)]">
-              Check for updates on startup
-            </span>
-          </label>
-        </div>
-        <div className="mt-5 flex justify-end">
-          <button
-            className={btnPrimaryCls}
-            disabled={saving === "update"}
-            onClick={() =>
-              saveSection("update", {
-                update: { auto_update: updateAuto, check_on_startup: updateCheckOnStartup },
-              })
-            }
-          >
-            {saving === "update" ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </div>
-
-      {/* ── Startup & Reliability ─────────────── */}
-      <div className={cardCls}>
-        <SectionHeader
-          title="Startup & Reliability"
-          description="Controls for unattended boot behavior. Most options apply on next service start/boot."
-        />
-        <div className="space-y-4">
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={bootPresentOnStart}
-              onChange={(e) => setBootPresentOnStart(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--color-accent)]"
-            />
-            <span className="text-sm text-[var(--color-text-primary)]">Present USB automatically on startup</span>
-          </label>
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={bootBlockUntilReady}
-              onChange={(e) => setBootBlockUntilReady(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--color-accent)]"
-            />
-            <span className="text-sm text-[var(--color-text-primary)]">Block startup until boot pipeline completes</span>
-          </label>
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={bootCleanupOnStart}
-              onChange={(e) => setBootCleanupOnStart(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--color-accent)]"
-            />
-            <span className="text-sm text-[var(--color-text-primary)]">Run boot cleanup on startup</span>
-          </label>
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={bootRandomChimeOnStart}
-              onChange={(e) => setBootRandomChimeOnStart(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--color-accent)]"
-            />
-            <span className="text-sm text-[var(--color-text-primary)]">Pick a random chime on startup</span>
-          </label>
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={bootFsckEnabled}
-              onChange={(e) => setBootFsckEnabled(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--color-accent)]"
-            />
-            <span className="text-sm text-[var(--color-text-primary)]">Run boot fsck checks</span>
-          </label>
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={watchdogEnabled}
-              onChange={(e) => setWatchdogEnabled(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--color-accent)]"
-            />
-            <span className="text-sm text-[var(--color-text-primary)]">Enable hardware watchdog</span>
-          </label>
-          <p className="text-xs text-[var(--color-text-muted)]">
-            Uses the Debian <code className="rounded bg-[var(--color-bg-tertiary)] px-1">watchdog</code> daemon (
-            <code className="rounded bg-[var(--color-bg-tertiary)] px-1">/etc/watchdog.conf</code>).
-          </p>
-          <label className={fieldLabel} htmlFor="watchdog-timeout-sec">
-            Watchdog timeout (seconds)
-          </label>
-          <input
-            id="watchdog-timeout-sec"
-            type="number"
-            min={10}
-            className={inputCls}
-            value={watchdogTimeoutSec}
-            onChange={(e) => setWatchdogTimeoutSec(Number(e.target.value))}
-          />
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={reapplySysctlOnStart}
-              onChange={(e) => setReapplySysctlOnStart(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--color-accent)]"
-            />
-            <span className="text-sm text-[var(--color-text-primary)]">Reapply sysctl profile on startup</span>
-          </label>
-        </div>
-        <div className="mt-5 flex justify-end">
-          <button
-            className={btnPrimaryCls}
-            disabled={saving === "startup"}
-            onClick={() =>
-              saveSection("startup", {
-                startup: {
-                  boot_present_on_start: bootPresentOnStart,
-                  boot_block_until_ready: bootBlockUntilReady,
-                  boot_cleanup_on_start: bootCleanupOnStart,
-                  boot_random_chime_on_start: bootRandomChimeOnStart,
-                  boot_fsck_enabled: bootFsckEnabled,
-                  watchdog_enabled: watchdogEnabled,
-                  watchdog_timeout_sec: watchdogTimeoutSec,
-                  reapply_sysctl_on_start: reapplySysctlOnStart,
-                },
-              })
-            }
-          >
-            {saving === "startup" ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </div>
-
-      {/* ── AP Advanced ────────────────────────── */}
-      <div className={cardCls}>
-        <SectionHeader
-          title="Access Point — Advanced"
-          description="Fine-tune AP health-check timing. For SSID/passphrase, use the Dashboard."
-        />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label className={fieldLabel} htmlFor="ap-check-interval">
-              Health-check interval (s)
-            </label>
-            <input
-              id="ap-check-interval"
-              type="number"
-              className={inputCls}
-              value={apCheckInterval}
-              onChange={(e) => setApCheckInterval(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="ap-disconnect-grace">
-              Disconnect grace (s)
-            </label>
-            <input
-              id="ap-disconnect-grace"
-              type="number"
-              className={inputCls}
-              value={apDisconnectGrace}
-              onChange={(e) => setApDisconnectGrace(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="ap-min-rssi">
-              Min RSSI (dBm)
-            </label>
-            <input
-              id="ap-min-rssi"
-              type="number"
-              className={inputCls}
-              value={apMinRSSI}
-              onChange={(e) => setApMinRSSI(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="ap-stable-seconds">
-              Stable seconds
-            </label>
-            <input
-              id="ap-stable-seconds"
-              type="number"
-              className={inputCls}
-              value={apStableSeconds}
-              onChange={(e) => setApStableSeconds(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="ap-ping-target">
-              Ping target
-            </label>
-            <input
-              id="ap-ping-target"
-              type="text"
-              className={inputCls}
-              value={apPingTarget}
-              onChange={(e) => setApPingTarget(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="ap-retry-seconds">
-              STA retry interval (s)
-            </label>
-            <input
-              id="ap-retry-seconds"
-              type="number"
-              className={inputCls}
-              value={apRetrySeconds}
-              onChange={(e) => setApRetrySeconds(Number(e.target.value))}
-            />
-          </div>
-        </div>
-        <div className="mt-5 flex justify-end">
-          <button
-            className={btnPrimaryCls}
-            disabled={saving === "ap"}
-            onClick={() =>
-              saveSection("ap", {
-                offline_ap: {
-                  check_interval: apCheckInterval,
-                  disconnect_grace: apDisconnectGrace,
-                  min_rssi: apMinRSSI,
-                  stable_seconds: apStableSeconds,
-                  ping_target: apPingTarget,
-                  retry_seconds: apRetrySeconds,
-                },
-              })
-            }
-          >
-            {saving === "ap" ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </div>
+      </nav>
 
       {/* ── Access Point ───────────────────────── */}
-      <div className={cardCls}>
+      <div id="ap" className={`${cardCls} scroll-mt-16`}>
         <SectionHeader
           title="Access Point"
           description="Configure the Pi's WiFi hotspot and force mode."
@@ -958,12 +762,135 @@ export default function SettingsPage() {
         </label>
       </div>
 
+      {/* ── AP Advanced ────────────────────────── */}
+      <div id="ap-advanced" className={`${cardCls} scroll-mt-16`}>
+        <SectionHeader
+          title="Access Point — Advanced"
+          description="Fine-tune AP health-check timing. SSID and passphrase are in the Access Point card above."
+        />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className={fieldLabel} htmlFor="ap-check-interval">
+              Health-check interval (s)
+            </label>
+            <input
+              id="ap-check-interval"
+              type="number"
+              className={inputCls}
+              value={apCheckInterval}
+              onChange={(e) => setApCheckInterval(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="ap-disconnect-grace">
+              Disconnect grace (s)
+            </label>
+            <input
+              id="ap-disconnect-grace"
+              type="number"
+              className={inputCls}
+              value={apDisconnectGrace}
+              onChange={(e) => setApDisconnectGrace(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="ap-min-rssi">
+              Min RSSI (dBm)
+            </label>
+            <input
+              id="ap-min-rssi"
+              type="number"
+              className={inputCls}
+              value={apMinRSSI}
+              onChange={(e) => setApMinRSSI(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="ap-stable-seconds">
+              Stable seconds
+            </label>
+            <input
+              id="ap-stable-seconds"
+              type="number"
+              className={inputCls}
+              value={apStableSeconds}
+              onChange={(e) => setApStableSeconds(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="ap-ping-target">
+              Ping target
+            </label>
+            <input
+              id="ap-ping-target"
+              type="text"
+              className={inputCls}
+              value={apPingTarget}
+              onChange={(e) => setApPingTarget(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="ap-retry-seconds">
+              STA retry interval (s)
+            </label>
+            <input
+              id="ap-retry-seconds"
+              type="number"
+              className={inputCls}
+              value={apRetrySeconds}
+              onChange={(e) => setApRetrySeconds(Number(e.target.value))}
+            />
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            className={btnPrimaryCls}
+            disabled={saving === "ap"}
+            onClick={() =>
+              saveSection("ap", {
+                offline_ap: {
+                  check_interval: apCheckInterval,
+                  disconnect_grace: apDisconnectGrace,
+                  min_rssi: apMinRSSI,
+                  stable_seconds: apStableSeconds,
+                  ping_target: apPingTarget,
+                  retry_seconds: apRetrySeconds,
+                },
+              })
+            }
+          >
+            {saving === "ap" ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+
       {/* ── WiFi Client ─────────────────────────── */}
-      <div className={cardCls}>
+      <div id="wifi" className={`${cardCls} scroll-mt-16`}>
         <SectionHeader
           title="WiFi Client"
           description="Connect the Pi to an existing WiFi network."
         />
+        {/* The outcome of the last connect attempt, recorded by the backend —
+            the only way to learn it when the request itself never came back. */}
+        {wifiStatus?.change_status?.message && (
+          <div className="mb-4 flex items-start justify-between gap-3 rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] p-3">
+            <p className="text-sm text-[var(--color-text-primary)]">
+              {wifiStatus.change_status.message}
+            </p>
+            <button
+              type="button"
+              onClick={dismissWifiChange}
+              className="shrink-0 text-xs font-semibold text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-primary)]"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+        {wifiNotice && (
+          <div className="mb-4 rounded border border-[var(--color-warning)] bg-[var(--color-warning-bg)] p-3">
+            <p className="text-sm text-[var(--color-text-primary)]">{wifiNotice}</p>
+          </div>
+        )}
         {wifiStatus?.connection?.connected && (
           <p className="mb-4 text-sm text-[var(--color-success)]">
             Connected to <strong>{wifiStatus.connection.ssid}</strong>
@@ -1044,7 +971,7 @@ export default function SettingsPage() {
       </div>
 
       {/* ── Bluetooth Tethering ─────────────────── */}
-      <div className={cardCls}>
+      <div id="bluetooth" className={`${cardCls} scroll-mt-16`}>
         <SectionHeader
           title="Bluetooth Tethering"
           description="Pull internet from a paired phone over Bluetooth (PAN), then share it to the car via the AP's 'Share internet' toggle."
@@ -1141,23 +1068,42 @@ export default function SettingsPage() {
       </div>
 
       {/* ── Telegram Alerts ─────────────────────── */}
-      <div className={cardCls}>
+      <div id="telegram" className={`${cardCls} scroll-mt-16`}>
         <div className="mb-6 flex items-center justify-between border-b border-[var(--color-border)] pb-3">
           <div>
             <h2 className="text-lg font-bold text-[var(--color-text-primary)]">Telegram Alerts</h2>
             <p className="mt-1 text-sm text-[var(--color-text-muted)]">Send sentry event clips via Telegram bot.</p>
           </div>
-          {telegramStatus?.bot_configured && (
-            <span className={`inline-flex items-center gap-1 rounded px-2.5 py-0.5 text-xs font-semibold ${telegramStatus.online ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${telegramStatus.online ? "bg-[var(--color-success)]" : "bg-[var(--color-text-muted)]"}`} />
-              {telegramStatus.online ? "Online" : "Offline"}
-            </span>
+          {telegramStatus && (
+            <div className="flex shrink-0 items-center gap-2">
+              {/* telegram.enabled is what gates delivery server-side — a stored
+                  token alone sends nothing — so the badge reports that flag. */}
+              <span className={`inline-flex items-center gap-1 rounded px-2.5 py-0.5 text-xs font-semibold ${telegramStatus.enabled ? "bg-[var(--color-success-bg)] text-[var(--color-success)]" : "bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]"}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${telegramStatus.enabled ? "bg-[var(--color-success)]" : "bg-[var(--color-text-muted)]"}`} />
+                {telegramStatus.enabled ? "Alerts on" : "Alerts off"}
+              </span>
+              {telegramStatus.bot_configured && (
+                <span className="text-xs font-semibold text-[var(--color-text-muted)]">
+                  {telegramStatus.online ? "Online" : "Offline"}
+                </span>
+              )}
+            </div>
           )}
         </div>
+        {!telegramLoaded && (
+          <p className="mb-4 text-sm text-[var(--color-warning)]">
+            Couldn&apos;t load current settings —{" "}
+            <button type="button" onClick={loadTelegram} className="font-semibold underline">
+              Retry
+            </button>
+          </p>
+        )}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <label className={fieldLabel} htmlFor="tg-token">Bot Token</label>
-            <input id="tg-token" type="password" className={inputCls} value={tgBotToken} onChange={(e) => setTgBotToken(e.target.value)} placeholder="123456:ABC-DEF…" />
+            <label className={fieldLabel} htmlFor="tg-token">
+              Bot Token <span className="normal-case font-normal text-[var(--color-text-muted)]">(leave blank to keep current token)</span>
+            </label>
+            <input id="tg-token" type="password" className={inputCls} value={tgBotToken} onChange={(e) => setTgBotToken(e.target.value)} placeholder="leave blank to keep current token" autoComplete="new-password" />
           </div>
           <div>
             <label className={fieldLabel} htmlFor="tg-chat">Chat ID</label>
@@ -1184,8 +1130,14 @@ export default function SettingsPage() {
             {telegramStatus.queue_size} event{telegramStatus.queue_size !== 1 ? "s" : ""} queued
           </p>
         )}
+        {telegramStatus?.bot_configured && !telegramStatus.enabled && (
+          <p className="mt-3 text-xs text-[var(--color-warning)]">
+            A token is stored but alerting is off — sentry events are not sent. Save a bot
+            token and chat ID together to turn it on.
+          </p>
+        )}
         <div className="mt-5 flex gap-2">
-          <button className={btnPrimaryCls} disabled={saving === "telegram"} onClick={saveTelegram}>
+          <button className={btnPrimaryCls} disabled={saving === "telegram" || !telegramLoaded} onClick={saveTelegram}>
             {saving === "telegram" ? "Saving…" : "Save"}
           </button>
           <button
@@ -1195,11 +1147,81 @@ export default function SettingsPage() {
           >
             Send Test
           </button>
+          <button
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-5 py-2.5 text-sm font-semibold text-[var(--color-danger)] transition-all hover:border-[var(--color-danger)] disabled:opacity-50"
+            disabled={saving === "telegram-clear" || !telegramStatus?.bot_configured}
+            onClick={clearTelegram}
+          >
+            {saving === "telegram-clear" ? "Clearing…" : "Clear credentials"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Webhook Notifications ──────────────── */}
+      <div id="webhook" className={`${cardCls} scroll-mt-16`}>
+        <SectionHeader
+          title="Webhook Notifications"
+          description="POST a JSON payload to any URL when a new Sentry event is detected. Optionally sign payloads with an HMAC-SHA256 secret."
+        />
+        {!webhookLoaded && (
+          <p className="mb-4 text-sm text-[var(--color-warning)]">
+            Couldn&apos;t load current settings —{" "}
+            <button type="button" onClick={loadWebhook} className="font-semibold underline">
+              Retry
+            </button>
+          </p>
+        )}
+        <div className="space-y-4">
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={webhookEnabled}
+              onChange={(e) => setWebhookEnabled(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Enable webhook notifications</span>
+          </label>
+          <div>
+            <label className={fieldLabel} htmlFor="webhook-url">
+              Webhook URL
+            </label>
+            <input
+              id="webhook-url"
+              type="url"
+              className={inputCls}
+              value={webhookURL}
+              onChange={(e) => setWebhookURL(e.target.value)}
+              placeholder="https://discord.com/api/webhooks/…"
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="webhook-secret">
+              Signing secret <span className="normal-case font-normal text-[var(--color-text-muted)]">(optional — leave blank to keep existing)</span>
+            </label>
+            <input
+              id="webhook-secret"
+              type="password"
+              className={inputCls}
+              value={webhookSecret}
+              onChange={(e) => setWebhookSecret(e.target.value)}
+              placeholder="••••••••"
+              autoComplete="new-password"
+            />
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            className={btnPrimaryCls}
+            disabled={saving === "webhook" || !webhookLoaded}
+            onClick={saveWebhook}
+          >
+            {saving === "webhook" ? "Saving…" : "Save"}
+          </button>
         </div>
       </div>
 
       {/* ── Samba File Sharing ──────────────────── */}
-      <div className={cardCls}>
+      <div id="samba" className={`${cardCls} scroll-mt-16`}>
         <div className="mb-6 flex items-center justify-between border-b border-[var(--color-border)] pb-3">
           <div>
             <h2 className="text-lg font-bold text-[var(--color-text-primary)]">Samba File Sharing</h2>
@@ -1289,8 +1311,481 @@ export default function SettingsPage() {
         </fieldset>
       </div>
 
+      {/* ── Clip Archive ───────────────────────── */}
+      <div id="archive" className={`${cardCls} scroll-mt-16`}>
+        <SectionHeader
+          title="Clip Archive"
+          description="When the Pi joins this WiFi network it copies new Saved and Sentry clips to a mounted folder (e.g. a NAS share), so footage survives the card being overwritten."
+        />
+        <label className="mb-4 flex items-center gap-3">
+          <input
+            type="checkbox"
+            checked={archiveEnabled}
+            onChange={(e) => setArchiveEnabled(e.target.checked)}
+            className="h-4 w-4 rounded accent-[var(--color-accent)]"
+          />
+          <span className="text-sm text-[var(--color-text-primary)]">Archive clips automatically</span>
+        </label>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className={fieldLabel} htmlFor="archive-ssid">
+              WiFi network <span className="normal-case font-normal text-[var(--color-text-muted)]">(blank = any)</span>
+            </label>
+            <input
+              id="archive-ssid"
+              type="text"
+              className={inputCls}
+              value={archiveSSID}
+              onChange={(e) => setArchiveSSID(e.target.value)}
+              placeholder="HomeWiFi"
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="archive-path">Target folder</label>
+            <input
+              id="archive-path"
+              type="text"
+              className={inputCls}
+              value={archivePath}
+              onChange={(e) => setArchivePath(e.target.value)}
+              placeholder="/mnt/nas/teslacam"
+            />
+          </div>
+        </div>
+        <label className="mt-4 flex items-center gap-3">
+          <input
+            type="checkbox"
+            checked={archiveIncludeRecent}
+            onChange={(e) => setArchiveIncludeRecent(e.target.checked)}
+            className="h-4 w-4 rounded accent-[var(--color-accent)]"
+          />
+          <span className="text-sm text-[var(--color-text-primary)]">Also archive RecentClips (dashcam loop — a lot of data)</span>
+        </label>
+
+        {archiveStatus && (
+          <p className="mt-4 text-xs text-[var(--color-text-muted)]">
+            {archiveStatus.running ? "Syncing now… " : ""}
+            Last run: {archiveStatus.last_run ? new Date(archiveStatus.last_run).toLocaleString() : "never"}
+            {" · "}
+            {archiveStatus.copied_total} file{archiveStatus.copied_total === 1 ? "" : "s"} copied
+            {archiveStatus.last_error && (
+              <span className="mt-1 block text-[var(--color-danger)]">{archiveStatus.last_error}</span>
+            )}
+          </p>
+        )}
+
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <button
+            className="rounded border border-[var(--color-border)] bg-[var(--color-bg-tertiary)] px-5 py-2.5 text-sm font-semibold text-[var(--color-text-secondary)] transition-all hover:border-[var(--color-accent)] hover:text-[var(--color-accent-text)] disabled:opacity-50"
+            disabled={saving === "archive-run" || archiveStatus?.running}
+            onClick={runArchive}
+          >
+            {saving === "archive-run" ? "Starting…" : "Sync now"}
+          </button>
+          <button
+            className={btnPrimaryCls}
+            disabled={saving === "archive"}
+            onClick={() =>
+              saveSection("archive", {
+                archive: {
+                  enabled: archiveEnabled,
+                  ssid: archiveSSID,
+                  target_path: archivePath,
+                  include_recent: archiveIncludeRecent,
+                },
+              })
+            }
+          >
+            {saving === "archive" ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Log Level ──────────────────────────── */}
+      <div id="logging" className={`${cardCls} scroll-mt-16`}>
+        <SectionHeader
+          title="Logging"
+          description="Set the application log verbosity. Changes take effect immediately."
+        />
+        <div className="max-w-xs">
+          <label className={fieldLabel} htmlFor="log-level">
+            Log level
+          </label>
+          <select
+            id="log-level"
+            value={logLevel}
+            onChange={(e) => setLogLevel(e.target.value)}
+            className={inputCls}
+          >
+            <option value="trace">Trace</option>
+            <option value="debug">Debug</option>
+            <option value="info">Info</option>
+            <option value="warning">Warning</option>
+            <option value="error">Error</option>
+            <option value="fatal">Fatal</option>
+          </select>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            className={btnPrimaryCls}
+            disabled={saving === "log_level"}
+            onClick={() =>
+              saveSection("log_level", { log_level: logLevel })
+            }
+          >
+            {saving === "log_level" ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Storage (read-only) ─────────────────── */}
+      <div id="storage" className={`${cardCls} scroll-mt-16`}>
+        <SectionHeader
+          title={<>Storage<ReadOnlyBadge /></>}
+          description="Partition layout configured at setup time. To change these, re-run argus setup."
+        />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <span className={fieldLabel}>Install directory</span>
+            <div className={roValue}>{cfg.storage.install_dir}</div>
+          </div>
+          <div>
+            <span className={fieldLabel}>Mount directory</span>
+            <div className={roValue}>{cfg.storage.mount_dir}</div>
+          </div>
+          <div>
+            <span className={fieldLabel}>System user</span>
+            <div className={roValue}>{cfg.storage.target_user}</div>
+          </div>
+          <div>
+            <span className={fieldLabel}>Music filesystem</span>
+            <div className={roValue}>{cfg.storage.music_fs}</div>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {[
+            { label: "TeslaCam", always: true },
+            { label: "LightShow", active: cfg.storage.part2_enabled },
+            { label: "Chimes", active: cfg.storage.chimes_enabled && cfg.storage.part2_enabled },
+            { label: "Wraps", active: cfg.storage.wraps_enabled && cfg.storage.part2_enabled },
+            { label: "Music", active: cfg.storage.music_enabled },
+          ].map(({ label, active, always }) => (
+            <span key={label} className={badgeCls(always ?? active ?? false)}>
+              {label}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Update ─────────────────────────────── */}
+      <div id="updates" className={`${cardCls} scroll-mt-16`}>
+        <SectionHeader
+          title="Updates"
+          description="Control how Argus checks for and installs new releases."
+        />
+        {updateStatus && (
+          <p className="mb-4 text-sm text-[var(--color-text-secondary)]">
+            Current {updateStatus.current}
+            {updateStatus.latest ? ` · Latest ${updateStatus.latest}` : ""}
+            {updateStatus.update_available && (
+              <span className="ml-2 rounded bg-[var(--color-warning-bg)] px-2 py-0.5 text-xs font-semibold text-[var(--color-warning)]">
+                Update available
+              </span>
+            )}
+          </p>
+        )}
+        <div className="space-y-4">
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={updateAuto}
+              onChange={(e) => setUpdateAuto(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">
+              Auto-update on new release
+            </span>
+          </label>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={updateCheckOnStartup}
+              onChange={(e) => setUpdateCheckOnStartup(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">
+              Check for updates on startup
+            </span>
+          </label>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            className={btnPrimaryCls}
+            disabled={saving === "update"}
+            onClick={() =>
+              saveSection("update", {
+                update: { auto_update: updateAuto, check_on_startup: updateCheckOnStartup },
+              })
+            }
+          >
+            {saving === "update" ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Startup & Reliability ─────────────── */}
+      <div id="startup" className={`${cardCls} scroll-mt-16`}>
+        <SectionHeader
+          title="Startup & Reliability"
+          description="Controls for unattended boot behavior. Most options apply on next service start/boot."
+        />
+        <div className="space-y-4">
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={bootPresentOnStart}
+              onChange={(e) => setBootPresentOnStart(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Present USB automatically on startup</span>
+          </label>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={bootBlockUntilReady}
+              onChange={(e) => setBootBlockUntilReady(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Block startup until boot pipeline completes</span>
+          </label>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={bootCleanupOnStart}
+              onChange={(e) => setBootCleanupOnStart(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Run boot cleanup on startup</span>
+          </label>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={bootRandomChimeOnStart}
+              onChange={(e) => setBootRandomChimeOnStart(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Pick a random chime on startup</span>
+          </label>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={bootFsckEnabled}
+              onChange={(e) => setBootFsckEnabled(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Run boot fsck checks</span>
+          </label>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={watchdogEnabled}
+              onChange={(e) => setWatchdogEnabled(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Enable hardware watchdog</span>
+          </label>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Uses the Debian <code className="rounded bg-[var(--color-bg-tertiary)] px-1">watchdog</code> daemon (
+            <code className="rounded bg-[var(--color-bg-tertiary)] px-1">/etc/watchdog.conf</code>).
+          </p>
+          <label className={fieldLabel} htmlFor="watchdog-timeout-sec">
+            Watchdog timeout (seconds)
+          </label>
+          <input
+            id="watchdog-timeout-sec"
+            type="number"
+            min={10}
+            className={inputCls}
+            value={watchdogTimeoutSec}
+            onChange={(e) => setWatchdogTimeoutSec(Number(e.target.value))}
+          />
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={reapplySysctlOnStart}
+              onChange={(e) => setReapplySysctlOnStart(e.target.checked)}
+              className="h-4 w-4 rounded accent-[var(--color-accent)]"
+            />
+            <span className="text-sm text-[var(--color-text-primary)]">Reapply sysctl profile on startup</span>
+          </label>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            className={btnPrimaryCls}
+            disabled={saving === "startup"}
+            onClick={() =>
+              saveSection("startup", {
+                startup: {
+                  boot_present_on_start: bootPresentOnStart,
+                  boot_block_until_ready: bootBlockUntilReady,
+                  boot_cleanup_on_start: bootCleanupOnStart,
+                  boot_random_chime_on_start: bootRandomChimeOnStart,
+                  boot_fsck_enabled: bootFsckEnabled,
+                  watchdog_enabled: watchdogEnabled,
+                  watchdog_timeout_sec: watchdogTimeoutSec,
+                  reapply_sysctl_on_start: reapplySysctlOnStart,
+                },
+              })
+            }
+          >
+            {saving === "startup" ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+
+      {/* ── Web / Chimes Limits ─────────────────── */}
+      <div id="limits" className={`${cardCls} scroll-mt-16`}>
+        <SectionHeader
+          title="Chimes &amp; Upload Limits"
+          description="Constraints applied when uploading chime audio files and media."
+        />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className={fieldLabel} htmlFor="chime-max-size">
+              Max chime file size (bytes)
+            </label>
+            <input
+              id="chime-max-size"
+              type="number"
+              min={1}
+              className={inputCls}
+              value={webMaxChimeSize}
+              onChange={(e) => setWebMaxChimeSize(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="chime-max-dur">
+              Max chime duration (s)
+            </label>
+            <input
+              id="chime-max-dur"
+              type="number"
+              min={0.1}
+              step="0.1"
+              className={inputCls}
+              value={webMaxChimeDur}
+              onChange={(e) => setWebMaxChimeDur(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="chime-min-dur">
+              Min chime duration (s)
+            </label>
+            <input
+              id="chime-min-dur"
+              type="number"
+              min={0.1}
+              step="0.1"
+              className={inputCls}
+              value={webMinChimeDur}
+              onChange={(e) => setWebMinChimeDur(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="speed-min">
+              Playback speed min
+            </label>
+            <input
+              id="speed-min"
+              type="number"
+              min={0.05}
+              step="0.05"
+              className={inputCls}
+              value={webSpeedMin}
+              onChange={(e) => setWebSpeedMin(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="speed-max">
+              Playback speed max
+            </label>
+            <input
+              id="speed-max"
+              type="number"
+              min={0.05}
+              step="0.05"
+              className={inputCls}
+              value={webSpeedMax}
+              onChange={(e) => setWebSpeedMax(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="speed-step">
+              Playback speed step
+            </label>
+            <input
+              id="speed-step"
+              type="number"
+              min={0.01}
+              step="0.01"
+              className={inputCls}
+              value={webSpeedStep}
+              onChange={(e) => setWebSpeedStep(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="max-upload">
+              Max upload size (MiB)
+            </label>
+            <input
+              id="max-upload"
+              type="number"
+              min={1}
+              className={inputCls}
+              value={webMaxUpload}
+              onChange={(e) => setWebMaxUpload(Number(e.target.value))}
+            />
+          </div>
+          <div>
+            <label className={fieldLabel} htmlFor="max-chunk">
+              Upload chunk size (MiB)
+            </label>
+            <input
+              id="max-chunk"
+              type="number"
+              min={1}
+              className={inputCls}
+              value={webMaxChunk}
+              onChange={(e) => setWebMaxChunk(Number(e.target.value))}
+            />
+          </div>
+        </div>
+        <div className="mt-5 flex justify-end">
+          <button
+            className={btnPrimaryCls}
+            disabled={saving === "web"}
+            onClick={() =>
+              saveSection("web", {
+                web: {
+                  max_lock_chime_size: webMaxChimeSize,
+                  max_lock_chime_duration: webMaxChimeDur,
+                  min_lock_chime_duration: webMinChimeDur,
+                  speed_range_min: webSpeedMin,
+                  speed_range_max: webSpeedMax,
+                  speed_step: webSpeedStep,
+                  max_upload_size_mb: webMaxUpload,
+                  max_upload_chunk_mb: webMaxChunk,
+                },
+              })
+            }
+          >
+            {saving === "web" ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
       {/* ── Display Preferences ────────────────── */}
-      <div className={cardCls}>
+      <div id="display" className={`${cardCls} scroll-mt-16`}>
         <SectionHeader
           title="Display Preferences"
           description="UI preferences stored in your browser."
@@ -1340,193 +1835,6 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {/* ── Webhook Notifications ──────────────── */}
-      <div className={cardCls}>
-        <SectionHeader
-          title="Webhook Notifications"
-          description="POST a JSON payload to any URL when a new Sentry event is detected. Optionally sign payloads with an HMAC-SHA256 secret."
-        />
-        <div className="space-y-4">
-          <label className="flex items-center gap-3">
-            <input
-              type="checkbox"
-              checked={webhookEnabled}
-              onChange={(e) => setWebhookEnabled(e.target.checked)}
-              className="h-4 w-4 rounded accent-[var(--color-accent)]"
-            />
-            <span className="text-sm text-[var(--color-text-primary)]">Enable webhook notifications</span>
-          </label>
-          <div>
-            <label className={fieldLabel} htmlFor="webhook-url">
-              Webhook URL
-            </label>
-            <input
-              id="webhook-url"
-              type="url"
-              className={inputCls}
-              value={webhookURL}
-              onChange={(e) => setWebhookURL(e.target.value)}
-              placeholder="https://discord.com/api/webhooks/…"
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="webhook-secret">
-              Signing secret <span className="normal-case font-normal text-[var(--color-text-muted)]">(optional — leave blank to keep existing)</span>
-            </label>
-            <input
-              id="webhook-secret"
-              type="password"
-              className={inputCls}
-              value={webhookSecret}
-              onChange={(e) => setWebhookSecret(e.target.value)}
-              placeholder="••••••••"
-              autoComplete="new-password"
-            />
-          </div>
-        </div>
-        <div className="mt-5 flex justify-end">
-          <button
-            className={btnPrimaryCls}
-            disabled={saving === "webhook"}
-            onClick={saveWebhook}
-          >
-            {saving === "webhook" ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </div>
-
-      {/* ── Web / Chimes Limits ─────────────────── */}
-      <div className={cardCls}>
-        <SectionHeader
-          title="Chimes &amp; Upload Limits"
-          description="Constraints applied when uploading chime audio files and media."
-        />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label className={fieldLabel} htmlFor="chime-max-size">
-              Max chime file size (bytes)
-            </label>
-            <input
-              id="chime-max-size"
-              type="number"
-              className={inputCls}
-              value={webMaxChimeSize}
-              onChange={(e) => setWebMaxChimeSize(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="chime-max-dur">
-              Max chime duration (s)
-            </label>
-            <input
-              id="chime-max-dur"
-              type="number"
-              step="0.1"
-              className={inputCls}
-              value={webMaxChimeDur}
-              onChange={(e) => setWebMaxChimeDur(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="chime-min-dur">
-              Min chime duration (s)
-            </label>
-            <input
-              id="chime-min-dur"
-              type="number"
-              step="0.1"
-              className={inputCls}
-              value={webMinChimeDur}
-              onChange={(e) => setWebMinChimeDur(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="speed-min">
-              Playback speed min
-            </label>
-            <input
-              id="speed-min"
-              type="number"
-              step="0.05"
-              className={inputCls}
-              value={webSpeedMin}
-              onChange={(e) => setWebSpeedMin(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="speed-max">
-              Playback speed max
-            </label>
-            <input
-              id="speed-max"
-              type="number"
-              step="0.05"
-              className={inputCls}
-              value={webSpeedMax}
-              onChange={(e) => setWebSpeedMax(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="speed-step">
-              Playback speed step
-            </label>
-            <input
-              id="speed-step"
-              type="number"
-              step="0.01"
-              className={inputCls}
-              value={webSpeedStep}
-              onChange={(e) => setWebSpeedStep(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="max-upload">
-              Max upload size (MiB)
-            </label>
-            <input
-              id="max-upload"
-              type="number"
-              className={inputCls}
-              value={webMaxUpload}
-              onChange={(e) => setWebMaxUpload(Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className={fieldLabel} htmlFor="max-chunk">
-              Upload chunk size (MiB)
-            </label>
-            <input
-              id="max-chunk"
-              type="number"
-              className={inputCls}
-              value={webMaxChunk}
-              onChange={(e) => setWebMaxChunk(Number(e.target.value))}
-            />
-          </div>
-        </div>
-        <div className="mt-5 flex justify-end">
-          <button
-            className={btnPrimaryCls}
-            disabled={saving === "web"}
-            onClick={() =>
-              saveSection("web", {
-                web: {
-                  max_lock_chime_size: webMaxChimeSize,
-                  max_lock_chime_duration: webMaxChimeDur,
-                  min_lock_chime_duration: webMinChimeDur,
-                  speed_range_min: webSpeedMin,
-                  speed_range_max: webSpeedMax,
-                  speed_step: webSpeedStep,
-                  max_upload_size_mb: webMaxUpload,
-                  max_upload_chunk_mb: webMaxChunk,
-                },
-              })
-            }
-          >
-            {saving === "web" ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

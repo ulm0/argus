@@ -23,6 +23,7 @@ type Config struct {
 	Webhook      WebhookConfig      `yaml:"webhook"`
 	Update       UpdateConfig       `yaml:"update"`
 	ViewerPrefs  ViewerPrefsConfig  `yaml:"viewer_prefs"`
+	Archive      ArchiveConfig      `yaml:"archive"`
 	LogLevel     string             `yaml:"log_level"`
 
 	// Computed paths (not from YAML)
@@ -132,9 +133,11 @@ type WebConfig struct {
 	SpeedStep         float64 `yaml:"speed_step"`
 	LockChimeFilename string  `yaml:"lock_chime_filename"`
 	ChimesFolder      string  `yaml:"chimes_folder"`
-	LightshowFolder   string  `yaml:"lightshow_folder"`
-	MaxUploadSizeMB   int     `yaml:"max_upload_size_mb"`
-	MaxUploadChunkMB  int     `yaml:"max_upload_chunk_mb"`
+	// BoomboxFolder holds custom Boombox sounds on the same partition as Chimes.
+	BoomboxFolder    string `yaml:"boombox_folder"`
+	LightshowFolder  string `yaml:"lightshow_folder"`
+	MaxUploadSizeMB  int    `yaml:"max_upload_size_mb"`
+	MaxUploadChunkMB int    `yaml:"max_upload_chunk_mb"`
 
 	// AuthEnabled gates the web UI/API behind a login. Pointer so an explicit
 	// `auth_enabled: false` is distinguishable from unset; defaults to true.
@@ -157,6 +160,18 @@ const (
 	DefaultAuthUsername = "admin"
 	DefaultAuthPassword = "argus"
 )
+
+// ArchiveConfig copies event directories off the car onto a mounted target
+// (a CIFS mount, an external drive) whenever the Pi joins a known network.
+type ArchiveConfig struct {
+	Enabled bool `yaml:"enabled"`
+	// SSID is the WiFi network that triggers a sync. Empty means any connection.
+	SSID string `yaml:"ssid"`
+	// TargetPath is an already-mounted destination directory.
+	TargetPath string `yaml:"target_path"`
+	// IncludeRecent also copies RecentClips, which Tesla rotates roughly hourly.
+	IncludeRecent bool `yaml:"include_recent"`
+}
 
 type TelegramConfig struct {
 	Enabled      bool   `yaml:"enabled"`
@@ -278,6 +293,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.Web.ChimesFolder == "" {
 		c.Web.ChimesFolder = "Chimes"
+	}
+	if c.Web.BoomboxFolder == "" {
+		c.Web.BoomboxFolder = "Boombox"
 	}
 	if c.Web.LightshowFolder == "" {
 		c.Web.LightshowFolder = "LightShow"

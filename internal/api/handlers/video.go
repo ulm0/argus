@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
 
@@ -24,7 +25,28 @@ type thumbFlight struct {
 	err  error
 }
 
+// isSafePathToken validates a single path component intended for file names.
+// It rejects separators, traversal markers, and non [A-Za-z0-9_-] characters.
+func isSafePathToken(s string) bool {
+	if s == "" || strings.Contains(s, "/") || strings.Contains(s, "\\") || strings.Contains(s, "..") {
+		return false
+	}
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 var thumbFlights sync.Map // key: thumbPath → *thumbFlight
+
+// thumbSem caps concurrent ffmpeg thumbnail processes. A cold list page makes
+// the browser open ~6 thumbnail requests at once, and that many ffmpeg
+// processes starve the video stream (or the OOM killer) on a 512MB Pi Zero.
+// ponytail: single global slot; raise to 2 only if list scrolling measurably drags.
+var thumbSem = make(chan struct{}, 1)
 
 func (h *VideoHandler) generateThumbnailOnce(videoPath, thumbPath string, width, height int) error {
 	f := &thumbFlight{done: make(chan struct{})}
@@ -32,7 +54,9 @@ func (h *VideoHandler) generateThumbnailOnce(videoPath, thumbPath string, width,
 		<-actual.(*thumbFlight).done
 		return actual.(*thumbFlight).err
 	}
+	thumbSem <- struct{}{}
 	f.err = h.videoSvc.GenerateThumbnail(videoPath, thumbPath, width, height)
+	<-thumbSem
 	close(f.done)
 	thumbFlights.Delete(thumbPath)
 	return f.err
@@ -101,7 +125,15 @@ func (h *VideoHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	events, hasNext := h.videoSvc.GetEvents(folderPath, page, perPage)
+	before := r.URL.Query().Get("before")
+	if before != "" {
+		if _, err := time.Parse("2006-01-02", before); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "before must be YYYY-MM-DD"})
+			return
+		}
+	}
+
+	events, hasNext := h.videoSvc.GetEvents(folderPath, page, perPage, before)
 	if events == nil {
 		events = []video.Event{}
 	}
@@ -129,6 +161,7 @@ func (h *VideoHandler) Event(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
+	details.Prev, details.Next = h.videoSvc.EventNeighbors(folderPath, event)
 	writeJSON(w, http.StatusOK, details)
 }
 
@@ -177,7 +210,7 @@ func (h *VideoHandler) Telemetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.videoSvc.ExtractTelemetry(w, videoPath)
+	h.videoSvc.ExtractTelemetry(r.Context(), w, videoPath)
 }
 
 // Download serves a single video file as an attachment.
@@ -195,6 +228,85 @@ func (h *VideoHandler) Download(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(videoPath)))
 	http.ServeFile(w, r, videoPath)
+}
+
+// maxExportSeconds bounds a trim export. The point is a shareable clip, and an
+// unbounded window would just be the whole-file download with ffmpeg attached.
+const maxExportSeconds = 300
+
+// exportSem caps concurrent ffmpeg export processes. Kept separate from thumbSem
+// so an export the user is waiting on never queues behind background thumbnail
+// work — but it still has to be bounded, or N tabs hitting export fork N ffmpegs
+// on a single-core 512MB Pi.
+// ponytail: single global slot; raise to 2 only if concurrent exports become real.
+var exportSem = make(chan struct{}, 1)
+
+// deferredAttachment holds back the download headers until the encoder actually
+// produces a byte. Setting them up front committed the response as a successful
+// file download, so any ffmpeg failure (bad range, unreadable file, ffmpeg
+// missing) delivered a 0-byte .mp4 with a 200 and only a log line to explain it.
+// It stays a pass-through writer rather than a buffer: clips are tens of MB and
+// the device has 512MB.
+type deferredAttachment struct {
+	w       http.ResponseWriter
+	setup   func()
+	written bool
+}
+
+func (d *deferredAttachment) Write(p []byte) (int, error) {
+	if !d.written && len(p) > 0 {
+		d.written = true
+		d.setup()
+	}
+	return d.w.Write(p)
+}
+
+// Export streams a trimmed section of a single camera file as MP4.
+func (h *VideoHandler) Export(w http.ResponseWriter, r *http.Request) {
+	videoPath := h.resolveVideoPath(r)
+	if videoPath == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid video path"})
+		return
+	}
+
+	if _, err := os.Stat(videoPath); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "video not found"})
+		return
+	}
+
+	start, errStart := strconv.ParseFloat(r.URL.Query().Get("start"), 64)
+	end, errEnd := strconv.ParseFloat(r.URL.Query().Get("end"), 64)
+	if errStart != nil || errEnd != nil || start < 0 || end <= start || end-start > maxExportSeconds {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "start/end must be seconds, end > start, at most 300s apart"})
+		return
+	}
+
+	// Wait for a slot before any header goes out, so a client that gives up on the
+	// queue (flaky link, closed tab) costs nothing instead of holding an ffmpeg.
+	select {
+	case exportSem <- struct{}{}:
+	case <-r.Context().Done():
+		return
+	}
+	defer func() { <-exportSem }()
+
+	name := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
+	out := &deferredAttachment{w: w, setup: func() {
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s-%.0f.mp4"`, name, start))
+	}}
+
+	err := h.videoSvc.ExportClip(r.Context(), out, videoPath, start, end)
+	if err != nil {
+		logger.L.WithField("video", videoPath).WithError(err).Error("clip export failed")
+	}
+	if !out.written {
+		// Nothing was committed yet, so the failure can still be an honest error
+		// instead of an empty attachment. A zero-byte success counts as failure.
+		writeJSONError(w, http.StatusInternalServerError, "clip export failed")
+	}
+	// Past the first byte the response is already a file download; the log line
+	// above is the only place a mid-stream failure can be reported.
 }
 
 // DownloadEvent streams a ZIP of all videos + metadata for an event.
@@ -250,14 +362,19 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Tesla pre-generates thumb.png for most events — serve it directly.
-	if details.HasThumbnail {
+	camera := r.URL.Query().Get("camera")
+
+	// Tesla pre-generates thumb.png for most events — serve it directly. It is the
+	// front view, so the shortcut is only valid for the front camera: taking it for
+	// every ?camera= would render all six tiles of the player's camera strip with
+	// the same image. Keeping it for "front" matters, because that is the tile the
+	// event list and the strip both request, and the fallback path forks ffmpeg.
+	if (camera == "" || camera == "front") && details.HasThumbnail {
 		w.Header().Set("Cache-Control", "public, max-age=86400")
 		http.ServeFile(w, r, filepath.Join(folderPath, event, "thumb.png"))
 		return
 	}
 
-	camera := r.URL.Query().Get("camera")
 	if camera == "" {
 		camera = "front"
 	}
@@ -278,6 +395,10 @@ func (h *VideoHandler) Thumbnail(w http.ResponseWriter, r *http.Request) {
 	}
 	if videoFile == "" {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no unencrypted video available for thumbnail"})
+		return
+	}
+	if !isSafePathToken(camera) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid camera"})
 		return
 	}
 
@@ -465,12 +586,42 @@ func (h *VideoHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	// Prune any generated thumbnails for this event so they don't accumulate on
 	// the SD card once the source videos are gone. Best-effort: they are written
 	// to ThumbnailDir/{folder}/{event}/ (see Thumbnail). folder and event are
-	// already validated against traversal by resolveFolderPath/DeleteEvent above.
-	if err := os.RemoveAll(filepath.Join(h.cfg.ThumbnailDir, folder, event)); err != nil {
-		logger.L.WithField("folder", folder).WithField("event", event).WithError(err).Warn("failed to prune event thumbnails")
+	// already validated against traversal by resolveFolderPath/DeleteEvent above,
+	// but this is a recursive delete built from request input, so it gets the same
+	// containment check as every other ThumbnailDir path in this file.
+	thumbDir := filepath.Join(h.cfg.ThumbnailDir, folder, event)
+	if withinBase(thumbDir, h.cfg.ThumbnailDir) {
+		if err := os.RemoveAll(thumbDir); err != nil {
+			logger.L.WithField("folder", folder).WithField("event", event).WithError(err).Warn("failed to prune event thumbnails")
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "event": event})
+}
+
+// Keep toggles the marker that exempts an event from automatic cleanup.
+func (h *VideoHandler) Keep(w http.ResponseWriter, r *http.Request) {
+	if h.modeSvc.CurrentMode().Token != "edit" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "keep requires edit mode"})
+		return
+	}
+
+	folder := mux.Vars(r)["folder"]
+	event := mux.Vars(r)["event"]
+
+	folderPath := h.resolveFolderPath(folder)
+	if folderPath == "" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "folder not found"})
+		return
+	}
+
+	kept, err := h.videoSvc.ToggleKeep(folderPath, event)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"kept": kept})
 }
 
 // withinBase reports whether p is base itself or nested under it. The trailing
@@ -508,20 +659,23 @@ func (h *VideoHandler) resolveFolderPath(folder string) string {
 }
 
 // resolveVideoPath extracts and validates the video path from the wildcard URL segment.
+// The wildcard is a folder-relative path, so it obeys the same "archive/" prefix rule
+// as resolveFolderPath — the UI lists archive folders as "archive/<name>" and streams
+// files from them under that same prefix.
 func (h *VideoHandler) resolveVideoPath(r *http.Request) string {
-	tcPath := h.videoSvc.GetTeslaCamPath()
-	if tcPath == "" {
-		return ""
-	}
-
 	wildcard := mux.Vars(r)["rest"]
 	if wildcard == "" {
 		return ""
 	}
-
-	fullPath := filepath.Join(tcPath, filepath.Clean(wildcard))
-	if !withinBase(fullPath, tcPath) {
+	p := h.resolveFolderPath(wildcard)
+	if p == "" {
 		return ""
 	}
-	return fullPath
+	// A wildcard that cleans to a directory ("." or "archive/") resolves to the
+	// media root, and http.ServeFile would answer with a directory listing.
+	// These routes only ever serve one file.
+	if info, err := os.Stat(p); err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	return p
 }

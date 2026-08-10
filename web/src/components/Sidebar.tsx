@@ -172,8 +172,30 @@ export default function Sidebar() {
     return () => { cancelled = true; };
   }, []);
 
+  // Next emits one theme-color <meta> per prefers-color-scheme (layout.tsx) —
+  // that is only the pre-hydration fallback, so re-point every one of them at
+  // the theme the user actually picked or browser chrome fights the page.
   useEffect(() => {
-    if (!(updateAvailable && latestVersion && latestVersion !== currentVersion)) {
+    const color = resolvedTheme === "dark" ? "#171717" : "#fafafa";
+    document
+      .querySelectorAll('meta[name="theme-color"]')
+      .forEach((m) => m.setAttribute("content", color));
+  }, [resolvedTheme]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMobileOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mobileOpen]);
+
+  useEffect(() => {
+    if (
+      !(updateAvailable && latestVersion && latestVersion !== currentVersion) ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
       setUpdateChipFrame(0);
       return;
     }
@@ -209,10 +231,12 @@ export default function Sidebar() {
     setTheme(resolvedTheme === "dark" ? "light" : "dark");
   }, [resolvedTheme, setTheme]);
 
-  const visibleLinks = NAV_LINKS.filter((link) => {
-    if (!link.featureKey || !status) return true;
-    return status.features[link.featureKey];
-  });
+  // Gated links keep their slot whether status is still loading or the feature
+  // is genuinely off, so nothing shifts under a tap on a slow Pi. They only go
+  // dead once status actually says the feature is off: while it is loading — or
+  // forever, if getStatus failed — a working feature must stay reachable.
+  const isDisabled = (link: NavLink) =>
+    link.featureKey ? status !== null && !status.features[link.featureKey] : false;
 
   function isActive(href: string) {
     if (href === "/") return pathname === "/";
@@ -230,7 +254,7 @@ export default function Sidebar() {
           </span>
         </div>
         {updateAvailable && latestVersion && latestVersion !== currentVersion && (
-          <span className="inline-flex items-center rounded-full bg-[#005aff] px-2 py-0.5 text-[11px] font-semibold leading-4 text-white">
+          <span className="inline-flex items-center rounded-full bg-[var(--color-accent)] px-2 py-0.5 text-[11px] font-semibold leading-4 text-white">
             <span className="relative inline-block w-[110px] overflow-hidden text-center align-middle">
               <span
                 className="inline-flex w-[220px] transition-transform duration-500 ease-in-out"
@@ -246,17 +270,21 @@ export default function Sidebar() {
 
       {/* Nav links */}
       <nav className="mt-4 flex-1 space-y-0.5 px-3">
-        {visibleLinks.map((link) => {
+        {NAV_LINKS.map((link) => {
           const active = isActive(link.href);
+          const disabled = isDisabled(link);
           return (
             <Link
               key={link.href}
               href={link.href}
               onClick={() => setMobileOpen(false)}
+              aria-disabled={disabled || undefined}
               className={`flex items-center gap-3 rounded px-3 py-2.5 text-sm font-medium transition-all ${
+                disabled ? "pointer-events-none opacity-50" : ""
+              } ${
                 active
-                  ? "bg-[#005aff] text-white"
-                  : "text-[#a2a3a5] hover:bg-white/[0.06] hover:text-white"
+                  ? "bg-[var(--color-accent)] text-white"
+                  : "text-[var(--color-sidebar-muted)] hover:bg-white/[0.06] hover:text-white"
               }`}
             >
               <span className={active ? "opacity-100" : "opacity-60"}>{link.icon}</span>
@@ -271,7 +299,7 @@ export default function Sidebar() {
         <button
           type="button"
           onClick={toggleTheme}
-          className="flex w-full items-center gap-3 rounded px-3 py-2.5 text-sm font-medium text-[#a2a3a5] transition-all hover:bg-white/[0.06] hover:text-white"
+          className="flex w-full items-center gap-3 rounded px-3 py-2.5 text-sm font-medium text-[var(--color-sidebar-muted)] transition-all hover:bg-white/[0.06] hover:text-white"
           aria-label="Toggle theme"
         >
           {resolvedTheme === "dark" ? (
@@ -293,7 +321,7 @@ export default function Sidebar() {
   return (
     <>
       {/* Desktop sidebar */}
-      <aside className="hidden w-60 shrink-0 border-r border-white/10 bg-[#2a2a2a] lg:block">
+      <aside className="hidden w-60 shrink-0 border-r border-white/10 bg-[var(--color-bg-sidebar)] lg:block">
         {navContent}
       </aside>
 
@@ -303,6 +331,8 @@ export default function Sidebar() {
         onClick={() => setMobileOpen(!mobileOpen)}
         className="fixed left-4 top-4 z-50 rounded bg-[var(--color-bg-card)] p-2.5 shadow-lg ring-1 ring-[var(--color-border)] transition-colors hover:bg-[var(--color-bg-tertiary)] lg:hidden"
         aria-label="Toggle menu"
+        aria-expanded={mobileOpen}
+        aria-controls="mobile-nav"
       >
         {mobileOpen ? (
           <svg className="h-5 w-5 text-[var(--color-text-secondary)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -325,7 +355,13 @@ export default function Sidebar() {
             className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
             onClick={() => setMobileOpen(false)}
           />
-          <aside className="fixed inset-y-0 left-0 z-40 w-64 border-r border-white/10 bg-[#2a2a2a] shadow-2xl lg:hidden">
+          <aside
+            id="mobile-nav"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation"
+            className="fixed inset-y-0 left-0 z-40 w-64 border-r border-white/10 bg-[var(--color-bg-sidebar)] shadow-2xl lg:hidden"
+          >
             {navContent}
           </aside>
         </>

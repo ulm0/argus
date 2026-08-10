@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/ulm0/argus/internal/config"
@@ -35,6 +36,7 @@ type configResponse struct {
 	Startup     startupConfigPublic     `json:"startup"`
 	ViewerPrefs viewerPrefsConfigPublic `json:"viewer_prefs"`
 	Auth        authConfigPublic        `json:"auth"`
+	Archive     archiveConfigPublic     `json:"archive"`
 	LogLevel    string                  `json:"log_level"`
 
 	// Read-only info (not patchable)
@@ -45,10 +47,11 @@ type networkConfigPublic struct {
 	WebPort int `json:"web_port"`
 }
 
+// offlineAPPublic deliberately omits the AP passphrase: it is write-only here,
+// and the Show/Copy UI reads it from the AP status endpoint instead.
 type offlineAPPublic struct {
 	Enabled         bool   `json:"enabled"`
 	SSID            string `json:"ssid"`
-	Passphrase      string `json:"passphrase"`
 	Channel         int    `json:"channel"`
 	IPv4CIDR        string `json:"ipv4_cidr"`
 	DHCPStart       string `json:"dhcp_start"`
@@ -74,8 +77,9 @@ type webConfigPublic struct {
 }
 
 type telegramConfigPublic struct {
-	Enabled      bool   `json:"enabled"`
-	BotToken     string `json:"bot_token"`
+	Enabled bool `json:"enabled"`
+	// The token itself is never returned; the UI only needs to know one is set.
+	BotTokenSet  bool   `json:"bot_token_set"`
 	ChatID       string `json:"chat_id"`
 	OfflineMode  string `json:"offline_mode"`
 	MaxQueueSize int    `json:"max_queue_size"`
@@ -113,6 +117,13 @@ type startupConfigPublic struct {
 	ReapplySysctlOnStart   bool `json:"reapply_sysctl_on_start"`
 }
 
+type archiveConfigPublic struct {
+	Enabled       bool   `json:"enabled"`
+	SSID          string `json:"ssid"`
+	TargetPath    string `json:"target_path"`
+	IncludeRecent bool   `json:"include_recent"`
+}
+
 type storageInfo struct {
 	CamName          string `json:"cam_name"`
 	CamLabel         string `json:"cam_label"`
@@ -138,7 +149,6 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 		OfflineAP: offlineAPPublic{
 			Enabled:         cfg.OfflineAP.Enabled,
 			SSID:            cfg.OfflineAP.SSID,
-			Passphrase:      cfg.OfflineAP.Passphrase,
 			Channel:         cfg.OfflineAP.Channel,
 			IPv4CIDR:        cfg.OfflineAP.IPv4CIDR,
 			DHCPStart:       cfg.OfflineAP.DHCPStart,
@@ -163,7 +173,7 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 		},
 		Telegram: telegramConfigPublic{
 			Enabled:      cfg.Telegram.Enabled,
-			BotToken:     cfg.Telegram.BotToken,
+			BotTokenSet:  cfg.Telegram.BotToken != "",
 			ChatID:       cfg.Telegram.ChatID,
 			OfflineMode:  cfg.Telegram.OfflineMode,
 			MaxQueueSize: cfg.Telegram.MaxQueueSize,
@@ -194,6 +204,12 @@ func (h *ConfigHandler) Get(w http.ResponseWriter, r *http.Request) {
 			Username:     cfg.Web.AuthUsername,
 			UsingDefault: cfg.UsingDefaultAuth(),
 		},
+		Archive: archiveConfigPublic{
+			Enabled:       cfg.Archive.Enabled,
+			SSID:          cfg.Archive.SSID,
+			TargetPath:    cfg.Archive.TargetPath,
+			IncludeRecent: cfg.Archive.IncludeRecent,
+		},
 		LogLevel: cfg.LogLevel,
 		Storage: storageInfo{
 			CamName:          cfg.DiskImages.CamName,
@@ -223,7 +239,15 @@ type patchRequest struct {
 	Startup     *startupPatch     `json:"startup,omitempty"`
 	ViewerPrefs *viewerPrefsPatch `json:"viewer_prefs,omitempty"`
 	Auth        *authPatch        `json:"auth,omitempty"`
+	Archive     *archivePatch     `json:"archive,omitempty"`
 	LogLevel    *string           `json:"log_level,omitempty"`
+}
+
+type archivePatch struct {
+	Enabled       *bool   `json:"enabled,omitempty"`
+	SSID          *string `json:"ssid,omitempty"`
+	TargetPath    *string `json:"target_path,omitempty"`
+	IncludeRecent *bool   `json:"include_recent,omitempty"`
 }
 
 type authPatch struct {
@@ -480,6 +504,21 @@ func (h *ConfigHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if p := req.Archive; p != nil {
+		if p.Enabled != nil {
+			cfg.Archive.Enabled = *p.Enabled
+		}
+		if p.SSID != nil {
+			cfg.Archive.SSID = *p.SSID
+		}
+		if p.TargetPath != nil {
+			cfg.Archive.TargetPath = strings.TrimSpace(*p.TargetPath)
+		}
+		if p.IncludeRecent != nil {
+			cfg.Archive.IncludeRecent = *p.IncludeRecent
+		}
+	}
+
 	if req.LogLevel != nil {
 		lvl := strings.TrimSpace(strings.ToLower(*req.LogLevel))
 		logger.SetLevelFromString(lvl)
@@ -536,6 +575,53 @@ func validatePatch(req *patchRequest) string {
 		}
 		if p.PingTarget != nil && (*p.PingTarget == "" || strings.HasPrefix(*p.PingTarget, "-")) {
 			return "invalid ping_target"
+		}
+	}
+
+	if p := req.Web; p != nil {
+		// The UI's number inputs yield Number("") === 0 when cleared, so a zero or
+		// negative limit here is a real request that would break uploads and chime
+		// validation device-wide until someone edits the config by hand.
+		if p.MaxLockChimeSize != nil && *p.MaxLockChimeSize <= 0 {
+			return "max_lock_chime_size must be > 0"
+		}
+		if p.MaxLockChimeDur != nil && *p.MaxLockChimeDur <= 0 {
+			return "max_lock_chime_duration must be > 0"
+		}
+		if p.MinLockChimeDur != nil && *p.MinLockChimeDur <= 0 {
+			return "min_lock_chime_duration must be > 0"
+		}
+		if p.SpeedStep != nil && *p.SpeedStep <= 0 {
+			return "speed_step must be > 0"
+		}
+		if p.MaxUploadSizeMB != nil && *p.MaxUploadSizeMB <= 0 {
+			return "max_upload_size_mb must be > 0"
+		}
+		if p.MaxUploadChunkMB != nil && *p.MaxUploadChunkMB <= 0 {
+			return "max_upload_chunk_mb must be > 0"
+		}
+		if p.MinLockChimeDur != nil && p.MaxLockChimeDur != nil && *p.MinLockChimeDur > *p.MaxLockChimeDur {
+			return "min_lock_chime_duration must be <= max_lock_chime_duration"
+		}
+		if p.SpeedRangeMin != nil && p.SpeedRangeMax != nil && *p.SpeedRangeMin >= *p.SpeedRangeMax {
+			return "speed_range_min must be < speed_range_max"
+		}
+		if p.MaxUploadChunkMB != nil && p.MaxUploadSizeMB != nil && *p.MaxUploadChunkMB > *p.MaxUploadSizeMB {
+			return "max_upload_chunk_mb must be <= max_upload_size_mb"
+		}
+	}
+
+	if p := req.Archive; p != nil {
+		// The archive service rsyncs into this path; a relative one would resolve
+		// against the service's working directory instead of the mounted target.
+		if p.TargetPath != nil {
+			path := strings.TrimSpace(*p.TargetPath)
+			if path != "" && !filepath.IsAbs(path) {
+				return "archive target_path must be an absolute path"
+			}
+			if path == "" && p.Enabled != nil && *p.Enabled {
+				return "archive target_path is required when archive is enabled"
+			}
 		}
 	}
 

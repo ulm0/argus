@@ -11,6 +11,11 @@ import type {
   FsckCheckResult,
   SystemMetrics,
 } from "@/lib/types";
+import { useToast } from "@/components/Toast";
+
+// System metrics are cheap and change constantly; everything else on this page
+// is a disk walk, so only the metrics are polled.
+const METRICS_POLL_MS = 10_000;
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -48,15 +53,13 @@ export default function AnalyticsPage() {
   const [fsckHistory, setFsckHistory] = useState<FsckCheckResult[]>([]);
   const [systemMetrics, setSystemMetrics] = useState<SystemMetrics | null>(null);
   const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [metricsAt, setMetricsAt] = useState<number | null>(null);
   const [fsckRunning, setFsckRunning] = useState(false);
-
-  const showToast = useCallback((msg: string, ok = true) => {
-    setToast({ msg, ok });
-    setTimeout(() => setToast(null), 3000);
-  }, []);
+  const { showToast } = useToast();
 
   const loadAll = useCallback(async () => {
+    setRefreshing(true);
     const [analytics, system, fsck, history] = await Promise.allSettled([
       api.getDashboard(),
       api.getSystemMetrics(),
@@ -64,17 +67,40 @@ export default function AnalyticsPage() {
       api.getFsckHistory(),
     ]);
     if (analytics.status === "fulfilled") setDashboard(analytics.value);
-    if (system.status === "fulfilled") setSystemMetrics(system.value);
+    if (system.status === "fulfilled") {
+      setSystemMetrics(system.value);
+      setMetricsAt(Date.now());
+    }
     if (fsck.status === "fulfilled") {
       setFsckStatus(fsck.value);
       setFsckRunning(fsck.value.running);
     }
     if (history.status === "fulfilled") setFsckHistory(history.value.history || []);
-    if (analytics.status === "rejected") showToast("Failed to load analytics", false);
+    if (analytics.status === "rejected") {
+      // Keep whatever was already on screen — a failed refresh on a flaky link
+      // is no reason to throw away numbers the user is reading.
+      showToast(
+        analytics.reason instanceof Error ? analytics.reason.message : "Failed to load analytics",
+        false,
+      );
+    }
     setLoading(false);
+    setRefreshing(false);
   }, [showToast]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
+
+  useEffect(() => {
+    const id = setInterval(async () => {
+      // A backgrounded tab on a parked car shouldn't keep waking the Pi.
+      if (document.hidden) return;
+      try {
+        setSystemMetrics(await api.getSystemMetrics());
+        setMetricsAt(Date.now());
+      } catch { /* transient — the next tick retries */ }
+    }, METRICS_POLL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     if (!fsckRunning) return;
@@ -94,6 +120,16 @@ export default function AnalyticsPage() {
   }, [fsckRunning, showToast]);
 
   const handleStartFsck = async (partitions: string[] | undefined, mode: FsckMode) => {
+    // Repair writes non-interactive fixes to a filesystem holding evidence, and
+    // its button sits next to the read-only Quick Check.
+    if (
+      mode === "repair" &&
+      !confirm(
+        `Run repair on ${partitions?.join(", ") ?? "all partitions"}? This writes fixes to the filesystem and can take several minutes.`,
+      )
+    ) {
+      return;
+    }
     try {
       await api.startFsck(partitions, mode);
       showToast(`${mode === "repair" ? "Repair" : "Check"} started`);
@@ -115,7 +151,7 @@ export default function AnalyticsPage() {
     }
   };
 
-  if (loading || !dashboard) {
+  if (loading) {
     return (
       <div className="flex min-h-full items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-[var(--color-border)] border-t-[var(--color-accent)]" />
@@ -123,28 +159,53 @@ export default function AnalyticsPage() {
     );
   }
 
-  const health = dashboard.storage_health;
-  const style = HEALTH_STYLES[health?.status] || HEALTH_STYLES.healthy;
+  // The storage walk can fail on its own while the fsck endpoints answer fine,
+  // so a null dashboard degrades the page instead of replacing it.
+  const health = dashboard?.storage_health;
+  const style = HEALTH_STYLES[health?.status ?? ""] || HEALTH_STYLES.healthy;
   const alerts = health?.alerts ?? [];
   const recommendations = health?.recommendations ?? [];
-  const partitionUsage = dashboard.partition_usage ?? [];
-  const videoStatistics = dashboard.video_statistics ?? [];
-  const folderBreakdown = dashboard.folder_breakdown ?? [];
+  const partitionUsage = dashboard?.partition_usage ?? [];
+  const videoStatistics = dashboard?.video_statistics ?? [];
+  const folderBreakdown = dashboard?.folder_breakdown ?? [];
 
   return (
     <div className="w-full space-y-6 p-6 lg:p-8">
-      {toast && (
-        <div className={`fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-sm px-4 py-3 text-sm font-medium shadow-lg ${toast.ok ? "bg-[var(--color-success)] text-white" : "bg-[var(--color-danger)] text-white"}`}>
-          {toast.msg}
-        </div>
-      )}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">Storage Analytics</h1>
+        <button
+          onClick={loadAll}
+          disabled={refreshing}
+          className="rounded-sm border border-[var(--color-border)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)] disabled:opacity-50"
+        >
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
 
-      <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">Storage Analytics</h1>
+      {!dashboard && (
+        <section className="flex flex-col items-center justify-center gap-4 rounded bg-[var(--color-bg-card)] p-12 shadow-sm">
+          <p className="text-[var(--color-danger)]">Could not load storage analytics.</p>
+          <button
+            onClick={loadAll}
+            disabled={refreshing}
+            className="rounded-sm bg-[var(--color-accent)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            {refreshing ? "Retrying…" : "Retry"}
+          </button>
+        </section>
+      )}
 
       {/* Raspberry Pi System Stats */}
       {systemMetrics && (
         <section className="rounded bg-[var(--color-bg-card)] p-6 shadow-sm">
-          <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">Raspberry Pi System</h2>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">Raspberry Pi System</h2>
+            {metricsAt && (
+              <span className="text-xs text-[var(--color-text-muted)]">
+                Updated {new Date(metricsAt).toLocaleTimeString()}
+              </span>
+            )}
+          </div>
           <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <div className="rounded bg-[var(--color-bg-card-nested)] p-4">
               <p className="text-xs text-[var(--color-text-muted)]">CPU Usage</p>
@@ -193,6 +254,7 @@ export default function AnalyticsPage() {
       )}
 
       {/* Health Card */}
+      {dashboard && (
       <section className={`rounded p-6 shadow-sm ${style.bg}`}>
         <div className="flex items-center gap-3">
           <span className={`h-3 w-3 rounded-full ${style.dot}`} />
@@ -217,9 +279,10 @@ export default function AnalyticsPage() {
           </div>
         )}
       </section>
+      )}
 
       {/* Recording Estimate */}
-      {dashboard.recording_estimate && Object.keys(dashboard.recording_estimate).length > 0 && (
+      {dashboard?.recording_estimate && Object.keys(dashboard.recording_estimate).length > 0 && (
         <div className="rounded bg-[var(--color-bg-card)] p-4 shadow-sm">
           <span className="text-sm text-[var(--color-text-muted)]">Estimated recording time remaining</span>
           <div className="mt-2 grid grid-cols-2 gap-4 sm:grid-cols-3">
@@ -234,6 +297,7 @@ export default function AnalyticsPage() {
       )}
 
       {/* Partition Usage */}
+      {dashboard && (
       <section className="rounded bg-[var(--color-bg-card)] p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-[var(--color-text-primary)]">Partition Usage</h2>
         <div className="mt-4 space-y-4">
@@ -251,6 +315,7 @@ export default function AnalyticsPage() {
           ))}
         </div>
       </section>
+      )}
 
       {/* Video Stats */}
       {videoStatistics.length > 0 && (

@@ -4,6 +4,9 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import * as api from "@/lib/api";
 import type { FileInfo, DirInfo } from "@/lib/types";
 import { useFeatureGuard } from "@/hooks/useFeatureGuard";
+import { useToast } from "@/components/Toast";
+import EditModeBanner from "@/components/EditModeBanner";
+import MusicUploader from "@/components/MusicUploader";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -13,10 +16,9 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
-const CHUNK_SIZE = 1024 * 1024;
-
 export default function MusicPage() {
   const { available, loading: featureLoading } = useFeatureGuard("music_available");
+  const { showToast } = useToast();
   const [dirs, setDirs] = useState<DirInfo[]>([]);
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [currentPath, setCurrentPath] = useState("");
@@ -24,23 +26,14 @@ export default function MusicPage() {
   const [freeBytes, setFreeBytes] = useState(0);
   const [usedBytes, setUsedBytes] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
-  const [dragOver, setDragOver] = useState(false);
   const [playing, setPlaying] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
   const [showMkdir, setShowMkdir] = useState(false);
   const [newDirName, setNewDirName] = useState("");
   const [renaming, setRenaming] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
+  const [query, setQuery] = useState("");
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const showToast = useCallback((msg: string, ok = true) => {
-    setToast({ msg, ok });
-    setTimeout(() => setToast(null), 3000);
-  }, []);
 
   const loadDir = useCallback(
     async (path: string) => {
@@ -82,6 +75,7 @@ export default function MusicPage() {
       audioRef.current.pause();
       audioRef.current = null;
     }
+    setQuery("");
     loadDir(path);
   };
 
@@ -98,64 +92,18 @@ export default function MusicPage() {
     }
     const audio = new Audio(api.playURL(filePath));
     audio.onended = () => setPlaying(null);
-    audio.play();
+    // A missing or unplayable file otherwise leaves the pause icon stuck forever.
+    audio.onerror = () => setPlaying(null);
+    audio.play().catch((err: Error) => {
+      // Starting another preview pauses this element, which rejects its pending
+      // play() with AbortError — expected, and the new track already owns the
+      // playing state, so neither the toast nor the reset must fire.
+      if (err.name === "AbortError") return;
+      setPlaying(null);
+      showToast("Playback failed", false);
+    });
     audioRef.current = audio;
     setPlaying(filePath);
-  };
-
-  const handleUploadChunked = async (file: File) => {
-    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-    let uploadId = "";
-
-    for (let i = 0; i < totalChunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, file.size);
-      const chunk = file.slice(start, end);
-
-      const res = await api.uploadChunk(chunk, uploadId, file.name, i, totalChunks, currentPath);
-      uploadId = res.upload_id;
-
-      setUploadProgress((prev) => ({
-        ...prev,
-        [file.name]: Math.round(((i + 1) / totalChunks) * 100),
-      }));
-
-      if (res.complete) break;
-    }
-  };
-
-  const handleUpload = async (fileList: FileList | File[]) => {
-    if (!fileList.length) return;
-    setUploading(true);
-    setUploadProgress({});
-
-    try {
-      for (const file of Array.from(fileList)) {
-        if (file.size > CHUNK_SIZE * 2) {
-          await handleUploadChunked(file);
-        } else {
-          const form = new FormData();
-          form.append("file", file);
-          form.append("path", currentPath);
-          const res = await fetch("/api/music/upload", { method: "POST", body: form });
-          if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? res.statusText);
-          setUploadProgress((prev) => ({ ...prev, [file.name]: 100 }));
-        }
-      }
-      showToast(`Uploaded ${fileList.length} file(s)`);
-      await loadDir(currentPath);
-    } catch (e) {
-      showToast(e instanceof Error ? e.message : "Upload failed", false);
-    } finally {
-      setUploading(false);
-      setUploadProgress({});
-    }
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    handleUpload(e.dataTransfer.files);
   };
 
   const handleDeleteFile = async (filePath: string) => {
@@ -225,15 +173,15 @@ export default function MusicPage() {
     );
   }
 
+  const q = query.trim().toLowerCase();
+  const visibleDirs = q ? dirs.filter((d) => d.name.toLowerCase().includes(q)) : dirs;
+  const visibleFiles = q ? files.filter((f) => f.name.toLowerCase().includes(q)) : files;
+
   return (
     <div className="w-full space-y-6 p-6 lg:p-8">
-      {toast && (
-        <div className={`fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-sm px-4 py-3 text-sm font-medium shadow-lg ${toast.ok ? "bg-[var(--color-success)] text-white" : "bg-[var(--color-danger)] text-white"}`}>
-          {toast.msg}
-        </div>
-      )}
-
       <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">Music</h1>
+
+      <EditModeBanner />
 
       {/* Storage Usage */}
       {totalBytes > 0 && (
@@ -262,41 +210,13 @@ export default function MusicPage() {
         })}
       </div>
 
-      {/* Upload & Actions */}
-      <div className="flex flex-wrap gap-3">
-        <div
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          className={`flex cursor-pointer items-center gap-2 rounded-sm border-2 border-dashed px-4 py-2 text-sm font-medium transition-colors ${dragOver ? "border-[var(--color-accent)] bg-[var(--color-accent-subtle)] text-[var(--color-accent)]" : "border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-text-muted)]"}`}
-        >
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
-          {uploading ? "Uploading..." : "Upload Files"}
-          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(e) => e.target.files && handleUpload(e.target.files)} />
-        </div>
-        <button onClick={() => setShowMkdir(!showMkdir)} className="flex items-center gap-2 rounded-sm border border-[var(--color-border)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)]">
-          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" /></svg>
-          New Folder
-        </button>
-      </div>
+      {/* Upload */}
+      <MusicUploader currentPath={currentPath} onUploadComplete={() => loadDir(currentPath)} />
 
-      {/* Upload Progress */}
-      {Object.keys(uploadProgress).length > 0 && (
-        <div className="space-y-2 rounded-sm bg-[var(--color-bg-card-nested)] p-3">
-          {Object.entries(uploadProgress).map(([name, pct]) => (
-            <div key={name} className="space-y-1">
-              <div className="flex justify-between text-xs">
-                <span className="truncate text-[var(--color-text-secondary)]">{name}</span>
-                <span className="text-[var(--color-text-muted)]">{pct}%</span>
-              </div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-[var(--color-border)]">
-                <div className="h-full rounded-full bg-[var(--color-accent)] transition-all" style={{ width: `${pct}%` }} />
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <button onClick={() => setShowMkdir(!showMkdir)} className="flex items-center gap-2 rounded-sm border border-[var(--color-border)] px-4 py-2 text-sm font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-tertiary)]">
+        <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" /></svg>
+        New Folder
+      </button>
 
       {showMkdir && (
         <div className="flex gap-2">
@@ -306,6 +226,14 @@ export default function MusicPage() {
         </div>
       )}
 
+      <input
+        type="search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Filter this folder"
+        className="block w-full rounded-sm border border-[var(--color-border)] bg-[var(--color-bg-primary)] px-3 py-2 text-sm text-[var(--color-text-primary)]"
+      />
+
       {/* File List */}
       {loading ? (
         <div className="flex justify-center py-12">
@@ -313,11 +241,13 @@ export default function MusicPage() {
         </div>
       ) : (
         <div className="overflow-hidden rounded bg-[var(--color-bg-card)] shadow-sm">
-          {dirs.length === 0 && files.length === 0 ? (
-            <div className="py-12 text-center text-sm text-[var(--color-text-muted)]">Empty directory</div>
+          {visibleDirs.length === 0 && visibleFiles.length === 0 ? (
+            <div className="py-12 text-center text-sm text-[var(--color-text-muted)]">
+              {dirs.length === 0 && files.length === 0 ? "Empty directory" : "Nothing matches that filter"}
+            </div>
           ) : (
             <div className="divide-y divide-[var(--color-border)]">
-              {dirs.map((d) => (
+              {visibleDirs.map((d) => (
                 <div key={d.path} className="flex items-center justify-between px-4 py-3 hover:bg-[var(--color-bg-tertiary)]">
                   <div className="flex min-w-0 flex-1 items-center gap-3">
                     <span className="shrink-0 text-[var(--color-text-muted)]">
@@ -327,12 +257,12 @@ export default function MusicPage() {
                       {d.name}
                     </button>
                   </div>
-                  <button onClick={() => handleDeleteDir(d.path)} className="rounded-sm p-1.5 text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-bg)]">
+                  <button onClick={() => handleDeleteDir(d.path)} aria-label={`Delete folder ${d.name}`} title={`Delete folder ${d.name}`} className="rounded-sm p-2.5 text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-bg)]">
                     <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                   </button>
                 </div>
               ))}
-              {files.map((f) => (
+              {visibleFiles.map((f) => (
                 <div key={f.path} className="flex items-center justify-between px-4 py-3 hover:bg-[var(--color-bg-tertiary)]">
                   <div className="flex min-w-0 flex-1 items-center gap-3">
                     <span className="shrink-0 text-[var(--color-text-muted)]">
@@ -346,18 +276,18 @@ export default function MusicPage() {
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <span className="text-xs tabular-nums text-[var(--color-text-muted)]">{formatBytes(f.size)}</span>
-                    <div className="flex items-center gap-0.5">
+                    <div className="flex items-center gap-2">
                       {isAudio(f.name) && (
-                        <button onClick={() => handlePlay(f.path)} className={`rounded-sm p-1.5 transition-colors ${playing === f.path ? "bg-[var(--color-accent-subtle)] text-[var(--color-accent)]" : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)]"}`}>
+                        <button onClick={() => handlePlay(f.path)} aria-label={playing === f.path ? `Stop ${f.name}` : `Play ${f.name}`} title={playing === f.path ? `Stop ${f.name}` : `Play ${f.name}`} className={`rounded-sm p-2.5 transition-colors ${playing === f.path ? "bg-[var(--color-accent-subtle)] text-[var(--color-accent)]" : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)]"}`}>
                           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                             {playing === f.path ? <path strokeLinecap="round" strokeLinejoin="round" d="M6 4h4v16H6zM14 4h4v16h-4z" /> : <path strokeLinecap="round" strokeLinejoin="round" d="M5 3l14 9-14 9V3z" />}
                           </svg>
                         </button>
                       )}
-                      <button onClick={() => { setRenaming(f.path); setNewName(f.name); }} className="rounded-sm p-1.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-tertiary)]">
+                      <button onClick={() => { setRenaming(f.path); setNewName(f.name); }} aria-label={`Rename ${f.name}`} title={`Rename ${f.name}`} className="rounded-sm p-2.5 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-bg-tertiary)]">
                         <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
                       </button>
-                      <button onClick={() => handleDeleteFile(f.path)} className="rounded-sm p-1.5 text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-bg)]">
+                      <button onClick={() => handleDeleteFile(f.path)} aria-label={`Delete ${f.name}`} title={`Delete ${f.name}`} className="rounded-sm p-2.5 text-[var(--color-danger)] transition-colors hover:bg-[var(--color-danger-bg)]">
                         <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                       </button>
                     </div>

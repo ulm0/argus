@@ -2,7 +2,18 @@
 
 import { useEffect, useState, useCallback } from "react";
 import * as api from "@/lib/api";
-import type { CompleteAnalytics, SystemMetrics, AppStatus } from "@/lib/types";
+import PowerControls from "@/components/PowerControls";
+import { EDIT_MODE_CONFIRM } from "@/components/EditModeBanner";
+import { StatusBadge, SignalStrength } from "@/components/SystemPanel";
+import { useToast } from "@/components/Toast";
+import type {
+  CompleteAnalytics,
+  SystemMetrics,
+  AppStatus,
+  APStatus,
+  WifiStatus,
+  GadgetState,
+} from "@/lib/types";
 
 function fmt(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
@@ -23,40 +34,86 @@ export default function HomePage() {
   const [analytics, setAnalytics] = useState<CompleteAnalytics | null>(null);
   const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
   const [status, setStatus] = useState<AppStatus | null>(null);
+  const [apStatus, setApStatus] = useState<APStatus | null>(null);
+  const [wifiStatus, setWifiStatus] = useState<WifiStatus | null>(null);
+  const [gadget, setGadget] = useState<GadgetState | null>(null);
   const [switching, setSwitching] = useState(false);
-  const [switchError, setSwitchError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Everything below the banner is last-known-good data; without these two the
+  // page renders minutes-old numbers as if they were live.
+  const [lastSuccess, setLastSuccess] = useState<number | null>(null);
+  const [unreachable, setUnreachable] = useState(false);
+  const { showToast } = useToast();
 
   const load = useCallback(async () => {
-    const [a, m, s] = await Promise.allSettled([
+    if (document.hidden) return;
+    // The connectivity card below is `xl:hidden`, and at xl SystemPanel already
+    // polls these same three. Each of them forks nmcli/iw on the Pi, so only the
+    // side that is actually rendering them pays for them.
+    const showsConnectivity = !window.matchMedia("(min-width: 1280px)").matches;
+    const [a, m, s, ap, wifi, g] = await Promise.allSettled([
       api.getDashboard(),
       api.getSystemMetrics(),
       api.getStatus(),
+      showsConnectivity ? api.getAPStatus() : null,
+      showsConnectivity ? api.getWifiStatus() : null,
+      showsConnectivity ? api.getGadgetState() : null,
     ]);
     if (a.status === "fulfilled") setAnalytics(a.value);
     if (m.status === "fulfilled") setMetrics(m.value);
     if (s.status === "fulfilled") setStatus(s.value);
+    if (ap.status === "fulfilled" && ap.value) setApStatus(ap.value);
+    if (wifi.status === "fulfilled" && wifi.value) setWifiStatus(wifi.value);
+    if (g.status === "fulfilled" && g.value) setGadget(g.value);
+
+    // The skipped calls settle as fulfilled nulls; counting them would make the
+    // device look reachable even when every real request failed.
+    const ok = (showsConnectivity ? [a, m, s, ap, wifi, g] : [a, m, s]).some(
+      (r) => r.status === "fulfilled",
+    );
+    if (ok) setLastSuccess(Date.now());
+    setUnreachable(!ok);
     setLoading(false);
   }, []);
 
   useEffect(() => {
     load();
     const id = setInterval(load, 30_000);
-    return () => clearInterval(id);
+    // A backgrounded tab must not keep waking the Pi, and coming back to it must
+    // show fresh data rather than whatever was frozen on screen.
+    const onVisibility = () => {
+      if (!document.hidden) load();
+    };
+    // Crossing below xl reveals the connectivity card, whose data the wide-width
+    // poll deliberately skipped — refetch now rather than show a false "AP off".
+    const mql = window.matchMedia("(min-width: 1280px)");
+    const onWidth = () => {
+      if (!mql.matches) load();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    mql.addEventListener("change", onWidth);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibility);
+      mql.removeEventListener("change", onWidth);
+    };
   }, [load]);
 
-  const switchMode = useCallback(async (mode: "present" | "edit") => {
-    setSwitching(true);
-    setSwitchError(null);
-    try {
-      if (mode === "present") await api.switchToPresent();
-      else await api.switchToEdit();
-      setStatus(await api.getStatus());
-    } catch (e) {
-      setSwitchError(e instanceof Error ? e.message : "Mode switch failed");
-    }
-    setSwitching(false);
-  }, []);
+  const switchMode = useCallback(
+    async (mode: "present" | "edit") => {
+      if (mode === "edit" && !confirm(EDIT_MODE_CONFIRM)) return;
+      setSwitching(true);
+      try {
+        if (mode === "present") await api.switchToPresent();
+        else await api.switchToEdit();
+        setStatus(await api.getStatus());
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : "Mode switch failed", false);
+      }
+      setSwitching(false);
+    },
+    [showToast],
+  );
 
   if (loading) {
     return (
@@ -73,16 +130,47 @@ export default function HomePage() {
 
   return (
     <div className="w-full space-y-6 p-6 lg:p-8">
+      {unreachable && (
+        <div className="flex items-center justify-between gap-3 rounded border-l-2 border-[var(--color-warning)] bg-[var(--color-warning-bg)] px-4 py-3">
+          <p className="text-xs font-semibold text-[var(--color-warning)]">
+            Device unreachable
+            {lastSuccess && ` — showing data from ${new Date(lastSuccess).toLocaleTimeString()}`}
+          </p>
+          <button
+            onClick={load}
+            className="shrink-0 rounded border border-[var(--color-warning)] px-3 py-1.5 text-xs font-semibold text-[var(--color-warning)]"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       <div>
         <h1 className="text-2xl font-bold text-[var(--color-text-primary)]">Overview</h1>
-        {analytics?.last_updated && (
+        {lastSuccess && (
           <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-            Updated {new Date(analytics.last_updated).toLocaleTimeString()}
+            Updated {new Date(lastSuccess).toLocaleTimeString()}
           </p>
         )}
       </div>
 
-      {/* Mode control — hidden on xl where SystemPanel is visible */}
+      {/* Health alerts — first, not three phone-screens down */}
+      {health?.alerts && health.alerts.length > 0 && (
+        <div className={`${cardCls} border-l-2 border-[var(--color-warning)]`}>
+          <h2 className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">
+            Health Alerts
+          </h2>
+          <ul className="space-y-1.5">
+            {health.alerts.map((alert, i) => (
+              <li key={i} className="text-xs text-[var(--color-text-secondary)]">
+                · {alert}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Mode, connectivity and power — hidden on xl where SystemPanel is visible */}
       <div className={`xl:hidden ${cardCls}`}>
         <div className="flex items-center justify-between">
           <div>
@@ -112,9 +200,39 @@ export default function HomePage() {
             ))}
           </div>
         </div>
-        {switchError && (
-          <p className="mt-3 text-xs text-[var(--color-danger)]">{switchError}</p>
-        )}
+        <p className="mt-2 text-[10px] text-[var(--color-text-muted)]">
+          Present: car records · Edit: manage files
+        </p>
+
+        {/* Connectivity: an unbound gadget with mode=present is the difference
+            between "recording" and "the car cannot see the drive". */}
+        <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-[var(--color-border-light)] pt-3">
+          <StatusBadge
+            active={!!apStatus?.active}
+            activeLabel={`AP: ${apStatus?.ssid || "on"}`}
+            inactiveLabel="AP off"
+          />
+          <StatusBadge
+            active={!!wifiStatus?.connection?.connected}
+            activeLabel={`WiFi: ${wifiStatus?.connection?.ssid || "on"}`}
+            inactiveLabel="WiFi off"
+          />
+          {wifiStatus?.connection?.connected && wifiStatus.connection.signal != null && (
+            <SignalStrength rssi={wifiStatus.connection.signal} />
+          )}
+          <StatusBadge
+            active={!!gadget?.gadget_present}
+            activeLabel="USB bound"
+            inactiveLabel="USB unbound"
+          />
+        </div>
+
+        <div className="mt-4 border-t border-[var(--color-border-light)] pt-3">
+          <span className="text-xs font-medium tracking-wider text-[var(--color-text-muted)]">
+            Power
+          </span>
+          <PowerControls />
+        </div>
       </div>
 
       {/* Storage */}
@@ -202,22 +320,6 @@ export default function HomePage() {
           </div>
         )}
       </div>
-
-      {/* Health alerts */}
-      {health?.alerts && health.alerts.length > 0 && (
-        <div className={`${cardCls} border-l-2 border-[var(--color-warning)]`}>
-          <h2 className="mb-3 text-sm font-semibold text-[var(--color-text-primary)]">
-            Health Alerts
-          </h2>
-          <ul className="space-y-1.5">
-            {health.alerts.map((alert, i) => (
-              <li key={i} className="text-xs text-[var(--color-text-secondary)]">
-                · {alert}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </div>
   );
 }
@@ -240,11 +342,13 @@ function UsageBar({
         </span>
       </div>
       <div className="h-1.5 w-full overflow-hidden rounded-full bg-[var(--color-bg-tertiary)]">
+        {/* Same 90/75 thresholds as the storage bars above — two bars on one page
+            disagreeing on "red" is worse than either threshold being wrong. */}
         <div
           className={`h-full rounded-full transition-all ${
-            pct > 85
+            pct > 90
               ? "bg-[var(--color-danger)]"
-              : pct > 65
+              : pct > 75
                 ? "bg-[var(--color-warning)]"
                 : "bg-[var(--color-accent)]"
           }`}

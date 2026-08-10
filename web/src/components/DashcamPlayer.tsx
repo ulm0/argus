@@ -15,6 +15,7 @@ import type { SeiFrame, SeiMetadata } from "@/lib/sei-parser";
 import { useMapTheme } from "@/lib/useMapTheme";
 import ArgusHUD from "./ArgusHUD";
 import CornerResize from "./CornerResize";
+import { useToast } from "./Toast";
 import { useViewerScale } from "@/lib/useViewerScale";
 
 const MapOverlay = dynamic(() => import("./MapOverlay"), { ssr: false });
@@ -31,11 +32,27 @@ interface DashcamPlayerProps {
   streamUrlFn: (cameraFile: string) => string;
   telemetryUrlFn: (cameraFile: string) => string;
   downloadUrlFn?: (cameraFile: string) => string;
+  /** Server-side trim of one camera file. Omitted where the backend can't trim. */
+  exportUrlFn?: (cameraFile: string, start: number, end: number) => string;
+  /** Poster for the camera strip; without it the strip shows placeholders. */
+  thumbnailUrlFn?: (camera: string) => string;
   downloadZipUrl?: string;
+  /** Camera that triggered the event, so it opens on the angle that matters. */
+  initialCamera?: CameraName;
+  /** Deep-linked position (?clip=&t=), so a URL carries "clip 4, 0:37". */
+  initialClipIndex?: number;
+  initialTime?: number;
+  onPositionChange?: (clipIndex: number, time: number) => void;
   onDelete?: () => void;
 }
 
 const SEEK_STEP = 5;
+// Tesla's nominal clip length — the assumed duration of a clip that hasn't
+// loaded yet, replaced by the real one as soon as that clip reports metadata.
+const CLIP_SECONDS = 60;
+// Tesla cameras record ~36fps — close enough to step to the contact frame.
+const FRAME_STEP = 1 / 36;
+const RATES = [0.5, 1, 1.5, 2];
 
 // Fixed camera grid positions for composed view (Tesla layout)
 const CAMERA_SLOTS: { cam: CameraName; area: string }[] = [
@@ -52,9 +69,16 @@ export default function DashcamPlayer({
   streamUrlFn,
   telemetryUrlFn,
   downloadUrlFn,
+  exportUrlFn,
+  thumbnailUrlFn,
   downloadZipUrl,
+  initialCamera,
+  initialClipIndex,
+  initialTime,
+  onPositionChange,
   onDelete,
 }: DashcamPlayerProps) {
+  const { showToast } = useToast();
   const cameras = useMemo<CameraName[]>(
     () =>
       (Object.keys(event.camera_videos) as CameraName[]).sort(
@@ -66,14 +90,39 @@ export default function DashcamPlayer({
   const clips = useMemo(() => event.clips ?? [], [event.clips]);
 
   const [activeCamera, setActiveCamera] = useState<CameraName>(
-    cameras.includes("front") ? "front" : cameras[0],
+    initialCamera && cameras.includes(initialCamera)
+      ? initialCamera
+      : cameras.includes("front")
+        ? "front"
+        : cameras[0],
   );
-  const [clipIndex, setClipIndex] = useState(event.starting_clip_index ?? 0);
+  // ?clip= comes from the URL, so floor and clamp it rather than trusting it:
+  // a fractional index reads clips[] as undefined and lands on the wrong clip.
+  const [clipIndex, setClipIndex] = useState(() => {
+    const want = Math.floor(initialClipIndex ?? event.starting_clip_index ?? 0);
+    if (!Number.isFinite(want)) return 0;
+    return Math.max(0, Math.min(want, Math.max(0, (event.clips?.length ?? 1) - 1)));
+  });
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  // Real per-clip durations, learned from each clip as it loads. Tesla's first
+  // clip of an event is frequently short, and probing every clip up front would
+  // be a request storm on the Pi.
+  const [clipDurations, setClipDurations] = useState<Record<number, number>>({});
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [viewMode, setViewMode] = useState<"single" | "composed">("composed");
+  const [pseudoFs, setPseudoFs] = useState(false);
+  // Six simultaneous streams is more than the Pi's AP can serve; the grid is
+  // opt-in and the choice is remembered, same as the HUD/map toggles.
+  const [viewMode, setViewMode] = useState<"single" | "composed">("single");
+  // The 3×2 grid is unreadable on a portrait phone, so it stacks 2×3 there.
+  const [wideGrid, setWideGrid] = useState(true);
+  const [rate, setRate] = useState(1);
+  const [streamError, setStreamError] = useState(false);
+  const [buffering, setBuffering] = useState(false);
+  const [zipBusy, setZipBusy] = useState(false);
+  const [markIn, setMarkIn] = useState<number | null>(null);
+  const [markOut, setMarkOut] = useState<number | null>(null);
   const [mapTheme] = useMapTheme();
 
   // SEI / HUD state. Overlay toggles still live in localStorage (per-device
@@ -99,13 +148,27 @@ export default function DashcamPlayer({
   const mainVideoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const seekBarRef = useRef<HTMLDivElement>(null);
-  const thumbnailVideoRefs = useRef<Map<CameraName, HTMLVideoElement>>(new Map());
   const seiAbortRef = useRef<AbortController | null>(null);
   const seiLoadingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const zipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Populated only in composed mode; empty in single mode (makes sync calls no-ops)
   const composedRefs = useRef<Map<CameraName, HTMLVideoElement>>(new Map());
   // Set when onEnded auto-advances the clip so the next clip resumes on load
   const pendingAutoplayRef = useRef(false);
+  // Offset to seek to once the newly-selected clip reports its metadata. A
+  // non-finite ?t= would poison currentTime, so it never becomes a seek.
+  // Absent a deep link this opens on the trigger frame: nobody opens a Sentry
+  // event to watch the empty minute before it. An explicit ?clip=/?t= wins —
+  // that URL was built by someone who already chose a moment.
+  const pendingSeekRef = useRef<number | null>(
+    typeof initialTime === "number" && Number.isFinite(initialTime)
+      ? initialTime
+      : initialClipIndex === undefined
+        ? triggerOffsetInClip(event, clipIndex)
+        : null,
+  );
+  // Playback rate has to be re-applied per clip; a ref keeps handlers stable.
+  const rateRef = useRef(1);
 
   const activeFile = useMemo(() => {
     const clipTs = clips[clipIndex];
@@ -143,14 +206,47 @@ export default function DashcamPlayer({
     return event.camera_videos[cam] ?? "";
   }, [clips, clipIndex, event.camera_videos]);
 
-  // Restore HUD + map toggles from localStorage. Scales are handled by
-  // useViewerScale (server-persisted with localStorage cache).
+  // ── Virtual timeline ──
+  // A multi-clip event is one continuous incident, so the seek bar spans the
+  // whole event rather than the current 60s file.
+  const multiClip = clips.length > 1;
+  // Where a clip begins on the event-wide timeline. Clips that haven't been
+  // played yet fall back to Tesla's nominal length, so the mapping self-corrects
+  // as their real durations arrive.
+  const clipStart = useCallback(
+    (i: number) => {
+      let start = 0;
+      for (let k = 0; k < i; k++) start += clipDurations[k] ?? CLIP_SECONDS;
+      return start;
+    },
+    [clipDurations],
+  );
+  const totalDuration = multiClip
+    ? clipStart(clips.length - 1) + (clipDurations[clips.length - 1] ?? CLIP_SECONDS)
+    : duration;
+  const virtualTime = multiClip ? clipStart(clipIndex) + currentTime : currentTime;
+
+  // Report the position so the page can put it in the URL — a reload, or a link
+  // sent to another phone, lands on the same frame. Nothing is reported before
+  // the clip has loaded and any deferred seek has landed: t=0 published then
+  // would overwrite the very deep link that opened the page.
+  const lastReportedClipRef = useRef<number | null>(null);
+  const reportPosition = useCallback(() => {
+    const v = mainVideoRef.current;
+    if (!v || pendingSeekRef.current !== null || !isFinite(v.currentTime)) return;
+    lastReportedClipRef.current = clipIndex;
+    onPositionChange?.(clipIndex, v.currentTime);
+  }, [clipIndex, onPositionChange]);
+
+  // Restore HUD + map toggles and the view mode from localStorage. Scales are
+  // handled by useViewerScale (server-persisted with localStorage cache).
   useEffect(() => {
     try {
       const hudOn = localStorage.getItem("seiOverlayEnabled") !== "false";
       const mapOn = localStorage.getItem("mapOverlayEnabled") !== "false";
       setHudEnabled(hudOn);
       setMapEnabled(mapOn);
+      if (localStorage.getItem("viewMode") === "composed") setViewMode("composed");
       if ((hudOn || mapOn) && activeFile && !isEncrypted) {
         loadTelemetry(activeFile);
       }
@@ -171,6 +267,11 @@ export default function DashcamPlayer({
     setSeiFrames([]);
     setCurrentSei(null);
     setSeiLoading(false);
+    setStreamError(false);
+    setBuffering(false);
+    // In/out markers address a single camera file, so they can't survive it.
+    setMarkIn(null);
+    setMarkOut(null);
 
     if ((hudEnabled || mapEnabled) && activeFile && !isEncrypted) {
       loadTelemetry(activeFile);
@@ -178,13 +279,13 @@ export default function DashcamPlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFile]);
 
-  // Sync thumbnail videos to main video time
-  const syncThumbnails = useCallback((time: number) => {
-    thumbnailVideoRefs.current.forEach((video) => {
-      if (Math.abs(video.currentTime - time) > 0.5) {
-        video.currentTime = time;
-      }
-    });
+  // Track the sm breakpoint so the composed grid can restack for portrait phones.
+  useEffect(() => {
+    const mql = window.matchMedia("(min-width: 640px)");
+    const sync = () => setWideGrid(mql.matches);
+    sync();
+    mql.addEventListener("change", sync);
+    return () => mql.removeEventListener("change", sync);
   }, []);
 
   // Main video event handlers
@@ -192,7 +293,6 @@ export default function DashcamPlayer({
     const v = mainVideoRef.current;
     if (!v) return;
     setCurrentTime(v.currentTime);
-    syncThumbnails(v.currentTime);
 
     // Keep composed follower cameras in sync
     composedRefs.current.forEach((cv) => {
@@ -204,12 +304,28 @@ export default function DashcamPlayer({
     if (seiFrames.length > 0) {
       setCurrentSei(findSeiAtTime(seiFrames, v.currentTime));
     }
-  }, [syncThumbnails, seiFrames]);
+  }, [seiFrames]);
 
   const onLoadedMetadata = useCallback(() => {
     const v = mainVideoRef.current;
     if (!v) return;
     setDuration(v.duration);
+    v.playbackRate = rateRef.current;
+    if (isFinite(v.duration)) {
+      const known = v.duration;
+      setClipDurations((prev) =>
+        prev[clipIndex] === known ? prev : { ...prev, [clipIndex]: known },
+      );
+    }
+
+    // Land on the position a scrub (or a ?t= deep link) asked for
+    if (pendingSeekRef.current !== null) {
+      const target = Math.min(pendingSeekRef.current, v.duration || 0);
+      pendingSeekRef.current = null;
+      v.currentTime = target;
+      setCurrentTime(target);
+      composedRefs.current.forEach((cv) => { if (cv !== v) cv.currentTime = target; });
+    }
 
     // Resume playback after an auto-advance so multi-clip events play through
     if (pendingAutoplayRef.current) {
@@ -223,7 +339,10 @@ export default function DashcamPlayer({
         })
         .catch(() => {});
     }
-  }, []);
+
+    // A clip swap only has a real position once the new file has loaded.
+    if (lastReportedClipRef.current !== clipIndex) reportPosition();
+  }, [clipIndex, clips.length, reportPosition]);
 
   const onEnded = useCallback(() => {
     setIsPlaying(false);
@@ -263,18 +382,62 @@ export default function DashcamPlayer({
     const v = mainVideoRef.current;
     if (!v) return;
     v.currentTime = time;
+    setCurrentTime(time);
     composedRefs.current.forEach((cv) => { if (cv !== v) cv.currentTime = time; });
   }, []);
+
+  // Seek anywhere in the event: crossing a clip boundary swaps the file and
+  // defers the seek until the new clip reports metadata.
+  const seekVirtual = useCallback((t: number) => {
+    if (!multiClip) { seekTo(Math.max(0, Math.min(t, duration || 0))); return; }
+    const clamped = Math.max(0, Math.min(t, totalDuration));
+    let idx = 0;
+    while (idx < clips.length - 1 && clamped >= clipStart(idx + 1)) idx++;
+    const offset = clamped - clipStart(idx);
+    if (idx === clipIndex) { seekTo(offset); return; }
+    pendingSeekRef.current = offset;
+    setClipIndex(idx);
+  }, [multiClip, seekTo, duration, totalDuration, clips.length, clipIndex, clipStart]);
+
+  const applyRate = useCallback((next: number) => {
+    rateRef.current = next;
+    setRate(next);
+    const v = mainVideoRef.current;
+    if (v) v.playbackRate = next;
+    composedRefs.current.forEach((cv) => { cv.playbackRate = next; });
+  }, []);
+
+  const stepFrame = useCallback((dir: number) => {
+    const v = mainVideoRef.current;
+    if (!v) return;
+    v.pause();
+    setIsPlaying(false);
+    composedRefs.current.forEach((cv) => { if (cv !== v) cv.pause(); });
+    seekTo(Math.max(0, Math.min(v.currentTime + dir * FRAME_STEP, v.duration || 0)));
+  }, [seekTo]);
 
   const toggleFullscreen = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
-    } else {
-      el.requestFullscreen().catch(() => {});
+      return;
     }
-  }, []);
+    if (el.requestFullscreen) {
+      el.requestFullscreen().catch(() => {});
+      return;
+    }
+    // iOS Safari has no Element.requestFullscreen: only a <video> can go
+    // fullscreen, and only one — so the grid falls back to filling the viewport.
+    const v = mainVideoRef.current as
+      | (HTMLVideoElement & { webkitEnterFullscreen?: () => void })
+      | null;
+    if (viewMode === "single" && v?.webkitEnterFullscreen) {
+      v.webkitEnterFullscreen();
+      return;
+    }
+    setPseudoFs((p) => !p);
+  }, [viewMode]);
 
   // Fullscreen change detection
   useEffect(() => {
@@ -286,11 +449,12 @@ export default function DashcamPlayer({
   // Keyboard shortcuts
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
-      if (
-        e.target instanceof HTMLInputElement ||
-        e.target instanceof HTMLTextAreaElement
-      )
+      // Only fire from the page background — otherwise Space "plays" instead of
+      // pressing the Delete button the user just focused.
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('button, a, select, input, textarea, [role="slider"]')) {
         return;
+      }
 
       switch (e.key) {
         case " ":
@@ -305,6 +469,17 @@ export default function DashcamPlayer({
           e.preventDefault();
           seek(SEEK_STEP);
           break;
+        case ",":
+          e.preventDefault();
+          stepFrame(-1);
+          break;
+        case ".":
+          e.preventDefault();
+          stepFrame(1);
+          break;
+        case "Escape":
+          setPseudoFs(false);
+          break;
         case "f":
         case "F":
           e.preventDefault();
@@ -314,19 +489,68 @@ export default function DashcamPlayer({
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [togglePlay, seek, toggleFullscreen]);
+  }, [togglePlay, seek, stepFrame, toggleFullscreen]);
 
-  // Seek bar click
-  const handleSeekBarClick = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      const bar = seekBarRef.current;
-      if (!bar || !duration) return;
-      const rect = bar.getBoundingClientRect();
-      const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-      seekTo(pct * duration);
-    },
-    [duration, seekTo],
-  );
+  // ── Seek bar scrubbing ──
+  // Pointer Events (not click) so finding the moment of impact is a drag, not a
+  // 6px stab; pointer capture keeps the drag alive outside the bar.
+  const scrubbingRef = useRef(false);
+  const scrubRafRef = useRef<number | null>(null);
+  const scrubXRef = useRef(0);
+
+  const scrubTo = useCallback((clientX: number) => {
+    const bar = seekBarRef.current;
+    if (!bar || !totalDuration) return;
+    const rect = bar.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    seekVirtual(pct * totalDuration);
+  }, [totalDuration, seekVirtual]);
+
+  const onSeekPointerDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    scrubbingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    scrubTo(e.clientX);
+  }, [scrubTo]);
+
+  const onSeekPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!scrubbingRef.current) return;
+    // One seek per frame: a raw pointermove stream would thrash the Pi with
+    // range requests for every pixel of the drag.
+    scrubXRef.current = e.clientX;
+    if (scrubRafRef.current !== null) return;
+    scrubRafRef.current = requestAnimationFrame(() => {
+      scrubRafRef.current = null;
+      scrubTo(scrubXRef.current);
+    });
+  }, [scrubTo]);
+
+  const onSeekPointerUp = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    scrubbingRef.current = false;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    if (scrubRafRef.current !== null) {
+      cancelAnimationFrame(scrubRafRef.current);
+      scrubRafRef.current = null;
+    }
+    // Once per drag, not once per frame: history.replaceState is rate-limited.
+    reportPosition();
+  }, [reportPosition]);
+
+  const onSeekKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    const step = e.key === "ArrowLeft" ? -SEEK_STEP : e.key === "ArrowRight" ? SEEK_STEP : 0;
+    if (!step) return;
+    e.preventDefault();
+    seekVirtual(virtualTime + step);
+  }, [seekVirtual, virtualTime]);
+
+  const retryStream = useCallback(() => {
+    const v = mainVideoRef.current;
+    setStreamError(false);
+    if (!v) return;
+    const src = v.src;
+    v.src = "";
+    v.src = src;
+    v.load();
+  }, []);
 
   // ── Telemetry fetch ──
 
@@ -410,11 +634,20 @@ export default function DashcamPlayer({
     });
   }, [activeFile, isEncrypted, loadTelemetry, abortSei, hudEnabled, seiFrames.length]);
 
-  const handleHudScaleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const step = e.deltaY < 0 ? 0.1 : -0.1;
-    updateHudScale(hudScale + step);
-  }, [hudScale, updateHudScale]);
+  // Same passive-listener problem as the map below: the HUD is wrapped in a
+  // plain div so the wheel event can be caught natively as it bubbles.
+  const hudScaleRef = useRef(hudScale);
+  hudScaleRef.current = hudScale;
+  const hudWheelRef = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      e.preventDefault();
+      const step = e.deltaY < 0 ? 0.1 : -0.1;
+      updateHudScale(hudScaleRef.current + step);
+    };
+    el.addEventListener("wheel", handler, { passive: false });
+    return () => el.removeEventListener("wheel", handler);
+  }, [updateHudScale]);
 
   // React registers root wheel listeners as passive, so e.preventDefault() in a
   // React onWheel handler is a no-op. Attach a native non-passive listener via a
@@ -455,9 +688,13 @@ export default function DashcamPlayer({
     });
   }, [viewMode, abortSei]);
 
-  // Abort any in-flight fetch on unmount
+  // Abort any in-flight fetch and drop pending timers/frames on unmount
   useEffect(() => {
-    return () => { abortSei(); };
+    return () => {
+      abortSei();
+      if (zipTimerRef.current) clearTimeout(zipTimerRef.current);
+      if (scrubRafRef.current !== null) cancelAnimationFrame(scrubRafRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -468,23 +705,73 @@ export default function DashcamPlayer({
     }
   }, [viewMode]);
 
+  const toggleViewMode = useCallback(() => {
+    setViewMode((m) => {
+      const next = m === "composed" ? "single" : "composed";
+      try { localStorage.setItem("viewMode", next); } catch {}
+      return next;
+    });
+  }, []);
+
+  const onVideoPause = useCallback(() => {
+    setIsPlaying(false);
+    reportPosition();
+  }, [reportPosition]);
+
+  const handleZipClick = useCallback(() => {
+    showToast("Preparing ZIP — large events take a minute");
+    setZipBusy(true);
+    // The Pi zips serially; a second click just queues another slow job.
+    zipTimerRef.current = setTimeout(() => setZipBusy(false), 10000);
+  }, [showToast]);
+
+  // Telemetry progress as a corner pill — it used to be a full-bleed overlay
+  // that hid a video that was ready to play.
+  const seiPill = seiLoading ? (
+    <div className="absolute bottom-1 left-1 z-20 rounded px-1.5 py-0.5 bg-black/50 text-[10px] font-medium text-white/70">
+      {seiProgress}
+    </div>
+  ) : null;
+
+  const bufferSpinner = buffering && !streamError ? (
+    <div className="absolute right-2 top-2 z-20 h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+  ) : null;
+
+  const errorOverlay = streamError ? (
+    <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-3 bg-black/85 px-6 text-center">
+      <p className="text-sm text-zinc-300">This clip failed to load</p>
+      <button
+        onClick={retryStream}
+        className="rounded-sm bg-[var(--color-accent)] px-3 py-1.5 text-xs font-medium text-white hover:opacity-90"
+      >
+        Retry
+      </button>
+    </div>
+  ) : null;
+
   return (
     <div
       ref={containerRef}
-      className={`flex flex-col w-full bg-black ${isFullscreen ? "h-screen" : ""}`}
+      className={`flex flex-col w-full bg-black ${isFullscreen ? "h-screen" : ""} ${pseudoFs ? "fixed inset-0 z-50" : ""}`}
     >
       {/* Video area — single or composed */}
       {viewMode === "composed" ? (
-        // ── Composed view: 3×2 grid of all cameras ──
-        // Container aspect ratio 8:3 ensures each 16:9 cell fills perfectly
-        <div className="relative w-full bg-black" style={{ aspectRatio: "8/3" }}>
+        // ── Composed view: all cameras at once ──
+        // 3×2 at ≥sm (8:3 makes each 16:9 cell fill exactly); 2×3 below, where
+        // a six-across grid is too small to read.
+        <div
+          className="relative w-full bg-black"
+          style={{ aspectRatio: wideGrid ? "8/3" : "32/27" }}
+        >
           <div
             className="h-full w-full"
             style={{
               display: "grid",
-              gridTemplateAreas: '"lr front rr" "lp back rp"',
-              gridTemplateColumns: "1fr 1fr 1fr",
-              gridTemplateRows: "1fr 1fr",
+              gridTemplateAreas: wideGrid
+                ? '"lr front rr" "lp back rp"'
+                : '"front back" "lr rr" "lp rp"',
+              gridTemplateColumns: wideGrid ? "1fr 1fr 1fr" : "1fr 1fr",
+              gridTemplateRows: wideGrid ? "1fr 1fr" : "1fr 1fr 1fr",
               gap: "1px",
               background: "#0a0a0a",
             }}
@@ -532,17 +819,21 @@ export default function DashcamPlayer({
                       }}
                       onEnded={isMaster ? onEnded : undefined}
                       onPlay={isMaster ? () => setIsPlaying(true) : undefined}
-                      onPause={isMaster ? () => setIsPlaying(false) : undefined}
+                      onPause={isMaster ? onVideoPause : undefined}
+                      onError={isMaster ? () => setStreamError(true) : undefined}
+                      onWaiting={isMaster ? () => setBuffering(true) : undefined}
+                      onPlaying={isMaster ? () => setBuffering(false) : undefined}
                     />
                   ) : null}
                   {isMaster && (
-                    <ArgusHUD
-                      sei={currentSei}
-                      visible={hudEnabled && seiFrames.length > 0}
-                      scale={hudScale}
-                      onScaleWheel={handleHudScaleWheel}
-                      onScaleChange={updateHudScale}
-                    />
+                    <div ref={hudWheelRef}>
+                      <ArgusHUD
+                        sei={currentSei}
+                        visible={hudEnabled && seiFrames.length > 0}
+                        scale={hudScale}
+                        onScaleChange={updateHudScale}
+                      />
+                    </div>
                   )}
                   {hasCam && !encrypted && (
                     <div className="absolute bottom-1 left-1 rounded px-1 py-0.5 bg-black/50 text-[9px] font-medium text-white/50">
@@ -553,7 +844,7 @@ export default function DashcamPlayer({
                     <a
                       href={downloadUrlFn(file)}
                       download
-                      className="absolute bottom-1 right-1 rounded p-0.5 bg-black/50 text-white/40 opacity-0 group-hover/cell:opacity-100 hover:!text-white transition-opacity"
+                      className="absolute bottom-1 right-1 rounded p-0.5 bg-black/50 text-white/40 opacity-0 group-hover/cell:opacity-100 hover:!text-white transition-opacity [@media(pointer:coarse)]:opacity-100"
                       title={`Download ${CAMERA_LABELS[cam]}`}
                       onClick={(e) => e.stopPropagation()}
                     >
@@ -586,6 +877,10 @@ export default function DashcamPlayer({
               </div>
             </div>
           )}
+
+          {seiPill}
+          {bufferSpinner}
+          {errorOverlay}
         </div>
       ) : (
         // ── Single camera view ──
@@ -593,9 +888,9 @@ export default function DashcamPlayer({
           {isEncrypted ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-6 text-center text-zinc-400">
               <LockIcon />
-              <p className="text-sm">Encrypted by your Tesla account</p>
+              <p className="text-sm">Encrypted or unreadable</p>
               <p className="max-w-sm text-xs text-zinc-500">
-                This clip was encrypted on the drive (Tesla 2026.20+). View it at{" "}
+                Either this clip was encrypted on the drive (Tesla 2026.20+) — view it at{" "}
                 <a
                   href="https://dashcam.tesla.com"
                   target="_blank"
@@ -605,7 +900,9 @@ export default function DashcamPlayer({
                   dashcam.tesla.com
                 </a>{" "}
                 with your Tesla account, or turn off Controls → Safety → “Encrypt Dashcam
-                Recordings” for in-Argus playback.
+                Recordings” for in-Argus playback — or the file is corrupt, which
+                looks identical here and is common after an unclean power-off. Try
+                Analytics → Repair.
               </p>
             </div>
           ) : streamSrc ? (
@@ -617,7 +914,10 @@ export default function DashcamPlayer({
               onLoadedMetadata={onLoadedMetadata}
               onEnded={onEnded}
               onPlay={() => setIsPlaying(true)}
-              onPause={() => setIsPlaying(false)}
+              onPause={onVideoPause}
+              onError={() => setStreamError(true)}
+              onWaiting={() => setBuffering(true)}
+              onPlaying={() => setBuffering(false)}
               playsInline
             />
           ) : (
@@ -627,13 +927,14 @@ export default function DashcamPlayer({
           )}
 
           {/* Tesla HUD Overlay */}
-          <ArgusHUD
-            sei={currentSei}
-            visible={hudEnabled && seiFrames.length > 0}
-            scale={hudScale}
-            onScaleWheel={handleHudScaleWheel}
-            onScaleChange={updateHudScale}
-          />
+          <div ref={hudWheelRef}>
+            <ArgusHUD
+              sei={currentSei}
+              visible={hudEnabled && seiFrames.length > 0}
+              scale={hudScale}
+              onScaleChange={updateHudScale}
+            />
+          </div>
 
           {/* Map overlay — bottom-right */}
           {mapEnabled && seiFrames.length > 0 && (
@@ -655,18 +956,12 @@ export default function DashcamPlayer({
             </div>
           )}
 
-          {/* Telemetry loading overlay */}
-          {seiLoading && (
-            <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/70">
-              <div className="flex flex-col items-center gap-3 rounded-lg bg-black/90 px-8 py-5 text-white backdrop-blur-sm">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                <span className="text-sm">{seiProgress}</span>
-              </div>
-            </div>
-          )}
+          {seiPill}
+          {bufferSpinner}
+          {errorOverlay}
 
           {/* Overlay play button */}
-          {!isPlaying && !isEncrypted && streamSrc && !seiLoading && (
+          {!isPlaying && !isEncrypted && streamSrc && !streamError && (
             <button
               onClick={togglePlay}
               className="absolute inset-0 flex items-center justify-center bg-black/20 transition-opacity hover:bg-black/30"
@@ -684,25 +979,81 @@ export default function DashcamPlayer({
 
       {/* Controls */}
       <div className="bg-zinc-900 px-3 py-2 space-y-2">
-        {/* Seek bar */}
+        {/* Seek bar — spans the whole event, not just the current clip. The
+            -my-2/py-2 wrapper is the touch target; the bar itself stays thin. */}
         <div
-          ref={seekBarRef}
-          onClick={handleSeekBarClick}
-          className="group relative h-1.5 w-full cursor-pointer rounded-full bg-zinc-700 transition-all hover:h-2.5"
+          className="group relative -my-2 w-full cursor-pointer touch-none py-2"
+          role="slider"
+          tabIndex={0}
+          aria-label="Seek"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(totalDuration) || 0}
+          aria-valuenow={Math.round(virtualTime)}
+          aria-valuetext={`${formatTime(virtualTime)} of ${formatTime(totalDuration)}`}
+          onPointerDown={onSeekPointerDown}
+          onPointerMove={onSeekPointerMove}
+          onPointerUp={onSeekPointerUp}
+          onPointerCancel={onSeekPointerUp}
+          onKeyDown={onSeekKeyDown}
         >
           <div
-            className="h-full rounded-full bg-[var(--color-accent)]"
-            style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}
-          />
-          <div
-            className="absolute top-1/2 -translate-y-1/2 h-3.5 w-3.5 rounded-full bg-[var(--color-accent)] shadow opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ left: `calc(${duration ? (currentTime / duration) * 100 : 0}% - 7px)` }}
-          />
+            ref={seekBarRef}
+            className="relative h-1.5 w-full rounded-full bg-zinc-700 transition-all group-hover:h-2.5"
+          >
+            <div
+              className="h-full rounded-full bg-[var(--color-accent)]"
+              style={{ width: `${pct(virtualTime, totalDuration)}%` }}
+            />
+
+            {/* Clip boundaries */}
+            {multiClip &&
+              clips.slice(1).map((_, i) => (
+                <div
+                  key={i}
+                  className="absolute inset-y-0 w-px bg-black/60"
+                  style={{ left: `${pct(clipStart(i + 1), totalDuration)}%` }}
+                />
+              ))}
+
+            {/* The trigger moment — the only frame most people came for. An
+                absent offset arrives as 0, which would mark every event at 0:00. */}
+            {event.trigger_offset_sec !== undefined &&
+              event.trigger_offset_sec > 0 &&
+              totalDuration > 0 && (
+                <div
+                  className="absolute -inset-y-1 w-0.5 bg-[var(--color-danger)]"
+                  style={{ left: `${pct(event.trigger_offset_sec, totalDuration)}%` }}
+                  title="Trigger"
+                />
+              )}
+
+            {/* Export in/out markers */}
+            {markIn !== null && (
+              <div
+                className="absolute -inset-y-1 w-0.5 bg-[var(--color-success)]"
+                style={{ left: `${pct((multiClip ? clipStart(clipIndex) : 0) + markIn, totalDuration)}%` }}
+              />
+            )}
+            {markOut !== null && (
+              <div
+                className="absolute -inset-y-1 w-0.5 bg-[var(--color-success)]"
+                style={{ left: `${pct((multiClip ? clipStart(clipIndex) : 0) + markOut, totalDuration)}%` }}
+              />
+            )}
+
+            {/* Handle — always visible once there is something to scrub */}
+            {totalDuration > 0 && (
+              <div
+                className="absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-[var(--color-accent)] shadow"
+                style={{ left: `calc(${pct(virtualTime, totalDuration)}% - 7px)` }}
+              />
+            )}
+          </div>
         </div>
 
         {/* Button row */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-y-2">
+          <div className="flex flex-wrap items-center gap-2">
             {/* Prev clip */}
             {clips.length > 1 && (
               <button
@@ -748,15 +1099,76 @@ export default function DashcamPlayer({
               </button>
             )}
 
-            {/* Time display */}
+            {/* Time display — event-wide, matching the seek bar */}
             <span className="ml-2 text-xs tabular-nums text-zinc-400">
-              {formatTime(currentTime)} / {formatTime(duration)}
+              {formatTime(virtualTime)} / {formatTime(totalDuration)}
             </span>
 
             {clips.length > 1 && (
               <span className="text-xs text-zinc-500 ml-1">
                 Clip {clipIndex + 1}/{clips.length}
               </span>
+            )}
+
+            {/* Playback speed — reading a plate needs slow, scanning needs fast */}
+            <button
+              onClick={() => applyRate(RATES[(RATES.indexOf(rate) + 1) % RATES.length])}
+              className="rounded px-1.5 py-1 text-xs font-medium tabular-nums text-zinc-300 hover:text-white transition-colors"
+              title="Playback speed"
+            >
+              {rate}x
+            </button>
+
+            {/* Frame stepping — the contact frame is between two 5s jumps */}
+            {!isPlaying && (
+              <>
+                <button
+                  onClick={() => stepFrame(-1)}
+                  className="rounded px-1.5 py-1 text-xs font-medium text-zinc-300 hover:text-white transition-colors"
+                  aria-label="Previous frame"
+                  title="Previous frame (,)"
+                >
+                  ◄|
+                </button>
+                <button
+                  onClick={() => stepFrame(1)}
+                  className="rounded px-1.5 py-1 text-xs font-medium text-zinc-300 hover:text-white transition-colors"
+                  aria-label="Next frame"
+                  title="Next frame (.)"
+                >
+                  |►
+                </button>
+              </>
+            )}
+
+            {/* Trim & export — send someone the 30 seconds that matter, not 30 MB */}
+            {exportUrlFn && activeFile && !isEncrypted && (
+              <>
+                <button
+                  onClick={() => setMarkIn(currentTime)}
+                  className="rounded px-1.5 py-1 text-xs font-medium text-zinc-300 hover:text-white transition-colors"
+                  title="Mark clip start"
+                >
+                  In
+                </button>
+                <button
+                  onClick={() => setMarkOut(currentTime)}
+                  className="rounded px-1.5 py-1 text-xs font-medium text-zinc-300 hover:text-white transition-colors"
+                  title="Mark clip end"
+                >
+                  Out
+                </button>
+                {markIn !== null && markOut !== null && markOut > markIn && (
+                  <a
+                    href={exportUrlFn(activeFile, markIn, markOut)}
+                    download
+                    className="rounded bg-[var(--color-accent)] px-2 py-1 text-xs font-medium text-white hover:opacity-90"
+                    title={`Export ${formatTime(markIn)}–${formatTime(markOut)}`}
+                  >
+                    Export clip
+                  </a>
+                )}
+              </>
             )}
           </div>
 
@@ -780,7 +1192,8 @@ export default function DashcamPlayer({
             {downloadZipUrl && (
               <a
                 href={downloadZipUrl}
-                className="rounded p-1.5 text-zinc-400 hover:text-white transition-colors"
+                onClick={handleZipClick}
+                className={`rounded p-1.5 text-zinc-400 hover:text-white transition-colors ${zipBusy ? "pointer-events-none opacity-50" : ""}`}
                 aria-label="Download event ZIP"
                 title="Download event ZIP (all cameras + metadata)"
               >
@@ -810,7 +1223,7 @@ export default function DashcamPlayer({
 
             {/* Composed / single view toggle */}
             <button
-              onClick={() => setViewMode((m) => m === "composed" ? "single" : "composed")}
+              onClick={toggleViewMode}
               className={`rounded p-1.5 transition-colors ${
                 viewMode === "composed"
                   ? "text-[var(--color-accent)]"
@@ -905,6 +1318,7 @@ export default function DashcamPlayer({
               const file = event.camera_videos[cam];
               const encrypted = event.encrypted_videos?.[cam] ?? false;
               const isActive = cam === activeCamera;
+              const poster = file && thumbnailUrlFn ? thumbnailUrlFn(cam) : null;
 
               return (
                 <button
@@ -923,26 +1337,27 @@ export default function DashcamPlayer({
                       <LockIcon className="h-4 w-4" />
                       <span>Encrypted</span>
                     </div>
-                  ) : file ? (
-                    <video
-                      ref={(el) => {
-                        if (el) thumbnailVideoRefs.current.set(cam, el);
-                        else thumbnailVideoRefs.current.delete(cam);
-                      }}
-                      src={streamUrlFn(file)}
+                  ) : poster ? (
+                    // A cached JPEG per camera, not a second video stream — six
+                    // preload="metadata" videos was the Pi's whole upload budget.
+                    <img
+                      src={poster}
+                      alt=""
                       className="h-full w-full object-cover"
-                      muted
-                      playsInline
-                      preload="metadata"
+                      loading="lazy"
                     />
                   ) : (
-                    <div className="absolute inset-0 flex items-center justify-center bg-zinc-800 text-zinc-600 text-xs">
-                      N/A
+                    // Sessions have no per-camera posters; name the camera so the
+                    // strip still reads as a switcher instead of as broken.
+                    <div className="absolute inset-0 flex items-center justify-center bg-zinc-800 px-1 text-center text-[11px] font-medium text-zinc-300">
+                      {CAMERA_LABELS[cam] ?? cam}
                     </div>
                   )}
-                  <span className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/80 to-transparent px-1.5 py-1 text-[10px] font-medium text-white text-center">
-                    {CAMERA_LABELS[cam] ?? cam}
-                  </span>
+                  {(encrypted || poster) && (
+                    <span className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/80 to-transparent px-1.5 py-1 text-[10px] font-medium text-white text-center">
+                      {CAMERA_LABELS[cam] ?? cam}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -971,6 +1386,32 @@ function cameraOrder(cam: CameraName): number {
     right_pillar: 5,
   };
   return order[cam] ?? 99;
+}
+
+// Tesla names each clip file for its own wall-clock start, "2024-01-02_15-04-05".
+function clipStartSec(ts: string): number {
+  return Date.parse(`${ts.slice(0, 10)}T${ts.slice(11).replace(/-/g, ":")}`) / 1000;
+}
+
+// trigger_offset_sec is measured from the start of clips[0], but the player
+// loads one clip file at a time — so the opening clip's own start has to come
+// off it. That start is read from the filenames rather than assumed to be
+// 60s per clip: a Sentry event skips idle minutes, and a nominal offset past
+// the end of the file would clamp to the end of the clip and miss the moment.
+// null means "no usable trigger", which leaves the clip opening at 0 as before.
+function triggerOffsetInClip(event: VideoEvent, clipIndex: number): number | null {
+  const offset = event.trigger_offset_sec;
+  if (!offset || !isFinite(offset) || offset <= 0) return null;
+  const clips = event.clips ?? [];
+  if (clipIndex === 0 || !clips[clipIndex] || !clips[0]) return offset;
+  const elapsed = clipStartSec(clips[clipIndex]) - clipStartSec(clips[0]);
+  if (!isFinite(elapsed)) return null;
+  return Math.max(0, offset - elapsed);
+}
+
+function pct(value: number, total: number): number {
+  if (!total || !isFinite(total)) return 0;
+  return Math.max(0, Math.min(100, (value / total) * 100));
 }
 
 function formatTime(seconds: number): string {

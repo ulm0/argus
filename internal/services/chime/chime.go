@@ -265,12 +265,64 @@ func (s *Service) SetActiveChime(chimeFilename, mountPath string) error {
 		return fmt.Errorf("invalid chime filename: path traversal detected")
 	}
 	destPath := filepath.Join(mountPath, s.cfg.Web.LockChimeFilename)
-	return s.ReplaceLockChime(srcPath, destPath)
+	if err := s.ReplaceLockChime(srcPath, destPath); err != nil {
+		return err
+	}
+	if err := s.saveActiveChimeName(chimeFilename); err != nil {
+		logger.L.WithError(err).Warn("failed to persist active chime name")
+	}
+	return nil
 }
 
-// UploadChime saves an uploaded file to the chimes library.
-func (s *Service) UploadChime(data []byte, filename, mountPath string, normalize bool, targetLUFS float64) error {
-	chimesDir := filepath.Join(mountPath, s.cfg.Web.ChimesFolder)
+// activeChime records which library file was copied to LockChime.wav. The
+// destination filename is a constant, so without this sidecar nothing can tell
+// the UI which chime the car is actually playing.
+type activeChime struct {
+	Filename string `json:"filename"`
+}
+
+func (s *Service) activeChimeFile() string {
+	return filepath.Join(s.cfg.GadgetDir, "chime_active.json")
+}
+
+func (s *Service) saveActiveChimeName(name string) error {
+	data, err := json.Marshal(activeChime{Filename: name})
+	if err != nil {
+		return err
+	}
+	tmp := s.activeChimeFile() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.activeChimeFile())
+}
+
+// trackActiveChimeRename keeps the sidecar in step when the recorded library
+// file is renamed (newName) or deleted (newName == ""). Left stale, the UI
+// badges a chime that no longer exists.
+func (s *Service) trackActiveChimeRename(oldName, newName string) {
+	data, err := os.ReadFile(s.activeChimeFile())
+	if err != nil {
+		return
+	}
+	var a activeChime
+	if json.Unmarshal(data, &a) != nil || a.Filename != oldName {
+		return
+	}
+	if newName == "" {
+		if err := os.Remove(s.activeChimeFile()); err != nil {
+			logger.L.WithError(err).Warn("failed to clear active chime name")
+		}
+		return
+	}
+	if err := s.saveActiveChimeName(newName); err != nil {
+		logger.L.WithError(err).Warn("failed to update active chime name")
+	}
+}
+
+// UploadChime saves an uploaded file to the named library folder (chimes or boombox).
+func (s *Service) UploadChime(data []byte, filename, mountPath, folder string, normalize bool, targetLUFS float64) error {
+	chimesDir := filepath.Join(mountPath, folder)
 	os.MkdirAll(chimesDir, 0755)
 
 	destPath := filepath.Join(chimesDir, filepath.Base(filename))
@@ -339,14 +391,22 @@ func (s *Service) UploadChime(data []byte, filename, mountPath string, normalize
 	return nil
 }
 
-// DeleteChime removes a chime file from the library.
-func (s *Service) DeleteChime(filename, mountPath string) error {
-	chimesDir := filepath.Join(mountPath, s.cfg.Web.ChimesFolder)
+// DeleteChime removes a file from the named library folder (chimes or boombox).
+func (s *Service) DeleteChime(filename, mountPath, folder string) error {
+	chimesDir := filepath.Join(mountPath, folder)
 	chimePath := filepath.Join(chimesDir, filename)
 	if !strings.HasPrefix(chimePath, chimesDir+string(filepath.Separator)) {
 		return fmt.Errorf("invalid chime filename: path traversal detected")
 	}
-	return os.Remove(chimePath)
+	if err := os.Remove(chimePath); err != nil {
+		return err
+	}
+	// The sidecar names a file in the chimes folder, so a boombox sound that
+	// happens to share the name must not clear it.
+	if folder == s.cfg.Web.ChimesFolder {
+		s.trackActiveChimeRename(filename, "")
+	}
+	return nil
 }
 
 // RenameChime renames a chime in the library.
@@ -363,13 +423,15 @@ func (s *Service) RenameChime(oldName, newName, mountPath string) error {
 	if err := os.Rename(oldPath, newPath); err != nil {
 		return err
 	}
+	s.trackActiveChimeRename(oldName, newName)
 	exec.Command("sync").Run()
 	return nil
 }
 
-// ListChimes returns all chime files in the library.
-func (s *Service) ListChimes(mountPath string) []string {
-	chimesDir := filepath.Join(mountPath, s.cfg.Web.ChimesFolder)
+// ListChimes returns all .wav files in the named library folder (chimes or
+// boombox). os.ReadDir sorts by filename, which is the order the car uses.
+func (s *Service) ListChimes(mountPath, folder string) []string {
+	chimesDir := filepath.Join(mountPath, folder)
 	entries, err := os.ReadDir(chimesDir)
 	if err != nil {
 		return nil
@@ -384,11 +446,19 @@ func (s *Service) ListChimes(mountPath string) []string {
 	return files
 }
 
-// GetActiveChimeInfo returns info about the current LockChime.wav.
+// GetActiveChimeInfo returns the library filename currently installed as
+// LockChime.wav, falling back to the destination name when the sidecar is
+// missing (chime set before this was recorded, or copied in over Samba).
 func (s *Service) GetActiveChimeInfo(mountPath string) (name string, exists bool) {
 	chimePath := filepath.Join(mountPath, s.cfg.Web.LockChimeFilename)
 	if _, err := os.Stat(chimePath); err != nil {
 		return "", false
+	}
+	if data, err := os.ReadFile(s.activeChimeFile()); err == nil {
+		var a activeChime
+		if json.Unmarshal(data, &a) == nil && a.Filename != "" {
+			return a.Filename, true
+		}
 	}
 	return s.cfg.Web.LockChimeFilename, true
 }
@@ -482,6 +552,20 @@ func (s *Scheduler) UpdateSchedule(id string, updates map[string]any) error {
 			}
 			if v, ok := updates["name"].(string); ok {
 				s.schedules[i].Name = v
+			}
+			// Without this a weekly schedule's day selection could be created but
+			// never edited. JSON numbers arrive as float64 through map[string]any,
+			// so the list needs converting rather than a direct []int assert.
+			if v, ok := updates["days"].([]any); ok {
+				days := make([]int, 0, len(v))
+				for _, d := range v {
+					n, ok := d.(float64)
+					if !ok {
+						return fmt.Errorf("days must be a list of numbers")
+					}
+					days = append(days, int(n))
+				}
+				s.schedules[i].Days = days
 			}
 			return s.save()
 		}

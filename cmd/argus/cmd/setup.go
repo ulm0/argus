@@ -91,6 +91,7 @@ web:
   speed_step: 0.05
   lock_chime_filename: LockChime.wav
   chimes_folder: Chimes
+  boombox_folder: Boombox
   lightshow_folder: LightShow
   max_upload_size_mb: 2048
   max_upload_chunk_mb: 16
@@ -115,6 +116,12 @@ update:
   auto_update: false
   check_on_startup: true
   channel: stable
+
+archive:
+  enabled: false
+  ssid: ""
+  target_path: ""
+  include_recent: false
 
 viewer_prefs:
   speed_unit: kph
@@ -477,6 +484,9 @@ func setupSeedFolders(installDir string, cfg *config.Config) error {
 			"TeslaCam/SavedClips",
 			"TeslaCam/SentryClips",
 			"TeslaCam/RecentClips",
+			// Root-level, not under TeslaCam: the car only writes Track Mode
+			// telemetry when this folder already exists on the drive.
+			"TeslaTrackMode",
 		}); err != nil {
 			return fmt.Errorf("seed cam: %w", err)
 		}
@@ -488,7 +498,7 @@ func setupSeedFolders(installDir string, cfg *config.Config) error {
 		if _, err := os.Stat(lsImg); err == nil {
 			seeds := []string{}
 			if cfg.DiskImages.ChimesEnabled {
-				seeds = append(seeds, "Chimes")
+				seeds = append(seeds, "Chimes", "Boombox")
 			}
 			if cfg.DiskImages.LightshowEnabled {
 				seeds = append(seeds, "LightShow")

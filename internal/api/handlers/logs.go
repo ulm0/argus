@@ -9,8 +9,10 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ulm0/argus/internal/config"
+	"github.com/ulm0/argus/internal/logger"
 )
 
 // unitNameRe matches valid systemd unit names (without the ".service" suffix
@@ -75,12 +77,18 @@ func (h *LogsHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		follow = false
 	}
 
-	args := []string{
-		"-u", unit + ".service",
-		"--output=short-iso",
+	// "kernel" is not a unit: kernel messages (USB gadget, filesystem errors)
+	// only come out of the journal via -k.
+	selector := []string{"-u", unit + ".service"}
+	if unit == "kernel" {
+		selector = []string{"-k"}
+	}
+
+	args := append(selector,
+		"--output=json",
 		"--no-pager",
 		fmt.Sprintf("-n%d", lines),
-	}
+	)
 	if follow {
 		args = append(args, "-f")
 	}
@@ -114,13 +122,19 @@ func (h *LogsHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 
 	scanner := bufio.NewScanner(stdout)
+	// A single journal entry (long stack trace, embedded blob) can exceed the
+	// default 64 KiB limit; without a bigger bound Scan stops and the UI just
+	// freezes with no indication why.
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		if r.Context().Err() != nil {
 			return
 		}
 
-		line := scanner.Text()
-		parsed := parseJournalLine(line)
+		parsed, ok := parseJournalEntry(scanner.Bytes())
+		if !ok {
+			continue
+		}
 		data, err := json.Marshal(parsed)
 		if err != nil {
 			continue
@@ -128,78 +142,111 @@ func (h *LogsHandler) Stream(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
+
+	// A read error ends the stream while the connection stays open, which is
+	// indistinguishable from an idle journal in the UI. Report it as a normal
+	// log line so the user sees why the tail stopped.
+	if err := scanner.Err(); err != nil && r.Context().Err() == nil {
+		logger.L.WithError(err).Warn("logs: journal stream read failed")
+		if data, mErr := json.Marshal(logLine{
+			Timestamp: time.Now().Format("2006-01-02T15:04:05-0700"),
+			Priority:  "error",
+			Message:   "log stream ended: " + err.Error(),
+		}); mErr == nil {
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	}
 }
 
-// parseJournalLine splits a short-iso journalctl line into its components.
-// Format: "2024-01-15T12:34:56+0000 hostname unit[pid]: message"
-func parseJournalLine(line string) logLine {
-	// Timestamp is the first space-delimited field (ISO 8601 with timezone).
-	ts := ""
-	rest := line
-	if idx := indexByte(line, ' '); idx > 0 {
-		ts = line[:idx]
-		rest = line[idx+1:]
+// journalEntry is the subset of journalctl --output=json we care about. Fields
+// journald recorded as non-UTF-8 come back as byte arrays rather than strings;
+// those entries fail to decode and are dropped.
+type journalEntry struct {
+	Timestamp string `json:"__REALTIME_TIMESTAMP"`
+	Priority  string `json:"PRIORITY"`
+	Message   string `json:"MESSAGE"`
+}
+
+// parseJournalEntry converts one journalctl JSON entry into the SSE payload.
+// Reports false for entries that cannot be decoded.
+func parseJournalEntry(b []byte) (logLine, bool) {
+	var e journalEntry
+	if err := json.Unmarshal(b, &e); err != nil {
+		return logLine{}, false
 	}
 
-	// Strip "hostname unit[pid]: " prefix — the message starts after ": ".
-	msg := rest
-	if idx := strings.Index(rest, "]: "); idx >= 0 {
-		msg = rest[idx+3:]
-	} else if idx := strings.Index(rest, ": "); idx >= 0 {
-		msg = rest[idx+2:]
+	ts := ""
+	if us, err := strconv.ParseInt(e.Timestamp, 10, 64); err == nil {
+		ts = time.UnixMicro(us).Format("2006-01-02T15:04:05-0700")
+	}
+
+	prio := priorityName(e.Priority)
+	if prio == "" {
+		prio = detectPriority(e.Message)
+	} else if d := detectPriority(e.Message); d != "info" && prioSeverity[d] > prioSeverity[prio] {
+		// Argus logs every level at the same journal PRIORITY and encodes the real
+		// level in the message text, so PRIORITY alone hides application errors
+		// from the Error/Warn filter. "info" is detectPriority's fallback rather
+		// than a match, so it must not promote genuine debug lines.
+		prio = d
 	}
 
 	return logLine{
 		Timestamp: ts,
-		Priority:  detectPriority(msg),
-		Message:   msg,
-	}
+		Priority:  prio,
+		Message:   e.Message,
+	}, true
 }
 
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
+// priorityName maps a syslog severity onto the four levels the UI filters on.
+// Returns "" when the field is missing or unparsable.
+func priorityName(p string) string {
+	n, err := strconv.Atoi(p)
+	if err != nil {
+		return ""
 	}
-	return -1
-}
-
-// detectPriority infers a log level keyword from common patterns in the message.
-func detectPriority(msg string) string {
-	lower := toLower(msg)
 	switch {
-	case contains(lower, "error") || contains(lower, "failed") || contains(lower, "fatal"):
+	case n <= 3:
 		return "error"
-	case contains(lower, "warn") || contains(lower, "warning"):
+	case n == 4:
 		return "warn"
-	case contains(lower, "debug"):
+	case n <= 6:
+		return "info"
+	default:
+		return "debug"
+	}
+}
+
+// prioSeverity ranks the four UI levels so the more severe of the journald
+// PRIORITY and the message-text heuristic can win.
+var prioSeverity = map[string]int{"debug": 0, "info": 1, "warn": 2, "error": 3}
+
+// detectPriority reads the level argus encodes in the message text. Its logrus
+// TextFormatter emits `time="..." level=error msg="..."`, so the level is a
+// real token, not a word to hunt for: scanning the whole message promoted any
+// info line that happened to contain "failed" or "error" (a filename,
+// "cleanup finished, 0 failed") into the Error filter people open to triage.
+// Returns "info" when no level token is present, which is also the value that
+// must not promote — see parseJournalEntry.
+func detectPriority(msg string) string {
+	const tok = "level="
+	i := strings.Index(msg, tok)
+	if i < 0 || (i > 0 && msg[i-1] != ' ') {
+		return "info"
+	}
+	val := msg[i+len(tok):]
+	if j := strings.IndexByte(val, ' '); j >= 0 {
+		val = val[:j]
+	}
+	switch strings.ToLower(val) {
+	case "error", "fatal", "panic":
+		return "error"
+	case "warn", "warning":
+		return "warn"
+	case "debug", "trace":
 		return "debug"
 	default:
 		return "info"
 	}
-}
-
-func toLower(s string) string {
-	b := make([]byte, len(s))
-	for i := range s {
-		c := s[i]
-		if c >= 'A' && c <= 'Z' {
-			c += 32
-		}
-		b[i] = c
-	}
-	return string(b)
-}
-
-func contains(s, substr string) bool {
-	if len(substr) > len(s) {
-		return false
-	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

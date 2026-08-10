@@ -12,6 +12,7 @@ import (
 	"github.com/ulm0/argus/internal/api/handlers"
 	"github.com/ulm0/argus/internal/api/middleware"
 	"github.com/ulm0/argus/internal/config"
+	"github.com/ulm0/argus/internal/services/archive"
 	"github.com/ulm0/argus/internal/services/chime"
 	"github.com/ulm0/argus/internal/services/telegram"
 	"github.com/ulm0/argus/internal/services/webhook"
@@ -20,7 +21,7 @@ import (
 
 // NewRouter sets up the gorilla/mux router with all routes and middleware.
 // telegramSvc should be the process-wide instance started in run.go (Sentry watcher + queue); if nil, a new service is used.
-func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, sentryEventsH *handlers.SentryEventsHandler, webhookSvc *webhook.Service, apMgr *system_ap.Manager, chimeSvc *chime.Service) http.Handler {
+func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, sentryEventsH *handlers.SentryEventsHandler, webhookSvc *webhook.Service, apMgr *system_ap.Manager, chimeSvc *chime.Service, archiveSvc *archive.Service) http.Handler {
 	r := mux.NewRouter()
 
 	r.Use(middleware.RealIP)
@@ -85,6 +86,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	logsH := handlers.NewLogsHandler(cfg)
 	authH := handlers.NewAuthHandler(cfg)
 
+	archiveH := handlers.NewArchiveHandler(archiveSvc)
 	updateH := handlers.NewUpdateHandler(cfg)
 	powerH := handlers.NewSystemPowerHandler(cfg)
 
@@ -138,17 +140,25 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	api.HandleFunc("/wifi/autoconnect", wifiH.SetAutoConnect).Methods("POST")
 
 	// Videos
+	//
+	// A folder is either a TeslaCam subfolder ("SentryClips") or a secondary
+	// archive one ("archive/SentryClips"), so the {folder} var has to admit that
+	// single optional prefix segment — with the default [^/]+ pattern every
+	// archive route 404s. The prefix group is non-capturing so mux's var
+	// indexing is unaffected.
 	api.HandleFunc("/videos", videoH.List).Methods("GET")
-	api.HandleFunc("/videos/{folder}/{event}", videoH.Event).Methods("GET")
+	api.HandleFunc("/videos/{folder:(?:archive/)?[^/]+}/{event}", videoH.Event).Methods("GET")
 	api.HandleFunc("/videos/stream/{rest:.*}", videoH.Stream).Methods("GET")
 	api.HandleFunc("/videos/sei/{rest:.*}", videoH.SEI).Methods("GET")
 	api.HandleFunc("/videos/telemetry/{rest:.*}", videoH.Telemetry).Methods("GET")
 	api.HandleFunc("/videos/download/{rest:.*}", videoH.Download).Methods("GET")
-	api.HandleFunc("/videos/download-event/{folder}/{event}", videoH.DownloadEvent).Methods("GET")
-	api.HandleFunc("/videos/thumbnail/{folder}/{event}", videoH.Thumbnail).Methods("GET")
-	api.HandleFunc("/videos/session-detail/{folder}/{session}", videoH.SessionDetail).Methods("GET")
-	api.HandleFunc("/videos/session-thumbnail/{folder}/{session}", videoH.SessionThumbnail).Methods("GET")
-	api.HandleFunc("/videos/delete/{folder}/{event}", videoH.Delete).Methods("POST")
+	api.HandleFunc("/videos/export/{rest:.*}", videoH.Export).Methods("GET")
+	api.HandleFunc("/videos/download-event/{folder:(?:archive/)?[^/]+}/{event}", videoH.DownloadEvent).Methods("GET")
+	api.HandleFunc("/videos/thumbnail/{folder:(?:archive/)?[^/]+}/{event}", videoH.Thumbnail).Methods("GET")
+	api.HandleFunc("/videos/session-detail/{folder:(?:archive/)?[^/]+}/{session}", videoH.SessionDetail).Methods("GET")
+	api.HandleFunc("/videos/session-thumbnail/{folder:(?:archive/)?[^/]+}/{session}", videoH.SessionThumbnail).Methods("GET")
+	api.HandleFunc("/videos/delete/{folder:(?:archive/)?[^/]+}/{event}", videoH.Delete).Methods("POST")
+	api.HandleFunc("/videos/keep/{folder:(?:archive/)?[^/]+}/{event}", videoH.Keep).Methods("POST")
 
 	// Lock chimes
 	api.HandleFunc("/chimes", chimeH.List).Methods("GET")
@@ -163,6 +173,7 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	api.HandleFunc("/chimes/filenames", chimeH.Filenames).Methods("GET")
 
 	// Chime scheduler
+	api.HandleFunc("/chimes/schedules", chimeH.ListSchedules).Methods("GET")
 	api.HandleFunc("/chimes/schedule/add", chimeH.AddSchedule).Methods("POST")
 	api.HandleFunc("/chimes/schedule/{id}/toggle", chimeH.ToggleSchedule).Methods("POST")
 	api.HandleFunc("/chimes/schedule/{id}/delete", chimeH.DeleteSchedule).Methods("POST")
@@ -177,6 +188,12 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	api.HandleFunc("/chimes/groups/{id}/add-chime", chimeH.AddChimeToGroup).Methods("POST")
 	api.HandleFunc("/chimes/groups/{id}/remove-chime", chimeH.RemoveChimeFromGroup).Methods("POST")
 	api.HandleFunc("/chimes/groups/random-mode", chimeH.RandomMode).Methods("POST")
+
+	// Boombox custom sounds (same pipeline as lock chimes, different folder)
+	api.HandleFunc("/boombox", chimeH.ListBoombox).Methods("GET")
+	api.HandleFunc("/boombox/upload", chimeH.UploadBoombox).Methods("POST")
+	api.HandleFunc("/boombox/play/{filename}", chimeH.PlayBoombox).Methods("GET")
+	api.HandleFunc("/boombox/delete/{filename}", chimeH.DeleteBoombox).Methods("POST")
 
 	// Light shows
 	api.HandleFunc("/lightshows", lightshowH.List).Methods("GET")
@@ -249,6 +266,10 @@ func NewRouter(cfg *config.Config, webFS fs.FS, telegramSvc *telegram.Service, s
 	api.HandleFunc("/samba/set-enabled", sambaH.SetEnabled).Methods("POST")
 	api.HandleFunc("/samba/restart", sambaH.Restart).Methods("POST")
 	api.HandleFunc("/samba/regenerate", sambaH.Regenerate).Methods("POST")
+
+	// Archive (copy clips off the car when on a known WiFi network)
+	api.HandleFunc("/archive/status", archiveH.Status).Methods("GET")
+	api.HandleFunc("/archive/run", archiveH.Run).Methods("POST")
 
 	// Update
 	api.HandleFunc("/update/status", updateH.Status).Methods("GET")
@@ -344,10 +365,12 @@ func isBinaryMediaPath(r *http.Request) bool {
 	return strings.HasPrefix(p, "/api/videos/stream/") ||
 		strings.HasPrefix(p, "/api/videos/download/") ||
 		strings.HasPrefix(p, "/api/videos/download-event/") ||
+		strings.HasPrefix(p, "/api/videos/export/") ||
 		strings.HasPrefix(p, "/api/videos/thumbnail/") ||
 		strings.HasPrefix(p, "/api/videos/session-thumbnail/") ||
 		strings.HasPrefix(p, "/api/chimes/play/") ||
 		strings.HasPrefix(p, "/api/chimes/download/") ||
+		strings.HasPrefix(p, "/api/boombox/play/") ||
 		strings.HasPrefix(p, "/api/music/play/") ||
 		strings.HasPrefix(p, "/api/lightshows/play/") ||
 		strings.HasPrefix(p, "/api/lightshows/download/") ||

@@ -36,9 +36,22 @@ func (h *TelegramHandler) Configure(w http.ResponseWriter, r *http.Request) {
 		ChatID       string `json:"chat_id"`
 		OfflineMode  string `json:"offline_mode"`
 		VideoQuality string `json:"video_quality"`
+		// Configure treats an empty token as "keep the stored one" so that saving
+		// an unrelated Telegram setting cannot silently wipe credentials. Removing
+		// them therefore has to be asked for explicitly.
+		ClearCredentials bool `json:"clear_credentials"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.ClearCredentials {
+		if err := h.telegramSvc.ClearCredentials(); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
 

@@ -103,6 +103,7 @@ web:
   speed_step: 0.05
   lock_chime_filename: LockChime.wav
   chimes_folder: Chimes
+  boombox_folder: Boombox # Custom Boombox sounds (the car offers the first 5 alphabetically)
   lightshow_folder: LightShow
   max_upload_size_mb: 2048
   max_upload_chunk_mb: 16
@@ -137,6 +138,15 @@ update:
   auto_update: false
   check_on_startup: true
   channel: stable
+
+# ============================================================================
+# Archive (copy clips off the car onto a mounted target on a known network)
+# ============================================================================
+archive:
+  enabled: false
+  ssid: "" # Only sync on this WiFi network; empty means any connection
+  target_path: "" # An already-mounted destination (CIFS share, external drive)
+  include_recent: false # Also copy RecentClips, which Tesla rotates hourly
 
 # ============================================================================
 # Viewer prefs (server-persisted HUD / map / speed unit)

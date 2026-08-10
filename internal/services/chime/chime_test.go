@@ -480,7 +480,7 @@ func TestListChimes(t *testing.T) {
 		}
 	}
 
-	files := svc.ListChimes(dir)
+	files := svc.ListChimes(dir, cfg.Web.ChimesFolder)
 	if len(files) != 2 {
 		t.Errorf("ListChimes() len = %d, want 2 (only .wav)", len(files))
 	}
