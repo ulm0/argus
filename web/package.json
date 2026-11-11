@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "leaflet": "^1.9.4",
-    "next": "16.4.5",
+    "next": "16.4.6",
     "postcss": "8.5.25",
     "react": "19.3.1",
     "react-dom": "19.3.1",
@@ -23,7 +23,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "eslint": "^9.39.5",
-    "eslint-config-next": "16.3.3",
+    "eslint-config-next": "16.4.6",
     "tailwindcss": "^4.2.4",
     "typescript": "^6.0.3"
   }
